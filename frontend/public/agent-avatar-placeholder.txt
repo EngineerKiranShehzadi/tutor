@@ -1,0 +1,4 @@
+Place the instructor's photo here as:
+  /home/kiran-shehzadi/askaitutor/frontend/public/agent-avatar.png
+
+This image will appear as the AI agent avatar in the chat drawer and message bubbles.
