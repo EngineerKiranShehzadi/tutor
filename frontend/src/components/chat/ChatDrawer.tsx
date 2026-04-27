@@ -12,6 +12,7 @@ interface Props {
   isOpen:          boolean;
   onClose:         () => void;
   lectureTitle:    string;
+  agentName:       string;
   messages:        ChatMessage[];
   isTyping:        boolean;
   mode:            'text' | 'voice';
@@ -26,7 +27,7 @@ interface Props {
 }
 
 export const ChatDrawer = ({
-  isOpen, onClose, lectureTitle, messages, isTyping,
+  isOpen, onClose, lectureTitle, agentName, messages, isTyping,
   mode, onSetMode, onSend, isRecording, onToggleRecord,
   isSpeaking, onStopSpeaking, onSpeak, interimText,
 }: Props) => {
@@ -58,7 +59,7 @@ export const ChatDrawer = ({
         </div>
 
         <div className="flex-1 min-w-0">
-          <p className="text-[14px] font-bold text-[var(--text)]">Lecture Agent</p>
+          <p className="text-[14px] font-bold text-[var(--text)]">{agentName}</p>
           <p className="text-[11px] text-[var(--muted)] truncate">
             Answers only from: {lectureTitle}
           </p>

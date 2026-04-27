@@ -13,6 +13,10 @@ export interface AuthState {
   isLoading:   boolean;
 }
 
+export type LoginResult =
+  | { status: 'AUTHENTICATED'; user: User; accessToken: string; refreshToken: string }
+  | { status: 'EMAIL_VERIFICATION_REQUIRED'; email: string; verificationExpiresInSeconds: number };
+
 // ── API ───────────────────────────────────────────────
 export interface ApiResponse<T = undefined> {
   success: boolean;
@@ -23,12 +27,13 @@ export interface ApiResponse<T = undefined> {
 
 // ── Course / Lecture ──────────────────────────────────
 export interface Lecture {
-  id:       string;
-  num:      number;
-  title:    string;
-  duration: string;
-  videoId:  string;
-  watched:  number; // 0–100 percent
+  id:        string;
+  num:       number;
+  title:     string;
+  duration:  string;
+  videoId:   string;
+  watched:   number; // 0–100 percent
+  agentName: string; // name of the dedicated AI tutor agent for this lecture
 }
 
 // ── Chat ──────────────────────────────────────────────

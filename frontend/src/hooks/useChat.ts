@@ -1,55 +1,76 @@
 'use client';
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { useMutation } from '@apollo/client';
 import { ChatMessage } from '@/types';
 import { v4 as uuidv4 } from 'uuid';
 import { useVoice } from './useVoice';
+import { SEND_CHAT_MESSAGE_MUTATION } from '@/graphql/chat.mutations';
 
-const MOCK_REPLIES = [
-  'Based on this lecture, a zero-shot prompt gives the AI a task without any examples. The instructor emphasized this works best for well-defined, simple tasks.',
-  'As covered here, the key to accurate prompts is being specific about the <strong>output format</strong>. Instead of "list ideas", say "list 5 ideas in bullet points".',
-  'The lecture explains that prompt length matters — too short means vague results, too long can confuse the model. One clear instruction with just enough context is ideal.',
-  'Great question! The instructor demonstrated at the 20-minute mark that a fast prompt avoids redundant context the model already knows from training.',
-];
+const FALLBACK_REPLY =
+  "I'm having trouble connecting to the AI right now. Please try again in a moment.";
 
-export const useChat = (lectureTitle: string) => {
+export const useChat = (lectureTitle: string, lectureId: string, agentName: string) => {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id:        uuidv4(),
       role:      'ai',
       type:      'text',
-      content:   `Hi! I've processed this lecture on <strong>${lectureTitle}</strong>. Ask me anything covered in it — I'll only answer from this lecture's content.`,
+      content:   `Hi! I'm <strong>${agentName}</strong>, your tutor for <strong>${lectureTitle}</strong>. Ask me anything covered in this lecture — I'll only answer from its content.`,
       timestamp: new Date(),
     },
   ]);
-  const [isTyping, setTyping] = useState(false);
-  const [isOpen,   setOpen]   = useState(false);
-  const [mode,     setMode]   = useState<'text' | 'voice'>('text');
-  const replyIdxRef  = useRef(0);
-  const prevCountRef = useRef(1); // start at 1 (welcome message)
+  const [isTyping,  setTyping] = useState(false);
+  const [isOpen,    setOpen]   = useState(false);
+  const [mode,      setMode]   = useState<'text' | 'voice'>('text');
+  const prevCountRef = useRef(1);
 
-  const sendMessage = useCallback((content: string) => {
-    if (!content.trim()) return;
-    const userMsg: ChatMessage = {
-      id: uuidv4(), role: 'user', type: 'text', content, timestamp: new Date(),
-    };
-    setMessages((prev) => [...prev, userMsg]);
-    setTyping(true);
+  const [sendChatMessage] = useMutation(SEND_CHAT_MESSAGE_MUTATION);
 
-    setTimeout(() => {
-      const reply = MOCK_REPLIES[replyIdxRef.current % MOCK_REPLIES.length];
-      replyIdxRef.current++;
-      const aiMsg: ChatMessage = {
-        id:        uuidv4(),
-        role:      'ai',
-        type:      'text',
-        content:   reply,
-        citation:  'Sourced from this lecture',
-        timestamp: new Date(),
+  const sendMessage = useCallback(
+    async (content: string) => {
+      if (!content.trim()) return;
+
+      const userMsg: ChatMessage = {
+        id: uuidv4(), role: 'user', type: 'text', content, timestamp: new Date(),
       };
-      setMessages((prev) => [...prev, aiMsg]);
-      setTyping(false);
-    }, 1600);
-  }, []);
+      setMessages((prev) => [...prev, userMsg]);
+      setTyping(true);
+
+      try {
+        const { data } = await sendChatMessage({
+          variables: { input: { lectureId, message: content } },
+        });
+
+        const response = data?.sendChatMessage;
+        const citation =
+          response?.sources?.length > 0
+            ? `${response.agentName ?? agentName} · ${response.sources[0].title}`
+            : `${response?.agentName ?? agentName} · lecture content`;
+
+        const aiMsg: ChatMessage = {
+          id:        uuidv4(),
+          role:      'ai',
+          type:      'text',
+          content:   response?.explanation ?? FALLBACK_REPLY,
+          citation,
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, aiMsg]);
+      } catch {
+        const aiMsg: ChatMessage = {
+          id:        uuidv4(),
+          role:      'ai',
+          type:      'text',
+          content:   FALLBACK_REPLY,
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, aiMsg]);
+      } finally {
+        setTyping(false);
+      }
+    },
+    [lectureId, agentName, sendChatMessage]
+  );
 
   const voice = useVoice({
     onTranscript: sendMessage,
@@ -75,6 +96,7 @@ export const useChat = (lectureTitle: string) => {
     setMode,
     sendMessage,
     toggleChat,
+    agentName, // expose so ChatDrawer can show it
     // Voice
     isRecording:       voice.isListening,
     isSpeaking:        voice.isSpeaking,

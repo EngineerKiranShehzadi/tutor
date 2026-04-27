@@ -10,7 +10,7 @@ export default function LecturePage({ params }: { params: { id: string } }) {
   const lecture = LECTURES.find((l) => l.id === params.id);
   if (!lecture) notFound();
 
-  const chat = useChat(lecture.title);
+  const chat = useChat(lecture.title, lecture.id, lecture.agentName);
 
   return (
     <div className="flex overflow-hidden" style={{ height: 'calc(100vh - 56px)' }}>
@@ -87,6 +87,7 @@ export default function LecturePage({ params }: { params: { id: string } }) {
         isOpen={chat.isOpen}
         onClose={chat.toggleChat}
         lectureTitle={lecture.title}
+        agentName={chat.agentName}
         messages={chat.messages}
         isTyping={chat.isTyping}
         mode={chat.mode}

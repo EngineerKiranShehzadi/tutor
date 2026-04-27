@@ -30,7 +30,7 @@ export const protect = async (
       return;
     }
 
-    req.user = rows[0];
+    req.user = rows[0] as Pick<import('../types').User, 'id' | 'name' | 'email'>;
     next();
   } catch {
     sendError(res, 'Unauthorized — invalid or expired token', 401);

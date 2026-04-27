@@ -37,14 +37,10 @@ export const env = {
     HOST:       optional('EMAIL_HOST', 'smtp.gmail.com'),
     PORT:       parseInt(optional('EMAIL_PORT', '587'), 10),
     SECURE:     optional('EMAIL_SECURE', 'false') === 'true',
-    USER:       required('EMAIL_USER'),
-    PASSWORD:   required('EMAIL_PASSWORD'),
+    USER:       optional('EMAIL_USER', ''),
+    PASSWORD:   optional('EMAIL_PASSWORD', ''),
     FROM_NAME:  optional('EMAIL_FROM_NAME', 'AskAITutor'),
   },
-
-  RESET_TOKEN_EXPIRES_MS: parseInt(
-    optional('RESET_TOKEN_EXPIRES_MS', '3600000'), 10
-  ),
 
   RATE_LIMIT: {
     WINDOW_MS:    parseInt(optional('RATE_LIMIT_WINDOW_MS', '900000'), 10),
@@ -53,4 +49,7 @@ export const env = {
   },
 
   BCRYPT_SALT_ROUNDS: parseInt(optional('BCRYPT_SALT_ROUNDS', '12'), 10),
+
+  // LLM — optional; pipeline falls back to smart mock if not set
+  ANTHROPIC_API_KEY: optional('ANTHROPIC_API_KEY', ''),
 } as const;

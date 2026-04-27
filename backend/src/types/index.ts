@@ -7,10 +7,27 @@ export interface User {
   password_hash: string;
   avatar_url: string | null;
   is_verified: boolean;
-  reset_token_hash: string | null;
-  reset_token_expires: Date | null;
   created_at: Date;
   updated_at: Date;
+}
+
+export interface PasswordResetToken {
+  id: string;
+  user_id: string;
+  code_hash: string;
+  expires_at: Date;
+  used: boolean;
+  verified: boolean;
+  created_at: Date;
+}
+
+export interface EmailVerificationToken {
+  id: string;
+  user_id: string;
+  code_hash: string;
+  expires_at: Date;
+  used: boolean;
+  created_at: Date;
 }
 
 export interface AuthenticatedRequest extends Request {

@@ -28,15 +28,8 @@ export const loginValidators = [
   body('password').notEmpty().withMessage('Password is required'),
 ];
 
-export const forgotPasswordValidators = [
+export const resendLoginOtpValidators = [
   body('email').isEmail().withMessage('Valid email required').normalizeEmail(),
-];
-
-export const resetPasswordValidators = [
-  body('password')
-    .isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
-    .matches(/[A-Z]/).withMessage('Must contain an uppercase letter')
-    .matches(/[0-9]/).withMessage('Must contain a number'),
 ];
 
 // ── Controllers ───────────────────────────────────────
@@ -49,9 +42,15 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
 
 export const login = asyncHandler(async (req: Request, res: Response) => {
   const { email, password } = req.body;
-  const { user, accessToken, refreshToken } = await AuthService.loginUser(email, password);
-  res.cookie('refreshToken', refreshToken, COOKIE_OPTS);
-  sendSuccess(res, 'Logged in successfully', { user, accessToken });
+  const result = await AuthService.loginUser(email, password);
+
+  if (result.status === 'AUTHENTICATED') {
+    res.cookie('refreshToken', result.refreshToken, COOKIE_OPTS);
+    sendSuccess(res, 'Logged in successfully', result);
+  } else {
+    // EMAIL_VERIFICATION_REQUIRED
+    sendSuccess(res, 'Email verification required', result, 200);
+  }
 });
 
 export const refreshToken = asyncHandler(async (req: Request, res: Response) => {
@@ -69,19 +68,12 @@ export const logout = asyncHandler(async (req: AuthenticatedRequest, res: Respon
   sendSuccess(res, 'Logged out successfully');
 });
 
-export const forgotPassword = asyncHandler(async (req: Request, res: Response) => {
-  await AuthService.forgotPassword(req.body.email);
-  sendSuccess(res, 'If that email exists, a reset link has been sent.');
-});
-
-export const resetPassword = asyncHandler(async (req: Request, res: Response) => {
-  const { token } = req.params;
-  const { password } = req.body;
-  await AuthService.resetPassword(token, password);
-  res.clearCookie('refreshToken');
-  sendSuccess(res, 'Password reset successfully. Please log in.');
-});
-
 export const getMe = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   sendSuccess(res, 'User fetched', req.user);
+});
+
+export const resendLoginOtp = asyncHandler(async (req: Request, res: Response) => {
+  const { email } = req.body;
+  const expiresInSeconds = await AuthService.resendLoginOtp(email.toLowerCase());
+  sendSuccess(res, 'Verification code sent', { email, verificationExpiresInSeconds: expiresInSeconds });
 });

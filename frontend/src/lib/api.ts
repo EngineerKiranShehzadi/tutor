@@ -40,13 +40,14 @@ export default api;
 
 // ── Typed helpers ─────────────────────────────────────
 export const authApi = {
-  register:       (data: { name: string; email: string; password: string }) =>
-                    api.post('/auth/register', data),
-  login:          (data: { email: string; password: string }) =>
-                    api.post('/auth/login', data),
-  logout:         ()                   => api.post('/auth/logout'),
-  forgotPassword: (email: string)      => api.post('/auth/forgot-password', { email }),
-  resetPassword:  (token: string, password: string) =>
-                    api.post(`/auth/reset-password/${token}`, { password }),
-  getMe:          ()                   => api.get('/auth/me'),
+  register:         (data: { name: string; email: string; password: string }) =>
+                      api.post('/auth/register', data),
+  login:            (data: { email: string; password: string }) =>
+                      api.post('/auth/login', data),
+  resendLoginOtp:   (email: string) => api.post('/auth/resend-login-otp', { email }),
+  logout:           () => api.post('/auth/logout'),
+  forgotPassword:   (email: string) => api.post('/auth/forgot-password', { email }),
+  resetPassword:    (token: string, password: string) =>
+                      api.post(`/auth/reset-password/${token}`, { password }),
+  getMe:            () => api.get('/auth/me'),
 };

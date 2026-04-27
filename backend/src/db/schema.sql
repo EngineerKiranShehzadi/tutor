@@ -8,20 +8,17 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- ── USERS ──────────────────────────────────────
 CREATE TABLE IF NOT EXISTS users (
-  id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  name                VARCHAR(100) NOT NULL,
-  email               VARCHAR(255) UNIQUE NOT NULL,
-  password_hash       TEXT NOT NULL,
-  avatar_url          TEXT,
-  is_verified         BOOLEAN DEFAULT FALSE,
-  reset_token_hash    TEXT,
-  reset_token_expires TIMESTAMPTZ,
-  created_at          TIMESTAMPTZ DEFAULT NOW(),
-  updated_at          TIMESTAMPTZ DEFAULT NOW()
+  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name          VARCHAR(100) NOT NULL,
+  email         VARCHAR(255) UNIQUE NOT NULL,
+  password_hash TEXT NOT NULL,
+  avatar_url    TEXT,
+  is_verified   BOOLEAN DEFAULT FALSE,
+  created_at    TIMESTAMPTZ DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-CREATE INDEX IF NOT EXISTS idx_users_reset_token ON users(reset_token_hash);
 
 -- ── REFRESH TOKENS ─────────────────────────────
 CREATE TABLE IF NOT EXISTS refresh_tokens (
@@ -34,6 +31,32 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
 
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_hash ON refresh_tokens(token_hash);
+
+-- ── PASSWORD RESET TOKENS (OTP-based) ──────────
+-- State machine: unused → verified → used
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+  id         UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id    UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  code_hash  TEXT        NOT NULL,          -- bcrypt of 5-digit OTP (cost 12)
+  expires_at TIMESTAMPTZ NOT NULL,          -- now + 60 seconds
+  used       BOOLEAN     NOT NULL DEFAULT FALSE,
+  verified   BOOLEAN     NOT NULL DEFAULT FALSE,  -- true after OTP verified
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_prt_user_id ON password_reset_tokens(user_id);
+
+-- ── EMAIL VERIFICATION TOKENS (signup OTP) ─────
+CREATE TABLE IF NOT EXISTS email_verification_tokens (
+  id         UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id    UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  code_hash  TEXT        NOT NULL,          -- bcrypt of 5-digit OTP (cost 12)
+  expires_at TIMESTAMPTZ NOT NULL,          -- now + 60 seconds
+  used       BOOLEAN     NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_evt_user_id ON email_verification_tokens(user_id);
 
 -- ── AUTO-UPDATE updated_at ──────────────────────
 CREATE OR REPLACE FUNCTION update_updated_at()

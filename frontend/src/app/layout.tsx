@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import { ApolloClientProvider } from '@/components/providers/ApolloProvider';
 
 export const metadata: Metadata = {
   title:       'AskAITutor — AI-Powered Lecture Assistant',
@@ -15,7 +16,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
         />
       </head>
-      <body>{children}</body>
+      <body><ApolloClientProvider>{children}</ApolloClientProvider></body>
     </html>
   );
 }

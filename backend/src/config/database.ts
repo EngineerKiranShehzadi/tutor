@@ -22,7 +22,8 @@ pool.on('error', (err) => {
 export const query = <T = Record<string, unknown>>(
   text: string,
   params?: unknown[]
-) => pool.query<T>(text, params);
+  // cast through unknown to bypass pg's QueryResultRow constraint while keeping our generic T
+) => pool.query(text, params) as unknown as Promise<{ rows: T[]; rowCount: number | null }>;
 
 export const connectDB = async (): Promise<void> => {
   const client = await pool.connect();
