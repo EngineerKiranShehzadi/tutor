@@ -51,3 +51,13 @@ export const authApi = {
                       api.post(`/auth/reset-password/${token}`, { password }),
   getMe:            () => api.get('/auth/me'),
 };
+
+export const datasetApi = {
+  upload: (lectureId: number, file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api.post(`/datasets/upload/${lectureId}`, form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
+};

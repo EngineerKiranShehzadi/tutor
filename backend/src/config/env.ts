@@ -50,6 +50,6 @@ export const env = {
 
   BCRYPT_SALT_ROUNDS: parseInt(optional('BCRYPT_SALT_ROUNDS', '12'), 10),
 
-  // LLM — optional; pipeline falls back to smart mock if not set
-  ANTHROPIC_API_KEY: optional('ANTHROPIC_API_KEY', ''),
+  // Gemini — used for both embeddings and LLM answer generation
+  GEMINI_API_KEY: optional('GEMINI_API_KEY', ''),
 } as const;

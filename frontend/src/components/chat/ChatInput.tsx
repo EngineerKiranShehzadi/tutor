@@ -2,14 +2,15 @@
 import { useState, useRef, useEffect } from 'react';
 
 interface Props {
-  onSend:         (text: string) => void;
-  isRecording:    boolean;
-  onToggleRecord: () => void;
-  recSeconds:     number;
-  interimText?:   string;
+  onSend:              (text: string) => void;
+  isRecording:         boolean;
+  onToggleRecord:      () => void;
+  recSeconds:          number;
+  interimText?:        string;
+  isSpeechSupported?:  boolean;
 }
 
-export const ChatInput = ({ onSend, isRecording, onToggleRecord, recSeconds, interimText = '' }: Props) => {
+export const ChatInput = ({ onSend, isRecording, onToggleRecord, recSeconds, interimText = '', isSpeechSupported = true }: Props) => {
   const [text, setText] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -69,10 +70,13 @@ export const ChatInput = ({ onSend, isRecording, onToggleRecord, recSeconds, int
         />
         <div className="flex items-center gap-1 shrink-0">
           <button
-            onClick={onToggleRecord}
-            title={isRecording ? 'Stop recording' : 'Start voice input'}
+            onClick={isSpeechSupported ? onToggleRecord : undefined}
+            disabled={!isSpeechSupported}
+            title={!isSpeechSupported ? 'Voice input requires Chrome or Edge' : isRecording ? 'Stop recording' : 'Start voice input'}
             className={`w-8 h-8 rounded-full border flex items-center justify-center transition-all ${
-              isRecording
+              !isSpeechSupported
+                ? 'bg-white border-[var(--border)] text-[var(--muted)] opacity-40 cursor-not-allowed'
+                : isRecording
                 ? 'bg-red-100 border-[var(--red)] text-[var(--red)]'
                 : 'bg-white border-[var(--border)] text-[var(--muted)] hover:border-[var(--accent)] hover:text-[var(--accent)]'
             }`}

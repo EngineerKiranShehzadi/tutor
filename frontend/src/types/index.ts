@@ -1,10 +1,12 @@
 // ── Auth ──────────────────────────────────────────────
+export type UserRole = 'STUDENT' | 'ADMIN';
+
 export interface User {
   id:         string;
   name:       string;
   email:      string;
-  avatar_url: string | null;
-  created_at: string;
+  role:       UserRole;
+  created_at?: string;
 }
 
 export interface AuthState {
@@ -25,20 +27,40 @@ export interface ApiResponse<T = undefined> {
   errors?: { field: string; message: string }[];
 }
 
-// ── Course / Lecture ──────────────────────────────────
+// ── DB Lecture (from GraphQL) ─────────────────────────
+export interface DBLecture {
+  id:             string;
+  title:          string;
+  description?:   string;
+  youtubeUrl:     string;
+  youtubeVideoId?: string;
+  status:         'NO_DATASET' | 'DATASET_UPLOADED' | 'PROCESSING' | 'EMBEDDING' | 'READY' | 'FAILED';
+  createdAt:      string;
+  updatedAt:      string;
+}
+
+// ── Legacy local Lecture (hardcoded constants) ────────
 export interface Lecture {
   id:        string;
   num:       number;
   title:     string;
   duration:  string;
   videoId:   string;
-  watched:   number; // 0–100 percent
-  agentName: string; // name of the dedicated AI tutor agent for this lecture
+  watched:   number;
+  agentName: string;
 }
 
 // ── Chat ──────────────────────────────────────────────
 export type MessageRole = 'user' | 'ai';
 export type MessageType = 'text' | 'voice';
+
+export interface ChunkSource {
+  id:        number;
+  topic?:    string;
+  question:  string;
+  startTime?: string;
+  endTime?:   string;
+}
 
 export interface ChatMessage {
   id:        string;
@@ -47,4 +69,5 @@ export interface ChatMessage {
   content:   string;
   citation?: string;
   timestamp: Date;
+  sources?:  ChunkSource[];
 }

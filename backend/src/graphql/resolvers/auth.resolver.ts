@@ -57,9 +57,7 @@ const COOKIE_OPTS = {
 
 // ── Resolvers ─────────────────────────────────────────
 export const resolvers = {
-  Query: {
-    _dummy: () => true,
-  },
+  Query: {},
 
   Mutation: {
     // 2 req/min
@@ -142,7 +140,7 @@ export const resolvers = {
       const { accessToken, refreshToken, user } =
         await AuthService.verifySignupOtp(input.email, input.code).catch(toGQL);
       ctx.res.cookie('refreshToken', refreshToken, COOKIE_OPTS);
-      return { accessToken, user: { id: user.id, name: user.name, email: user.email } };
+      return { accessToken, user: { id: user.id, name: user.name, email: user.email, role: user.role } };
     },
   },
 };

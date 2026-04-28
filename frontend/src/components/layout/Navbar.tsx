@@ -4,20 +4,16 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 
-interface Props {
-  searchValue?: string;
-}
-
-export const Navbar = ({ searchValue = '' }: Props) => {
+export const Navbar = () => {
   const { user, logout } = useAuth();
   const router = useRouter();
-  const [search, setSearch] = useState(searchValue);
+  const [search, setSearch] = useState('');
   const initials = user?.name?.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase() ?? 'U';
 
   return (
     <nav className="sticky top-0 z-50 bg-white border-b border-[var(--border)] flex items-center px-4 h-14 gap-2">
       {/* Logo */}
-      <Link href="/courses" className="flex items-center gap-1.5 mr-2 text-decoration-none shrink-0">
+      <Link href="/courses" className="flex items-center gap-1.5 mr-2 shrink-0">
         <div className="w-8 h-8 rounded-lg bg-[var(--red)] flex items-center justify-center">
           <i className="fas fa-play text-white text-xs" />
         </div>
@@ -47,7 +43,7 @@ export const Navbar = ({ searchValue = '' }: Props) => {
         </button>
         <button
           onClick={logout}
-          title="Sign out"
+          title={`Sign out (${user?.name ?? ''})`}
           className="w-[34px] h-[34px] rounded-full bg-[var(--red)] flex items-center justify-center text-white text-[13px] font-bold hover:bg-[var(--red2)] transition-colors"
         >
           {initials}

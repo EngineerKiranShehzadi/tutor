@@ -1,49 +1,36 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { authApi } from '@/lib/api';
 import { User } from '@/types';
+import { authApi } from '@/lib/api';
 
 export const useAuth = () => {
-  const router  = useRouter();
-  const [user, setUser]         = useState<User | null>(null);
+  const router = useRouter();
+  const [user, setUser] = useState<User | null>(null);
   const [isLoading, setLoading] = useState(true);
 
-  const loadUser = useCallback(async () => {
+  useEffect(() => {
     const token = localStorage.getItem('accessToken');
     if (!token) { setLoading(false); return; }
-    try {
-      const { data } = await authApi.getMe();
-      setUser(data.data);
-    } catch {
-      localStorage.removeItem('accessToken');
-    } finally {
-      setLoading(false);
-    }
+    authApi.getMe()
+      .then(({ data }) => {
+        setUser(data.data);
+        console.log(`[AUTH] ✅ Session restored: ${data.data.email} (${data.data.role})`);
+      })
+      .catch(() => {
+        localStorage.removeItem('accessToken');
+        console.warn('[AUTH] ⚠️ Token invalid or expired, cleared');
+      })
+      .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => { loadUser(); }, [loadUser]);
-
-  const login = async (email: string, password: string) => {
-    const { data } = await authApi.login({ email, password });
-    localStorage.setItem('accessToken', data.data.accessToken);
-    setUser(data.data.user);
-    router.push('/courses');
-  };
-
-  const register = async (name: string, email: string, password: string) => {
-    const { data } = await authApi.register({ name, email, password });
-    localStorage.setItem('accessToken', data.data.accessToken);
-    setUser(data.data.user);
-    router.push('/courses');
-  };
-
-  const logout = async () => {
+  const logout = useCallback(async () => {
     try { await authApi.logout(); } catch { /* ignore */ }
     localStorage.removeItem('accessToken');
     setUser(null);
+    console.log('[AUTH] ✅ Logged out');
     router.push('/login');
-  };
+  }, [router]);
 
-  return { user, isLoading, login, register, logout };
+  return { user, isLoading, logout, setUser };
 };

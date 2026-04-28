@@ -73,16 +73,17 @@ export default function LoginPage() {
   };
 
   const handleDigitKeyDown = (i: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+    const el = e.target as HTMLInputElement;
     // Auto-focus next on input
     if (digits[i] && e.key !== 'Backspace' && i < 4) {
-      const nextInput = (e.target.parentElement?.nextElementSibling as HTMLInputElement) ||
-                        (e.target.parentElement?.parentElement?.children[i + 1]?.querySelector('input') as HTMLInputElement);
+      const nextInput = (el.parentElement?.nextElementSibling as HTMLInputElement) ||
+                        (el.parentElement?.parentElement?.children[i + 1]?.querySelector('input') as HTMLInputElement);
       nextInput?.focus();
     }
     // Go back on backspace if empty
     if (e.key === 'Backspace' && !digits[i] && i > 0) {
-      const prevInput = (e.target.parentElement?.previousElementSibling as HTMLInputElement) ||
-                        (e.target.parentElement?.parentElement?.children[i - 1]?.querySelector('input') as HTMLInputElement);
+      const prevInput = (el.parentElement?.previousElementSibling as HTMLInputElement) ||
+                        (el.parentElement?.parentElement?.children[i - 1]?.querySelector('input') as HTMLInputElement);
       prevInput?.focus();
     }
   };
@@ -94,9 +95,10 @@ export default function LoginPage() {
       const result = await login(data.email, data.password);
 
       if (result.status === 'AUTHENTICATED') {
-        // Success: store token and redirect
+        // Success: store token and redirect based on role
         localStorage.setItem('accessToken', result.accessToken);
-        router.push('/courses');
+        console.log(`[AUTH] ✅ Login: ${result.user.email} (${result.user.role})`);
+        router.push(result.user.role === 'ADMIN' ? '/admin/dashboard' : '/courses');
       } else if (result.status === 'EMAIL_VERIFICATION_REQUIRED') {
         // Email not verified: switch to verify mode
         setVerifyEmail(result.email);
@@ -125,7 +127,8 @@ export default function LoginPage() {
     try {
       const result = await verifyOtp(verifyEmail, code);
       localStorage.setItem('accessToken', result.accessToken);
-      router.push('/courses');
+      console.log(`[AUTH] ✅ OTP verified: ${result.user.email} (${result.user.role})`);
+      router.push(result.user.role === 'ADMIN' ? '/admin/dashboard' : '/courses');
     } catch (err: unknown) {
       const ae = err as any;
       const message = ae?.response?.data?.message || ae?.message || 'Verification failed. Please try again.';

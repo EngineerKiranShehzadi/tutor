@@ -23,8 +23,8 @@ export const registerUser = async (name: string, email: string, password: string
   );
 
   const user = rows[0];
-  const accessToken  = generateAccessToken(user.id);
-  const refreshToken = generateRefreshToken(user.id);
+  const accessToken  = generateAccessToken(user.id, 'STUDENT');
+  const refreshToken = generateRefreshToken(user.id, 'STUDENT');
   await storeRefreshToken(user.id, refreshToken);
 
   return { user, accessToken, refreshToken };
@@ -91,8 +91,8 @@ export const loginUser = async (email: string, password: string): Promise<LoginR
     };
   }
 
-  const accessToken  = generateAccessToken(user.id);
-  const refreshToken = generateRefreshToken(user.id);
+  const accessToken  = generateAccessToken(user.id, user.role);
+  const refreshToken = generateRefreshToken(user.id, user.role);
   await storeRefreshToken(user.id, refreshToken);
 
   const { password_hash: _, ...safeUser } = user;
@@ -111,8 +111,8 @@ export const refreshAccessToken = async (refreshToken: string) => {
   );
   if (!rows[0]) throw new AppError('Invalid or expired refresh token', 401);
 
-  const newAccessToken  = generateAccessToken(payload.userId);
-  const newRefreshToken = generateRefreshToken(payload.userId);
+  const newAccessToken  = generateAccessToken(payload.userId, payload.role ?? 'STUDENT');
+  const newRefreshToken = generateRefreshToken(payload.userId, payload.role ?? 'STUDENT');
 
   await query('DELETE FROM refresh_tokens WHERE token_hash = $1', [tokenHash]);
   await storeRefreshToken(payload.userId, newRefreshToken);
@@ -431,8 +431,8 @@ export const verifySignupOtp = async (
   const { rows: freshRows } = await query<User>('SELECT * FROM users WHERE id = $1', [user.id]);
   const freshUser = freshRows[0];
 
-  const accessToken  = generateAccessToken(freshUser.id);
-  const refreshToken = generateRefreshToken(freshUser.id);
+  const accessToken  = generateAccessToken(freshUser.id, freshUser.role);
+  const refreshToken = generateRefreshToken(freshUser.id, freshUser.role);
   await storeRefreshToken(freshUser.id, refreshToken);
 
   const { password_hash: _, ...safeUser } = freshUser;

@@ -62,6 +62,7 @@ export const VERIFY_SIGNUP_OTP_MUTATION = gql`
         id
         name
         email
+        role
       }
     }
   }
