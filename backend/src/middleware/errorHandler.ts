@@ -12,16 +12,17 @@ export class AppError extends Error {
 
 export const errorHandler = (
   err: Error,
-  _req: Request,
+  req: Request,
   res: Response,
   _next: NextFunction
 ): void => {
   if (err instanceof AppError) {
+    logger.warn(`[ERROR] ${err.statusCode} ${req.method} ${req.path} — ${err.message}`);
     sendError(res, err.message, err.statusCode);
     return;
   }
 
-  logger.error(err.message, { stack: err.stack });
+  logger.error(`[ERROR] 500 ${req.method} ${req.path} — ${err.message}`, { stack: err.stack });
   sendError(res, 'Internal server error', 500);
 };
 

@@ -206,7 +206,7 @@ export function ForgotPasswordFlow({ onBack }: Props) {
                 value={digit}
                 onChange={e => handleDigitChange(i, e.target.value)}
                 onKeyDown={e => handleDigitKeyDown(i, e)}
-                className="w-11 text-center text-xl font-bold border-[1.5px] rounded-lg outline-none transition-all bg-white text-[var(--text)] placeholder:text-[var(--muted2)] border-[var(--border)] focus:border-[var(--red)] focus:ring-2 focus:ring-red-50"
+                className="w-11 text-center text-xl font-bold border-[1.5px] rounded-lg outline-none transition-all bg-[var(--surface)] text-[var(--text)] border-[var(--border)] focus:border-[var(--red)]"
                 style={{ height: '52px' }}
               />
             ))}
@@ -260,6 +260,7 @@ export function ForgotPasswordFlow({ onBack }: Props) {
             label="New Password"
             icon="fas fa-lock"
             type="password"
+            showPasswordToggle
             placeholder="Min 8 chars, 1 uppercase, 1 number"
             value={newPassword}
             onChange={e => setNewPassword(e.target.value)}
@@ -268,6 +269,7 @@ export function ForgotPasswordFlow({ onBack }: Props) {
             label="Confirm Password"
             icon="fas fa-lock"
             type="password"
+            showPasswordToggle
             placeholder="Repeat password"
             value={confirmPassword}
             onChange={e => setConfirmPassword(e.target.value)}

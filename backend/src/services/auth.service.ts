@@ -11,8 +11,12 @@ import { User, PasswordResetToken, EmailVerificationToken } from '../types';
 
 // ── REGISTER ──────────────────────────────────────────
 export const registerUser = async (name: string, email: string, password: string) => {
+  logger.info(`[AUTH] registerUser: email="${email}" name="${name}"`);
   const existing = await query<User>('SELECT id FROM users WHERE email = $1', [email]);
-  if (existing.rows[0]) throw new AppError('Email already in use', 409);
+  if (existing.rows[0]) {
+    logger.warn(`[AUTH] registerUser: email already in use — "${email}"`);
+    throw new AppError('Email already in use', 409);
+  }
 
   const password_hash = await hashPassword(password);
   const { rows } = await query<User>(
@@ -27,6 +31,7 @@ export const registerUser = async (name: string, email: string, password: string
   const refreshToken = generateRefreshToken(user.id, 'STUDENT');
   await storeRefreshToken(user.id, refreshToken);
 
+  logger.info(`[AUTH] ✅ User registered: "${user.email}" (id=${user.id})`);
   return { user, accessToken, refreshToken };
 };
 
@@ -36,15 +41,22 @@ type LoginResult =
   | { status: 'EMAIL_VERIFICATION_REQUIRED'; email: string; verificationExpiresInSeconds: number };
 
 export const loginUser = async (email: string, password: string): Promise<LoginResult> => {
+  logger.info(`[AUTH] loginUser: attempt for "${email}"`);
   const { rows } = await query<User>(
     'SELECT * FROM users WHERE email = $1',
     [email.toLowerCase()]
   );
   const user = rows[0];
-  if (!user) throw new AppError('Invalid email or password', 401);
+  if (!user) {
+    logger.warn(`[AUTH] loginUser: no account found for "${email}"`);
+    throw new AppError('Invalid email or password', 401);
+  }
 
   const valid = await comparePassword(password, user.password_hash);
-  if (!valid) throw new AppError('Invalid email or password', 401);
+  if (!valid) {
+    logger.warn(`[AUTH] loginUser: wrong password for "${email}"`);
+    throw new AppError('Invalid email or password', 401);
+  }
 
   if (!user.is_verified) {
     // Check for existing valid OTP to avoid duplicate emails
@@ -96,11 +108,13 @@ export const loginUser = async (email: string, password: string): Promise<LoginR
   await storeRefreshToken(user.id, refreshToken);
 
   const { password_hash: _, ...safeUser } = user;
+  logger.info(`[AUTH] ✅ Login success: "${email}" role=${user.role}`);
   return { status: 'AUTHENTICATED', user: safeUser, accessToken, refreshToken };
 };
 
 // ── REFRESH TOKEN ─────────────────────────────────────
 export const refreshAccessToken = async (refreshToken: string) => {
+  logger.info('[AUTH] refreshAccessToken: verifying refresh token');
   const payload = verifyRefreshToken(refreshToken);
   const tokenHash = hashToken(refreshToken);
 
@@ -109,7 +123,10 @@ export const refreshAccessToken = async (refreshToken: string) => {
      WHERE user_id = $1 AND token_hash = $2 AND expires_at > NOW()`,
     [payload.userId, tokenHash]
   );
-  if (!rows[0]) throw new AppError('Invalid or expired refresh token', 401);
+  if (!rows[0]) {
+    logger.warn(`[AUTH] refreshAccessToken: invalid or expired token for user ${payload.userId}`);
+    throw new AppError('Invalid or expired refresh token', 401);
+  }
 
   const newAccessToken  = generateAccessToken(payload.userId, payload.role ?? 'STUDENT');
   const newRefreshToken = generateRefreshToken(payload.userId, payload.role ?? 'STUDENT');
@@ -117,16 +134,19 @@ export const refreshAccessToken = async (refreshToken: string) => {
   await query('DELETE FROM refresh_tokens WHERE token_hash = $1', [tokenHash]);
   await storeRefreshToken(payload.userId, newRefreshToken);
 
+  logger.info(`[AUTH] ✅ Access token refreshed for user ${payload.userId} (role=${payload.role})`);
   return { accessToken: newAccessToken, refreshToken: newRefreshToken };
 };
 
 // ── LOGOUT ────────────────────────────────────────────
 export const logoutUser = async (userId: string, refreshToken: string) => {
+  logger.info(`[AUTH] logoutUser: revoking refresh token for user ${userId}`);
   const tokenHash = hashToken(refreshToken);
   await query(
     'DELETE FROM refresh_tokens WHERE user_id = $1 AND token_hash = $2',
     [userId, tokenHash]
   );
+  logger.info(`[AUTH] ✅ Refresh token revoked for user ${userId}`);
 };
 
 // ── OTP: INTERNAL ─────────────────────────────────────
@@ -186,34 +206,43 @@ export const resendPasswordResetOtp = async (email: string): Promise<void> => {
 
 // ── OTP: VERIFY ───────────────────────────────────────
 export const verifyOtp = async (email: string, code: string): Promise<void> => {
+  logger.info(`[AUTH] verifyOtp: password reset OTP verification for "${email}"`);
   const { rows: userRows } = await query<User>(
     'SELECT * FROM users WHERE email = $1',
     [email.toLowerCase()]
   );
   const user = userRows[0];
-  if (!user) throw new AppError('No account found with that email address', 400);
+  if (!user) {
+    logger.warn(`[AUTH] verifyOtp: no user found for "${email}"`);
+    throw new AppError('Invalid OTP', 400);
+  }
 
   const { rows: tokenRows } = await query<PasswordResetToken>(
     `SELECT * FROM password_reset_tokens
-     WHERE user_id = $1 AND used = FALSE
+     WHERE user_id = $1 AND used = FALSE AND verified = FALSE
      ORDER BY created_at DESC LIMIT 1`,
     [user.id]
   );
   const token = tokenRows[0];
-  if (!token) throw new AppError('No pending OTP found. Please request a new one.', 400);
+  if (!token) throw new AppError('Invalid OTP', 400);
 
   if (new Date(token.expires_at) < new Date()) {
+    await query('UPDATE password_reset_tokens SET used = TRUE WHERE id = $1', [token.id]);
     throw new AppError('Expired OTP. Please request a new one.', 400);
   }
 
   const valid = await bcrypt.compare(code, token.code_hash);
-  if (!valid) throw new AppError('Invalid OTP. Please check and try again.', 400);
+  if (!valid) {
+    logger.warn(`[AUTH] verifyOtp: invalid OTP code for "${email}"`);
+    throw new AppError('Invalid OTP. Please check and try again.', 400);
+  }
 
   // Mark verified — token is NOT consumed yet, only consumed after password reset
   await query(
     'UPDATE password_reset_tokens SET verified = TRUE WHERE id = $1',
     [token.id]
   );
+  logger.info(`[AUTH] ✅ Password reset OTP verified for "${email}"`);
 };
 
 // ── OTP: RESET PASSWORD ───────────────────────────────
@@ -222,7 +251,9 @@ export const resetPasswordWithOtp = async (
   newPassword: string,
   confirmPassword: string
 ): Promise<void> => {
+  logger.info(`[AUTH] resetPasswordWithOtp: password reset for "${email}"`);
   if (newPassword !== confirmPassword) {
+    logger.warn(`[AUTH] resetPasswordWithOtp: passwords do not match for "${email}"`);
     throw new AppError('Passwords do not match', 400);
   }
 
@@ -264,10 +295,12 @@ export const resetPasswordWithOtp = async (
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');
+    logger.error(`[AUTH] resetPasswordWithOtp: transaction failed for "${email}"`, err);
     throw err;
   } finally {
     client.release();
   }
+  logger.info(`[AUTH] ✅ Password reset complete for "${email}" — all sessions invalidated`);
 };
 
 // ── SIGNUP: INTERNAL OTP HELPER ───────────────────────
@@ -393,9 +426,13 @@ export const verifySignupOtp = async (
   email: string,
   code: string
 ): Promise<{ user: Omit<User, 'password_hash'>; accessToken: string; refreshToken: string }> => {
+  logger.info(`[AUTH] verifySignupOtp: verifying signup OTP for "${email}"`);
   const { rows: userRows } = await query<User>('SELECT * FROM users WHERE email = $1', [email.toLowerCase()]);
   const user = userRows[0];
-  if (!user) throw new AppError('Invalid OTP', 400);
+  if (!user) {
+    logger.warn(`[AUTH] verifySignupOtp: no user found for "${email}"`);
+    throw new AppError('Invalid OTP', 400);
+  }
 
   const { rows: tokenRows } = await query<EmailVerificationToken>(
     `SELECT * FROM email_verification_tokens
@@ -412,7 +449,10 @@ export const verifySignupOtp = async (
   }
 
   const valid = await bcrypt.compare(code, token.code_hash);
-  if (!valid) throw new AppError('Invalid OTP', 400);
+  if (!valid) {
+    logger.warn(`[AUTH] verifySignupOtp: invalid OTP code for "${email}"`);
+    throw new AppError('Invalid OTP', 400);
+  }
 
   // Atomic: mark user verified + consume token
   const client = await pool.connect();
@@ -423,10 +463,12 @@ export const verifySignupOtp = async (
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');
+    logger.error(`[AUTH] verifySignupOtp: transaction failed for "${email}"`, err);
     throw err;
   } finally {
     client.release();
   }
+  logger.info(`[AUTH] ✅ Signup OTP verified — user "${email}" is now verified`);
 
   const { rows: freshRows } = await query<User>('SELECT * FROM users WHERE id = $1', [user.id]);
   const freshUser = freshRows[0];

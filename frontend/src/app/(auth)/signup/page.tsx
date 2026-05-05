@@ -17,12 +17,16 @@ import { useVerifySignupOtp }  from '@/hooks/useVerifySignupOtp';
 type Step = 'form' | 'otp';
 
 const schema = z.object({
-  name:     z.string().min(2, 'Name must be at least 2 characters').max(100),
-  email:    z.string().email('Enter a valid email'),
-  password: z.string()
+  name:            z.string().min(2, 'Name must be at least 2 characters').max(100),
+  email:           z.string().email('Enter a valid email'),
+  password:        z.string()
     .min(8, 'At least 8 characters')
     .regex(/[A-Z]/, 'Must contain an uppercase letter')
     .regex(/[0-9]/, 'Must contain a number'),
+  confirmPassword: z.string().min(1, 'Please confirm your password'),
+}).refine(data => data.password === data.confirmPassword, {
+  message: 'Passwords do not match',
+  path: ['confirmPassword'],
 });
 type FormData = z.infer<typeof schema>;
 
@@ -164,7 +168,7 @@ export default function SignupPage() {
                 value={digit}
                 onChange={e => handleDigitChange(i, e.target.value)}
                 onKeyDown={e => handleDigitKeyDown(i, e)}
-                className="w-11 text-center text-xl font-bold border-[1.5px] rounded-lg outline-none transition-all bg-white text-[var(--text)] placeholder:text-[var(--muted2)] border-[var(--border)] focus:border-[var(--red)] focus:ring-2 focus:ring-red-50"
+                className="w-11 text-center text-xl font-bold border-[1.5px] rounded-lg outline-none transition-all bg-[var(--surface)] text-[var(--text)] border-[var(--border)] focus:border-[var(--red)]"
                 style={{ height: '52px' }}
               />
             ))}
@@ -222,8 +226,10 @@ export default function SignupPage() {
           error={errors.name?.message} {...register('name')} />
         <Input label="Email" icon="fas fa-envelope" type="email" placeholder="you@example.com"
           error={errors.email?.message} {...register('email')} />
-        <Input label="Password" icon="fas fa-lock" type="password" placeholder="Min 8 chars, 1 uppercase, 1 number"
+        <Input label="Password" icon="fas fa-lock" type="password" showPasswordToggle placeholder="Min 8 chars, 1 uppercase, 1 number"
           error={errors.password?.message} {...register('password')} />
+        <Input label="Confirm Password" icon="fas fa-lock" type="password" showPasswordToggle placeholder="Repeat your password"
+          error={errors.confirmPassword?.message} {...register('confirmPassword')} />
 
         {serverError && (
           <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2.5 text-sm text-red-600 flex items-center gap-2">

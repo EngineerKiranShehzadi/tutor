@@ -1,7 +1,7 @@
 export const GoogleButton = () => (
   <button
     type="button"
-    className="w-full py-2.5 px-4 bg-white border-[1.5px] border-[var(--border)] rounded-lg text-sm font-semibold flex items-center justify-center gap-2.5 hover:bg-[var(--surface)] transition-colors"
+    className="w-full py-2.5 px-4 bg-white border-[1.5px] border-slate-200 rounded-lg text-sm font-semibold text-slate-700 flex items-center justify-center gap-2.5 hover:bg-slate-50 transition-colors"
   >
     <svg width="18" height="18" viewBox="0 0 48 48">
       <path fill="#EA4335" d="M24 9.5c3.1 0 5.9 1.1 8.1 2.9l6-6C34.5 3.1 29.5 1 24 1 14.6 1 6.7 6.6 3.1 14.5l7 5.4C11.9 13.9 17.4 9.5 24 9.5z"/>

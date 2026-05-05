@@ -52,14 +52,17 @@ export const lectureResolvers = {
   Query: {
     lectures: (_: unknown, __: unknown, ctx: GraphQLContext) =>
       wrap(async () => {
-        requireAuth(ctx);
+        const user = requireAuth(ctx);
+        logger.info(`[GRAPHQL] lectures query by "${user.email}" (${user.role})`);
         const list = await getLectures();
+        logger.info(`[GRAPHQL] ✅ lectures: returned ${list.length} lecture(s) to "${user.email}"`);
         return list.map(toGql);
       }),
 
     lecture: (_: unknown, { id }: { id: string }, ctx: GraphQLContext) =>
       wrap(async () => {
-        requireAuth(ctx);
+        const user = requireAuth(ctx);
+        logger.info(`[GRAPHQL] lecture #${id} query by "${user.email}"`);
         const l = await getLectureById(Number(id));
         return toGql(l);
       }),
@@ -72,8 +75,10 @@ export const lectureResolvers = {
       ctx: GraphQLContext
     ) =>
       wrap(async () => {
-        requireAdmin(ctx);
+        const admin = requireAdmin(ctx);
+        logger.info(`[GRAPHQL] createLecture: admin "${admin.email}" → title="${input.title}"`);
         const l = await createLecture(input);
+        logger.info(`[GRAPHQL] ✅ createLecture: lecture #${l.id} "${l.title}" created by "${admin.email}"`);
         return toGql(l);
       }),
 
@@ -83,15 +88,20 @@ export const lectureResolvers = {
       ctx: GraphQLContext
     ) =>
       wrap(async () => {
-        requireAdmin(ctx);
+        const admin = requireAdmin(ctx);
+        logger.info(`[GRAPHQL] updateLecture: admin "${admin.email}" → lecture #${id}`);
         const l = await updateLecture(Number(id), input);
+        logger.info(`[GRAPHQL] ✅ updateLecture: lecture #${id} updated by "${admin.email}"`);
         return toGql(l);
       }),
 
     deleteLecture: (_: unknown, { id }: { id: string }, ctx: GraphQLContext) =>
       wrap(async () => {
-        requireAdmin(ctx);
-        return deleteLecture(Number(id));
+        const admin = requireAdmin(ctx);
+        logger.info(`[GRAPHQL] deleteLecture: admin "${admin.email}" → lecture #${id}`);
+        const result = await deleteLecture(Number(id));
+        logger.info(`[GRAPHQL] ✅ deleteLecture: lecture #${id} deleted by "${admin.email}"`);
+        return result;
       }),
   },
 };

@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/Button';
 import { useLogin } from '@/hooks/useLogin';
 import { useResendLoginOtp } from '@/hooks/useResendLoginOtp';
 import { useVerifySignupOtp } from '@/hooks/useVerifySignupOtp';
+import { ForgotPasswordFlow } from '@/components/auth/ForgotPasswordFlow';
 
 type Mode = 'login' | 'forgot' | 'verify';
 
@@ -149,6 +150,11 @@ export default function LoginPage() {
     }
   };
 
+  // ── Render: Forgot password mode ──────────────────────
+  if (mode === 'forgot') {
+    return <ForgotPasswordFlow onBack={() => setMode('login')} />;
+  }
+
   // ── Render: Verify mode ────────────────────────────────
   if (mode === 'verify') {
     return (
@@ -196,7 +202,7 @@ export default function LoginPage() {
       <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
         <Input label="Email" icon="fas fa-envelope" type="email" placeholder="you@example.com"
           error={errors.email?.message} {...register('email')} />
-        <Input label="Password" icon="fas fa-lock" type="password" placeholder="••••••••"
+        <Input label="Password" icon="fas fa-lock" type="password" showPasswordToggle placeholder="••••••••"
           error={errors.password?.message} {...register('password')} />
 
         <div className="text-right -mt-1">

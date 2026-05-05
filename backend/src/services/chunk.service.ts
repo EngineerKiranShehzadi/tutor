@@ -31,6 +31,16 @@ function normaliseKey(k: string): string {
   return k.toLowerCase().replace(/\s+/g, '_').trim();
 }
 
+// Accepts both standard column names and the dataset.xlsx aliases:
+//   Model → topic   |   Questions → question   |   Answers → answer
+function normaliseRow(r: Record<string, unknown>): RawRow {
+  const n = Object.fromEntries(Object.entries(r).map(([k, v]) => [normaliseKey(k), v]));
+  if (!('topic'    in n) && 'model'     in n) n['topic']    = n['model'];
+  if (!('question' in n) && 'questions' in n) n['question'] = n['questions'];
+  if (!('answer'   in n) && 'answers'   in n) n['answer']   = n['answers'];
+  return n as RawRow;
+}
+
 // Parses the xlsx buffer and returns validated rows
 export function parseExcel(buffer: Buffer): RawRow[] {
   const workbook = XLSX.read(buffer, { type: 'buffer' });
@@ -39,17 +49,14 @@ export function parseExcel(buffer: Buffer): RawRow[] {
 
   if (rawRows.length === 0) throw new AppError('Excel file is empty', 400);
 
-  // Normalise column keys
-  const rows = rawRows.map(r =>
-    Object.fromEntries(Object.entries(r).map(([k, v]) => [normaliseKey(k), v]))
-  ) as RawRow[];
+  const rows = rawRows.map(normaliseRow);
 
   // Validate required columns exist in first row
   const first = rows[0];
   const missing: string[] = [];
-  if (!('topic'    in first)) missing.push('topic');
-  if (!('question' in first)) missing.push('question');
-  if (!('answer'   in first)) missing.push('answer');
+  if (!('topic'    in first)) missing.push('topic (or Model)');
+  if (!('question' in first)) missing.push('question (or Questions)');
+  if (!('answer'   in first)) missing.push('answer (or Answers)');
   if (missing.length > 0) {
     throw new AppError(`Missing required column(s): ${missing.join(', ')}`, 400);
   }
@@ -127,6 +134,8 @@ export async function processDataset(lectureId: number, buffer: Buffer): Promise
       );
       embeddedCount++;
       logger.info(`[DATASET] Embedded chunk ${i + 1}/${validRows.length} (id=${chunkIds[i]})`);
+      // Small delay to stay within Gemini free-tier rate limits
+      await new Promise(r => setTimeout(r, 400));
     } catch (err) {
       logger.error(`[DATASET] ❌ Failed to embed chunk ${i + 1} (id=${chunkIds[i]})`, err);
     }

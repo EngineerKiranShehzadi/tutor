@@ -21,6 +21,7 @@ export const getAnalyticsSummary = async () => {
 };
 
 export const getQuestionsPerLecture = async () => {
+  logger.info('[ANALYTICS] getQuestionsPerLecture: fetching question counts per lecture');
   const { rows } = await query<{ lecture_id: number; title: string; count: string }>(
     `SELECT sq.lecture_id, l.title, COUNT(sq.id) AS count
      FROM student_questions sq
@@ -28,6 +29,7 @@ export const getQuestionsPerLecture = async () => {
      GROUP BY sq.lecture_id, l.title
      ORDER BY count DESC`
   );
+  logger.info(`[ANALYTICS] questionsPerLecture: ${rows.length} lecture(s) with questions`);
   return rows.map(r => ({
     lectureId:    r.lecture_id,
     lectureTitle: r.title,
@@ -36,6 +38,7 @@ export const getQuestionsPerLecture = async () => {
 };
 
 export const getRecentQuestions = async (limit = 20) => {
+  logger.info(`[ANALYTICS] getRecentQuestions: fetching last ${limit} questions`);
   const { rows } = await query<{
     id: number; name: string; email: string; title: string; question: string; created_at: Date;
   }>(
@@ -47,6 +50,7 @@ export const getRecentQuestions = async (limit = 20) => {
      LIMIT $1`,
     [limit]
   );
+  logger.info(`[ANALYTICS] recentQuestions: returned ${rows.length} question(s)`);
   return rows.map(r => ({
     id:           r.id,
     studentName:  r.name,
@@ -58,16 +62,20 @@ export const getRecentQuestions = async (limit = 20) => {
 };
 
 export const getLectureStatusList = async () => {
+  logger.info('[ANALYTICS] getLectureStatusList: fetching all lecture statuses');
   const { rows } = await query<{ id: number; title: string; status: string }>(
     `SELECT id, title, status FROM lectures ORDER BY created_at DESC`
   );
+  logger.info(`[ANALYTICS] lectureStatusList: ${rows.length} lecture(s)`);
   return rows;
 };
 
 export const getRegisteredStudents = async () => {
+  logger.info('[ANALYTICS] getRegisteredStudents: fetching all registered students');
   const { rows } = await query<{ id: string; name: string; email: string; created_at: Date }>(
     `SELECT id, name, email, created_at FROM users WHERE role = 'STUDENT' ORDER BY created_at DESC`
   );
+  logger.info(`[ANALYTICS] registeredStudents: ${rows.length} student(s)`);
   return rows.map(r => ({
     id:        r.id,
     name:      r.name,

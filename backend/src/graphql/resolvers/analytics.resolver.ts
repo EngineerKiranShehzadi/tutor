@@ -23,26 +23,36 @@ export const analyticsResolvers = {
   Query: {
     analyticsSummary: (_: unknown, __: unknown, ctx: GraphQLContext) => {
       requireAdmin(ctx);
+      const user = (ctx.req as AuthenticatedRequest).user;
+      logger.info(`[GRAPHQL] analyticsSummary query by admin "${user?.email}"`);
       return getAnalyticsSummary();
     },
 
     questionsPerLecture: (_: unknown, __: unknown, ctx: GraphQLContext) => {
       requireAdmin(ctx);
+      const user = (ctx.req as AuthenticatedRequest).user;
+      logger.info(`[GRAPHQL] questionsPerLecture query by admin "${user?.email}"`);
       return getQuestionsPerLecture();
     },
 
     recentQuestions: (_: unknown, __: unknown, ctx: GraphQLContext) => {
       requireAdmin(ctx);
+      const user = (ctx.req as AuthenticatedRequest).user;
+      logger.info(`[GRAPHQL] recentQuestions query by admin "${user?.email}"`);
       return getRecentQuestions();
     },
 
     lectureStatusList: (_: unknown, __: unknown, ctx: GraphQLContext) => {
       requireAdmin(ctx);
+      const user = (ctx.req as AuthenticatedRequest).user;
+      logger.info(`[GRAPHQL] lectureStatusList query by admin "${user?.email}"`);
       return getLectureStatusList();
     },
 
     registeredStudents: (_: unknown, __: unknown, ctx: GraphQLContext) => {
       requireAdmin(ctx);
+      const user = (ctx.req as AuthenticatedRequest).user;
+      logger.info(`[GRAPHQL] registeredStudents query by admin "${user?.email}"`);
       return getRegisteredStudents();
     },
   },

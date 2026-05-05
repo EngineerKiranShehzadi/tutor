@@ -40,15 +40,23 @@ Rules:
 5. If a timestamp is available, mention it so the student can revisit that part of the lecture.
 6. Keep answers concise and educational.`;
 
+const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
+
 export const generateAnswer = async (
   question: string,
   chunks: QnaChunk[],
-  lectureTitle: string
+  lectureTitle: string,
+  attempt = 1
 ): Promise<string> => {
   const genAI = getClient();
   const model = genAI.getGenerativeModel({
     model: 'gemini-2.5-flash',
-    generationConfig: { temperature: 0.3, maxOutputTokens: 1024 },
+    generationConfig: {
+      temperature: 0.3,
+      maxOutputTokens: 8192,
+      // @ts-ignore — thinkingConfig is supported but not yet typed in this SDK version
+      thinkingConfig: { thinkingBudget: 0 },
+    },
   });
 
   const context = buildContext(chunks);
@@ -64,9 +72,34 @@ ${question}`;
 
   logger.info(`[LLM] 🤖 Sending prompt to Gemini (${chunks.length} chunks, question="${question.slice(0, 60)}...")`);
 
-  const result = await model.generateContent(prompt);
-  const answer = result.response.text();
+  try {
+    const result = await model.generateContent(prompt);
+    const finishReason = result.response.candidates?.[0]?.finishReason;
 
-  logger.info(`[LLM] ✅ Gemini answered (${answer.length} chars)`);
-  return answer;
+    if (finishReason === 'MAX_TOKENS') {
+      logger.warn('[LLM] ⚠️  Response hit MAX_TOKENS — answer may be truncated');
+    }
+
+    const answer = result.response.text();
+    if (!answer?.trim()) {
+      throw new AppError('Empty response from AI model', 500);
+    }
+
+    logger.info(`[LLM] ✅ Gemini answered (${answer.length} chars, finish=${finishReason})`);
+    return answer;
+  } catch (err: unknown) {
+    const msg = String((err as Error).message ?? '');
+    const isRateLimit = msg.includes('429') || msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('resource_exhausted');
+
+    if (isRateLimit && attempt <= 3) {
+      const wait = Math.pow(2, attempt) * 3000; // 6s, 12s, 24s
+      logger.warn(`[LLM] Rate limit hit (attempt ${attempt}/3) — retrying in ${wait / 1000}s...`);
+      await sleep(wait);
+      return generateAnswer(question, chunks, lectureTitle, attempt + 1);
+    }
+
+    if (err instanceof AppError) throw err;
+    logger.error('[LLM] ❌ Gemini error:', err);
+    throw new AppError('AI model failed to generate a response. Please try again.', 500);
+  }
 };

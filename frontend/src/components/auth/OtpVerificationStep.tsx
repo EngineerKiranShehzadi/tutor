@@ -35,7 +35,6 @@ export const OtpVerificationStep = ({
 }: Props) => {
   const inputRefs = useRef<(HTMLInputElement | null)[]>([null, null, null, null, null]);
 
-  // Auto-focus first input on mount
   useEffect(() => {
     inputRefs.current[0]?.focus();
   }, []);
@@ -45,7 +44,7 @@ export const OtpVerificationStep = ({
       <h2 className="text-xl font-bold mb-1 text-[var(--text)]">Verify your email</h2>
       <p className="text-sm text-[var(--muted)] mb-6">
         {message || `A 5-digit code has been sent to `}
-        <strong>{email}</strong>
+        <strong className="text-[var(--text)]">{email}</strong>
       </p>
 
       <form onSubmit={onVerify} className="flex flex-col gap-5">
@@ -60,7 +59,7 @@ export const OtpVerificationStep = ({
               value={digit}
               onChange={e => onOtpChange(i, e.target.value)}
               onKeyDown={e => onOtpKeyDown(i, e)}
-              className="w-11 text-center text-xl font-bold border-[1.5px] rounded-lg outline-none transition-all bg-white text-[var(--text)] placeholder:text-[var(--muted2)] border-[var(--border)] focus:border-[var(--red)] focus:ring-2 focus:ring-red-50"
+              className="w-11 text-center text-xl font-bold border-[1.5px] rounded-lg outline-none transition-all bg-[var(--surface)] text-[var(--text)] border-[var(--border)] focus:border-[var(--red)]"
               style={{ height: '52px' }}
             />
           ))}
