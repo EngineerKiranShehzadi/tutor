@@ -374,7 +374,14 @@ export const resendSignupOtp = async (email: string): Promise<void> => {
   }
 
   if (env.EMAIL.USER && env.EMAIL.PASSWORD) {
-    await sendSignupVerificationOtp(user.email, user.name, otp);
+    try {
+      await sendSignupVerificationOtp(user.email, user.name, otp);
+    } catch (emailErr) {
+      logger.warn(`[AUTH] resendSignupOtp: failed to send OTP email to "${email}"`, emailErr);
+      if (env.NODE_ENV === 'production') {
+        throw new AppError('Failed to send verification email. Please try again.', 500);
+      }
+    }
   }
 };
 

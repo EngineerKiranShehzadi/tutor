@@ -7,6 +7,7 @@
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
+    "db:setup": "ts-node --transpile-only src/scripts/db-setup.ts",
     "db:migrate": "psql $DATABASE_URL -f src/db/schema.sql",
     "seed:dataset": "ts-node --transpile-only src/scripts/seed-dataset.ts",
     "seed:retry": "ts-node --transpile-only src/scripts/retry-missing-embeddings.ts"
