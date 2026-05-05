@@ -30,8 +30,9 @@ export const setupApollo = async (app: Express): Promise<void> => {
   const server = new ApolloServer<GraphQLContext>({
     typeDefs,
     resolvers: mergedResolvers,
-    formatError: (err) => {
-      logger.error(`[GRAPHQL] ❌ ${err.message}`, { extensions: err.extensions });
+    formatError: (err, originalError) => {
+      const cause = (originalError as Error)?.message ?? err.message;
+      logger.error(`[GRAPHQL] ❌ ${err.message} | cause: ${cause}`, { extensions: err.extensions });
       return err;
     },
   });
