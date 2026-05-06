@@ -40,22 +40,11 @@ export const setupApollo = async (app: Express): Promise<void> => {
   await server.start();
   logger.info('[GRAPHQL] ✅ Apollo Server started at /graphql');
 
-  // ── DEV BYPASS ─────────────────────────────────────────────────────────────
-  // Set to false to re-enable real JWT auth in the GraphQL context
-  const DEV_BYPASS_AUTH = true;
-  // ───────────────────────────────────────────────────────────────────────────
-
   app.use(
     '/graphql',
     expressMiddleware(server, {
       context: async ({ req, res }) => {
-        // ── DEV BYPASS: inject mock admin so all resolvers pass auth checks ──
-        if (DEV_BYPASS_AUTH) {
-          (req as AuthenticatedRequest).user = { id: 'dev-admin', name: 'Dev Admin', email: 'admin@askaitutor.com', role: 'ADMIN' };
-          logger.info('[GRAPHQL] ⚠️  DEV BYPASS active — using mock admin user');
-          return { req, res };
-        }
-        // ── REAL AUTH (active when DEV_BYPASS_AUTH = false) ──────────────────
+        // Parse Bearer token and attach user to req so resolvers can read req.user
         const authHeader = req.headers.authorization;
         if (authHeader?.startsWith('Bearer ')) {
           try {

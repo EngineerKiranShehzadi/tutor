@@ -4,9 +4,6 @@ import { ChatHistoryEntry, QnaChunk } from '../types';
 import { getLectureById } from './lecture.service';
 import { logger } from '../utils/logger';
 
-// ── DEV BYPASS ── set to false to re-enable DB persistence for chat
-const DEV_BYPASS_AUTH = true;
-
 // ── GET CHAT HISTORY ───────────────────────────────────────────
 // Returns only non-cleared entries for this student + lecture
 export const getChatHistory = async (
@@ -43,13 +40,6 @@ export const saveChatEntry = async (params: {
   sourceChunkIds: number[];
 }): Promise<number> => {
   const { studentId, lectureId, question, answer, sourceChunkIds } = params;
-
-  // ── DEV BYPASS: skip DB writes — no real user UUID in dev mode ──
-  if (DEV_BYPASS_AUTH) {
-    logger.info('[CHAT] DEV BYPASS: skipping chat save');
-    return 0;
-  }
-  // ────────────────────────────────────────────────────────────────
 
   // Also save to student_questions for admin analytics
   await query(
