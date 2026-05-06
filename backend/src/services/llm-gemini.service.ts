@@ -49,13 +49,16 @@ export const generateAnswer = async (
   attempt = 1
 ): Promise<string> => {
   const genAI = getClient();
+  // Fall back to stable 1.5-flash after 2 failed attempts on 2.5-flash
+  const modelName = attempt <= 2 ? 'gemini-2.5-flash' : 'gemini-1.5-flash';
   const model = genAI.getGenerativeModel({
-    model: 'gemini-2.5-flash',
+    model: modelName,
     generationConfig: {
       temperature: 0.3,
       maxOutputTokens: 8192,
-      // @ts-ignore — thinkingConfig is supported but not yet typed in this SDK version
-      thinkingConfig: { thinkingBudget: 0 },
+      ...(modelName === 'gemini-2.5-flash'
+        ? { thinkingConfig: { thinkingBudget: 0 } } // @ts-ignore — not yet typed in SDK
+        : {}),
     },
   });
 
@@ -89,11 +92,13 @@ ${question}`;
     return answer;
   } catch (err: unknown) {
     const msg = String((err as Error).message ?? '');
-    const isRateLimit = msg.includes('429') || msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('resource_exhausted');
+    const isRateLimit  = msg.includes('429') || msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('resource_exhausted');
+    const isOverloaded = msg.includes('503') || msg.toLowerCase().includes('service unavailable') || msg.toLowerCase().includes('high demand');
 
-    if (isRateLimit && attempt <= 3) {
+    if ((isRateLimit || isOverloaded) && attempt <= 3) {
       const wait = Math.pow(2, attempt) * 3000; // 6s, 12s, 24s
-      logger.warn(`[LLM] Rate limit hit (attempt ${attempt}/3) — retrying in ${wait / 1000}s...`);
+      const fallbackNote = attempt >= 2 ? ' (switching to gemini-1.5-flash)' : '';
+      logger.warn(`[LLM] Transient error on attempt ${attempt}/3${fallbackNote} — retrying in ${wait / 1000}s...`);
       await sleep(wait);
       return generateAnswer(question, chunks, lectureTitle, attempt + 1);
     }

@@ -13,13 +13,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     if (!user) {
       console.log('[GUARD] No session → /login');
       router.replace('/login');
-    } else if (user.role === 'ADMIN') {
-      console.log('[GUARD] Admin on student route → /admin/dashboard');
-      router.replace('/admin/dashboard');
     }
+    // ── DEV BYPASS: admin role check disabled — re-enable when auth is ready ──
+    // } else if (user.role === 'ADMIN') {
+    //   console.log('[GUARD] Admin on student route → /admin/dashboard');
+    //   router.replace('/admin/dashboard');
+    // }
   }, [user, isLoading, router]);
 
-  if (isLoading || !user || user.role === 'ADMIN') {
+  if (isLoading || !user) { // ── DEV BYPASS: removed || user.role === 'ADMIN' ──
     return (
       <div className="min-h-screen flex items-center justify-center bg-[var(--bg)]">
         <div className="w-8 h-8 border-4 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
