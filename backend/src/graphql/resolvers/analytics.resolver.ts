@@ -7,6 +7,10 @@ import {
   getRecentQuestions,
   getLectureStatusList,
   getRegisteredStudents,
+  getLectureChunks,
+  getLectureAgentDetails,
+  getStudentJourney,
+  getContentGaps,
 } from '../../services/analytics.service';
 import { logger } from '../../utils/logger';
 
@@ -54,6 +58,34 @@ export const analyticsResolvers = {
       const user = (ctx.req as AuthenticatedRequest).user;
       logger.info(`[GRAPHQL] registeredStudents query by admin "${user?.email}"`);
       return getRegisteredStudents();
+    },
+
+    lectureChunks: (_: unknown, { lectureId }: { lectureId: number }, ctx: GraphQLContext) => {
+      requireAdmin(ctx);
+      const user = (ctx.req as AuthenticatedRequest).user;
+      logger.info(`[GRAPHQL] lectureChunks query for lecture #${lectureId} by admin "${user?.email}"`);
+      return getLectureChunks(lectureId);
+    },
+
+    lectureAgentDetails: (_: unknown, __: unknown, ctx: GraphQLContext) => {
+      requireAdmin(ctx);
+      const user = (ctx.req as AuthenticatedRequest).user;
+      logger.info(`[GRAPHQL] lectureAgentDetails query by admin "${user?.email}"`);
+      return getLectureAgentDetails();
+    },
+
+    studentJourney: (_: unknown, { id }: { id: string }, ctx: GraphQLContext) => {
+      requireAdmin(ctx);
+      const user = (ctx.req as AuthenticatedRequest).user;
+      logger.info(`[GRAPHQL] studentJourney for student #${id} by admin "${user?.email}"`);
+      return getStudentJourney(id);
+    },
+
+    contentGaps: (_: unknown, __: unknown, ctx: GraphQLContext) => {
+      requireAdmin(ctx);
+      const user = (ctx.req as AuthenticatedRequest).user;
+      logger.info(`[GRAPHQL] contentGaps query by admin "${user?.email}"`);
+      return getContentGaps();
     },
   },
 };

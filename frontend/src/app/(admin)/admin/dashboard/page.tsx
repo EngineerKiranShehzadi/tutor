@@ -1,37 +1,41 @@
 'use client';
 import { useQuery } from '@apollo/client';
 import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
+} from 'recharts';
+import {
   GET_ANALYTICS_SUMMARY,
   GET_QUESTIONS_PER_LECTURE,
   GET_RECENT_QUESTIONS,
+  GET_REGISTERED_STUDENTS,
 } from '@/graphql/analytics.queries';
 
 const STAT_CARDS = [
   {
     key: 'totalStudents',
     label: 'Total Students',
-    icon: 'fas fa-user-graduate',
+    icon: 'fas fa-chalkboard-user',
     bg: 'bg-blue-600',
     light: 'bg-blue-50 text-blue-700',
   },
   {
     key: 'totalLectures',
     label: 'Total Lectures',
-    icon: 'fas fa-play-circle',
+    icon: 'fas fa-video',
     bg: 'bg-violet-600',
     light: 'bg-violet-50 text-violet-700',
   },
   {
     key: 'totalQuestions',
     label: 'Questions Asked',
-    icon: 'fas fa-comments',
+    icon: 'fas fa-circle-question',
     bg: 'bg-emerald-600',
     light: 'bg-emerald-50 text-emerald-700',
   },
   {
     key: 'readyAgents',
     label: 'Active AI Agents',
-    icon: 'fas fa-robot',
+    icon: 'fas fa-brain',
     bg: 'bg-indigo-600',
     light: 'bg-indigo-50 text-indigo-700',
   },
@@ -46,9 +50,15 @@ export default function AdminDashboard() {
   const { data: perLecture, loading: perLectureLoading } = useQuery(GET_QUESTIONS_PER_LECTURE, { fetchPolicy: 'network-only' });
   const { data: recentData, loading: recentLoading } = useQuery(GET_RECENT_QUESTIONS, { fetchPolicy: 'network-only' });
 
+  const { data: studentsData } = useQuery(GET_REGISTERED_STUDENTS, { fetchPolicy: 'network-only' });
+
   const summary     = summaryData?.analyticsSummary;
   const qPerLecture = perLecture?.questionsPerLecture ?? [];
   const recent      = recentData?.recentQuestions ?? [];
+  const students    = studentsData?.registeredStudents ?? [];
+  const activeCount   = students.filter((s: { status: string }) => s.status === 'ACTIVE').length;
+  const inactiveCount = students.filter((s: { status: string }) => s.status === 'INACTIVE').length;
+  const activePct = students.length > 0 ? Math.round((activeCount / students.length) * 100) : 0;
 
   return (
     <div className="max-w-6xl">
@@ -80,6 +90,37 @@ export default function AdminDashboard() {
         ))}
       </div>
 
+      {/* Student engagement strip */}
+      {students.length > 0 && (
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 mb-5 flex items-center gap-6">
+          <div className="shrink-0">
+            <p className="text-[13px] font-bold text-slate-700 mb-0.5">Student Engagement</p>
+            <p className="text-[11px] text-slate-400">Based on AI tutor interactions</p>
+          </div>
+          <div className="flex-1">
+            <div className="flex items-center justify-between mb-1.5 text-[11px] font-semibold">
+              <span className="text-emerald-600">{activeCount} Active ({activePct}%)</span>
+              <span className="text-slate-400">{inactiveCount} Inactive ({100 - activePct}%)</span>
+            </div>
+            <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden flex">
+              <div className="h-full bg-emerald-500 rounded-l-full transition-all duration-700" style={{ width: `${activePct}%` }} />
+              <div className="h-full bg-slate-200 rounded-r-full flex-1" />
+            </div>
+          </div>
+          <div className="flex items-center gap-5 shrink-0">
+            <div className="text-center">
+              <p className="text-[22px] font-extrabold text-emerald-600 leading-none">{activeCount}</p>
+              <p className="text-[10px] text-slate-400 mt-0.5 font-medium">Active</p>
+            </div>
+            <div className="w-px h-8 bg-slate-200" />
+            <div className="text-center">
+              <p className="text-[22px] font-extrabold text-slate-400 leading-none">{inactiveCount}</p>
+              <p className="text-[10px] text-slate-400 mt-0.5 font-medium">Inactive</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-5 gap-5">
         {/* Questions per lecture — 3 cols */}
         <div className="col-span-3 bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
@@ -104,26 +145,45 @@ export default function AdminDashboard() {
               <p className="text-[12px] mt-0.5">Questions will appear here once students start asking.</p>
             </div>
           ) : (
-            <div className="space-y-4">
-              {qPerLecture.map((item: { lectureId: number; lectureTitle: string; count: number }) => {
-                const maxCount = Math.max(...qPerLecture.map((x: typeof item) => x.count), 1);
-                const pct = Math.round((item.count / maxCount) * 100);
-                return (
-                  <div key={item.lectureId}>
-                    <div className="flex justify-between items-center mb-1.5">
-                      <span className="text-[13px] font-medium text-slate-700 truncate max-w-[280px]">{item.lectureTitle}</span>
-                      <span className="text-[12px] font-bold text-slate-500 shrink-0 ml-3 tabular-nums">{item.count}</span>
-                    </div>
-                    <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-gradient-to-r from-indigo-500 to-indigo-400 rounded-full transition-all duration-500"
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart
+                data={qPerLecture.map((item: { lectureId: number; lectureTitle: string; count: number }) => ({
+                  name: item.lectureTitle.length > 18 ? item.lectureTitle.slice(0, 16) + '…' : item.lectureTitle,
+                  fullName: item.lectureTitle,
+                  Questions: item.count,
+                }))}
+                margin={{ top: 8, right: 8, left: -18, bottom: 0 }}
+                barSize={32}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+                <XAxis
+                  dataKey="name"
+                  tick={{ fontSize: 11, fill: '#94a3b8', fontWeight: 500 }}
+                  axisLine={false}
+                  tickLine={false}
+                />
+                <YAxis
+                  allowDecimals={false}
+                  tick={{ fontSize: 11, fill: '#94a3b8' }}
+                  axisLine={false}
+                  tickLine={false}
+                />
+                <Tooltip
+                  cursor={{ fill: '#f1f5f9', radius: 6 }}
+                  contentStyle={{ borderRadius: 10, border: '1px solid #e2e8f0', fontSize: 12, color: '#334155' }}
+                  formatter={(value: number, _: string, props: { payload: { fullName: string } }) => [value, props.payload.fullName]}
+                  labelFormatter={() => ''}
+                />
+                <Bar dataKey="Questions" radius={[6, 6, 0, 0]}>
+                  {qPerLecture.map((_: unknown, index: number) => (
+                    <Cell
+                      key={index}
+                      fill={index % 2 === 0 ? '#6366f1' : '#818cf8'}
+                    />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
           )}
         </div>
 

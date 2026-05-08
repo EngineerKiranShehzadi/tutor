@@ -24,8 +24,8 @@ export const createApp = async (): Promise<Express> => {
   }));
 
   // ── Parsing & Logging ─────────────────────────────────
-  app.use(express.json({ limit: '10kb' }));
-  app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+  app.use(express.json({ limit: '5mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '5mb' }));
   app.use(cookieParser());
   app.use(morgan(env.NODE_ENV === 'production' ? 'combined' : 'dev'));
   logger.info(`[APP] Morgan HTTP logger active (format=${env.NODE_ENV === 'production' ? 'combined' : 'dev'})`);

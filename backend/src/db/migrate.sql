@@ -9,6 +9,14 @@
 CREATE EXTENSION IF NOT EXISTS vector;
 
 -- ─────────────────────────────────────────────
+-- Google OAuth support
+--   password_hash is NULL for Google-only users
+-- ─────────────────────────────────────────────
+ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id   TEXT UNIQUE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url  TEXT;
+
+-- ─────────────────────────────────────────────
 -- 2. users — add role column if missing
 --    Signup always creates STUDENT.
 --    Admin is inserted directly via SQL (see bottom).
@@ -65,8 +73,12 @@ CREATE TABLE IF NOT EXISTS chat_history (
   answer             TEXT NOT NULL,
   source_chunk_ids   INT[],
   cleared_by_student BOOLEAN DEFAULT FALSE,
+  display_label      TEXT,
+  pinned             BOOLEAN DEFAULT FALSE,
   created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS display_label TEXT;
+ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS pinned BOOLEAN DEFAULT FALSE;
 
 CREATE INDEX IF NOT EXISTS idx_chat_history_student_lecture
   ON chat_history(student_id, lecture_id);

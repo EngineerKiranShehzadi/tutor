@@ -6,13 +6,13 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { ApolloError } from '@apollo/client';
-import { AuthCard }    from '@/components/auth/AuthCard';
+import { AuthCard } from '@/components/auth/AuthCard';
 import { GoogleButton } from '@/components/auth/GoogleButton';
-import { Input }  from '@/components/ui/Input';
+import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
-import { useSignup }           from '@/hooks/useSignup';
-import { useResendSignupOtp }  from '@/hooks/useResendSignupOtp';
-import { useVerifySignupOtp }  from '@/hooks/useVerifySignupOtp';
+import { useSignup } from '@/hooks/useSignup';
+import { useResendSignupOtp } from '@/hooks/useResendSignupOtp';
+import { useVerifySignupOtp } from '@/hooks/useVerifySignupOtp';
 
 type Step = 'form' | 'otp';
 
@@ -40,18 +40,16 @@ const extractMessage = (err: unknown): string => {
 
 export default function SignupPage() {
   const router = useRouter();
-  const [step, setStep]               = useState<Step>('form');
+  const [step, setStep] = useState<Step>('form');
   const [pendingEmail, setPendingEmail] = useState('');
   const [signupMessage, setSignupMessage] = useState('');
   const [serverError, setServerError] = useState('');
 
-  // OTP state
-  const [digits, setDigits]   = useState<string[]>(['', '', '', '', '']);
+  const [digits, setDigits] = useState<string[]>(['', '', '', '', '']);
   const [otpError, setOtpError] = useState('');
   const [resendError, setResendError] = useState('');
   const inputRefs = useRef<(HTMLInputElement | null)[]>([null, null, null, null, null]);
 
-  // Countdown
   const [countdown, setCountdown] = useState(0);
   const [canResend, setCanResend] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -64,7 +62,6 @@ export default function SignupPage() {
     resolver: zodResolver(schema),
   });
 
-  // ── Countdown ──────────────────────────────────────────
   const startCountdown = () => {
     if (intervalRef.current) clearInterval(intervalRef.current);
     let secs = 60;
@@ -83,7 +80,6 @@ export default function SignupPage() {
 
   useEffect(() => () => { if (intervalRef.current) clearInterval(intervalRef.current); }, []);
 
-  // ── OTP digit handlers ─────────────────────────────────
   const handleDigitChange = (i: number, value: string) => {
     if (!/^\d*$/.test(value)) return;
     const next = [...digits];
@@ -96,7 +92,6 @@ export default function SignupPage() {
     if (e.key === 'Backspace' && !digits[i] && i > 0) inputRefs.current[i - 1]?.focus();
   };
 
-  // ── Step 1: Signup form ────────────────────────────────
   const onSubmit = async (data: FormData) => {
     setServerError('');
     try {
@@ -110,7 +105,6 @@ export default function SignupPage() {
     }
   };
 
-  // ── Step 2: Verify OTP ────────────────────────────────
   const handleOtpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setOtpError('');
@@ -140,20 +134,20 @@ export default function SignupPage() {
     }
   };
 
-  // ── Render: OTP step ──────────────────────────────────
+  // OTP step
   if (step === 'otp') {
     return (
       <AuthCard>
         <button
           type="button"
           onClick={() => setStep('form')}
-          className="flex items-center gap-1.5 text-xs text-[var(--muted)] hover:text-[var(--text)] transition-colors mb-5"
+          className="flex items-center gap-1.5 text-[13px] text-slate-500 hover:text-slate-800 transition-colors mb-6"
         >
-          <i className="fas fa-arrow-left" /> Back
+          <i className="fas fa-arrow-left text-[11px]" /> Back
         </button>
-        <h2 className="text-xl font-bold mb-1 text-[var(--text)]">Verify your email</h2>
-        <p className="text-sm text-[var(--muted)] mb-6">
-          {signupMessage} <strong>{pendingEmail}</strong>
+        <h1 className="text-[26px] font-bold text-slate-900 mb-1">Verify your email</h1>
+        <p className="text-[14px] text-slate-500 mb-8">
+          {signupMessage} <strong className="text-slate-700">{pendingEmail}</strong>
         </p>
 
         <form onSubmit={handleOtpSubmit} className="flex flex-col gap-5">
@@ -168,87 +162,145 @@ export default function SignupPage() {
                 value={digit}
                 onChange={e => handleDigitChange(i, e.target.value)}
                 onKeyDown={e => handleDigitKeyDown(i, e)}
-                className="w-11 text-center text-xl font-bold border-[1.5px] rounded-lg outline-none transition-all bg-[var(--surface)] text-[var(--text)] border-[var(--border)] focus:border-[var(--red)]"
-                style={{ height: '52px' }}
+                className="w-12 h-14 text-center text-xl font-bold border-[1.5px] border-slate-200 rounded-xl outline-none transition-all bg-white text-slate-900 focus:border-[#065fd4] focus:ring-2 focus:ring-blue-100"
               />
             ))}
           </div>
 
           {otpError && (
-            <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2.5 text-sm text-red-600 flex items-center gap-2">
-              <i className="fas fa-circle-exclamation" /> {otpError}
+            <div className="bg-red-50 border border-red-200 rounded-lg px-3.5 py-3 text-[13px] text-red-600 flex items-center gap-2">
+              <i className="fas fa-circle-exclamation shrink-0" /> {otpError}
             </div>
           )}
 
-          <div className="text-center text-sm text-[var(--muted)]">
+          <div className="text-center text-[13px] text-slate-500">
             {canResend ? (
-              <button
-                type="button"
-                onClick={handleResend}
-                disabled={resendLoading}
-                className="text-[var(--accent)] font-semibold hover:underline disabled:opacity-50"
-              >
-                {resendLoading ? 'Sending...' : 'Resend code'}
+              <button type="button" onClick={handleResend} disabled={resendLoading}
+                className="text-[#065fd4] font-semibold hover:underline disabled:opacity-50">
+                {resendLoading ? 'Sending…' : 'Resend code'}
               </button>
             ) : (
-              <span>Resend in <strong className="text-[var(--text)]">{countdown}s</strong></span>
+              <span>Resend in <strong className="text-slate-800">{countdown}s</strong></span>
             )}
           </div>
 
           {resendError && (
-            <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2.5 text-sm text-red-600 flex items-center gap-2">
-              <i className="fas fa-circle-exclamation" /> {resendError}
+            <div className="bg-red-50 border border-red-200 rounded-lg px-3.5 py-3 text-[13px] text-red-600 flex items-center gap-2">
+              <i className="fas fa-circle-exclamation shrink-0" /> {resendError}
             </div>
           )}
 
-          <Button type="submit" size="lg" loading={verifyLoading} className="w-full rounded-lg">
-            <i className="fas fa-check" /> Verify & Continue
+          <Button type="submit" size="lg" loading={verifyLoading}
+            className="w-full rounded-lg py-3 text-[14px] font-semibold">
+            <i className="fas fa-check text-[12px]" /> Verify & Continue
           </Button>
         </form>
       </AuthCard>
     );
   }
 
-  // ── Render: Signup form ───────────────────────────────
+  // Signup form
   return (
     <AuthCard>
-      <div className="flex border-b border-[var(--border)] mb-7">
-        <Link href="/login" className="flex-1 py-2.5 text-center text-sm font-semibold text-[var(--muted)] hover:text-[var(--text)] transition-colors">
-          Sign In
-        </Link>
-        <span className="flex-1 py-2.5 text-center text-sm font-semibold text-[var(--red)] border-b-2 border-[var(--red)] mb-[-1px]">
-          Sign Up
-        </span>
+      {/* Mobile logo */}
+      <div className="mb-8 md:hidden">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/logo.png" alt="AskAI Tutor" className="w-full object-contain" />
       </div>
 
+      {/* Heading */}
+      <h1 className="text-[24px] font-bold text-slate-900 mb-1">Create your account</h1>
+      <p className="text-[13px] text-slate-500 mb-5 leading-relaxed">
+        Join thousands of students learning smarter with AI.
+      </p>
+
       <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
-        <Input label="Full Name" icon="fas fa-user" type="text" placeholder="Kiran Shehzadi"
-          error={errors.name?.message} {...register('name')} />
-        <Input label="Email" icon="fas fa-envelope" type="email" placeholder="you@example.com"
-          error={errors.email?.message} {...register('email')} />
-        <Input label="Password" icon="fas fa-lock" type="password" showPasswordToggle placeholder="Min 8 chars, 1 uppercase, 1 number"
-          error={errors.password?.message} {...register('password')} />
-        <Input label="Confirm Password" icon="fas fa-lock" type="password" showPasswordToggle placeholder="Repeat your password"
-          error={errors.confirmPassword?.message} {...register('confirmPassword')} />
+
+        {/* Full Name */}
+        <div className="flex flex-col gap-1.5">
+          <label className="text-[13px] font-semibold text-slate-700">Full Name</label>
+          <Input
+            iconInField="fas fa-user"
+            type="text"
+            placeholder="Sara Ahmed"
+            error={errors.name?.message}
+            className="bg-white border-slate-200 focus:border-[#065fd4] py-3"
+            {...register('name')}
+          />
+        </div>
+
+        {/* Email */}
+        <div className="flex flex-col gap-1.5">
+          <label className="text-[13px] font-semibold text-slate-700">Email</label>
+          <Input
+            iconInField="fas fa-envelope"
+            type="email"
+            placeholder="you@example.com"
+            error={errors.email?.message}
+            className="bg-white border-slate-200 focus:border-[#065fd4] py-3"
+            {...register('email')}
+          />
+        </div>
+
+        {/* Password */}
+        <div className="flex flex-col gap-1.5">
+          <label className="text-[13px] font-semibold text-slate-700">Password</label>
+          <Input
+            iconInField="fas fa-lock"
+            type="password"
+            showPasswordToggle
+            placeholder="Min 8 chars, 1 uppercase, 1 number"
+            error={errors.password?.message}
+            className="bg-white border-slate-200 focus:border-[#065fd4] py-3"
+            {...register('password')}
+          />
+        </div>
+
+        {/* Confirm Password */}
+        <div className="flex flex-col gap-1.5">
+          <label className="text-[13px] font-semibold text-slate-700">Confirm Password</label>
+          <Input
+            iconInField="fas fa-lock"
+            type="password"
+            showPasswordToggle
+            placeholder="Repeat your password"
+            error={errors.confirmPassword?.message}
+            className="bg-white border-slate-200 focus:border-[#065fd4] py-3"
+            {...register('confirmPassword')}
+          />
+        </div>
 
         {serverError && (
-          <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2.5 text-sm text-red-600 flex items-center gap-2">
-            <i className="fas fa-circle-exclamation" /> {serverError}
+          <div className="bg-red-50 border border-red-200 rounded-lg px-3.5 py-3 text-[13px] text-red-600 flex items-center gap-2">
+            <i className="fas fa-circle-exclamation shrink-0" /> {serverError}
           </div>
         )}
 
-        <Button type="submit" size="lg" loading={signupLoading} className="mt-1 w-full rounded-lg">
-          <i className="fas fa-user-plus" /> Create Account
+        <Button
+          type="submit"
+          size="lg"
+          loading={signupLoading}
+          className="mt-1 w-full rounded-lg py-3 text-[14px] font-semibold"
+        >
+          Create Account <i className="fas fa-arrow-right text-[12px] ml-1" />
         </Button>
 
-        <div className="relative flex items-center gap-3 my-1">
-          <div className="flex-1 h-px bg-[var(--border)]" />
-          <span className="text-xs text-[var(--muted2)]">or</span>
-          <div className="flex-1 h-px bg-[var(--border)]" />
+        <div className="relative flex items-center gap-3">
+          <div className="flex-1 h-px bg-slate-200" />
+          <span className="text-[12px] text-slate-400">or</span>
+          <div className="flex-1 h-px bg-slate-200" />
         </div>
 
         <GoogleButton />
       </form>
+
+      {/* Footer */}
+      <p className="text-center text-[13px] text-slate-500 mt-7">
+        Already have an account?{' '}
+        <Link href="/login" className="text-[#065fd4] font-semibold hover:underline">
+          Sign In
+        </Link>
+      </p>
     </AuthCard>
   );
 }

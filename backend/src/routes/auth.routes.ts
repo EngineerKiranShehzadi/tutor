@@ -12,5 +12,8 @@ router.post('/resend-login-otp',  authLimiter, C.resendLoginOtpValidators,   val
 router.post('/refresh-token',                                               C.refreshToken);
 router.post('/logout',            protect,                                  C.logout);
 router.get ('/me',                protect,                                  C.getMe);
+router.patch('/me',               protect,                                  C.updateMe);
+router.get ('/google',                                                      C.googleRedirect);
+router.get ('/google/callback',                                             C.googleCallback);
 
 export default router;

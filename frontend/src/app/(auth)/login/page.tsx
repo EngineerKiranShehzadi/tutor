@@ -29,7 +29,6 @@ export default function LoginPage() {
   const [mode, setMode] = useState<Mode>('login');
   const [serverError, setServerError] = useState('');
 
-  // Verify state
   const [verifyEmail, setVerifyEmail] = useState('');
   const [verifyExpires, setVerifyExpires] = useState(0);
   const [digits, setDigits] = useState<string[]>(['', '', '', '', '']);
@@ -46,7 +45,6 @@ export default function LoginPage() {
     resolver: zodResolver(schema),
   });
 
-  // ── Countdown ──────────────────────────────────────────
   const startCountdown = (seconds: number) => {
     if (intervalRef.current) clearInterval(intervalRef.current);
     let secs = seconds;
@@ -65,7 +63,6 @@ export default function LoginPage() {
 
   useEffect(() => () => { if (intervalRef.current) clearInterval(intervalRef.current); }, []);
 
-  // ── OTP digit handlers ─────────────────────────────────
   const handleDigitChange = (i: number, value: string) => {
     if (!/^\d*$/.test(value)) return;
     const next = [...digits];
@@ -75,33 +72,24 @@ export default function LoginPage() {
 
   const handleDigitKeyDown = (i: number, e: React.KeyboardEvent<HTMLInputElement>) => {
     const el = e.target as HTMLInputElement;
-    // Auto-focus next on input
     if (digits[i] && e.key !== 'Backspace' && i < 4) {
-      const nextInput = (el.parentElement?.nextElementSibling as HTMLInputElement) ||
-                        (el.parentElement?.parentElement?.children[i + 1]?.querySelector('input') as HTMLInputElement);
+      const nextInput = el.parentElement?.parentElement?.children[i + 1]?.querySelector('input') as HTMLInputElement;
       nextInput?.focus();
     }
-    // Go back on backspace if empty
     if (e.key === 'Backspace' && !digits[i] && i > 0) {
-      const prevInput = (el.parentElement?.previousElementSibling as HTMLInputElement) ||
-                        (el.parentElement?.parentElement?.children[i - 1]?.querySelector('input') as HTMLInputElement);
+      const prevInput = el.parentElement?.parentElement?.children[i - 1]?.querySelector('input') as HTMLInputElement;
       prevInput?.focus();
     }
   };
 
-  // ── Step 1: Login form ─────────────────────────────────
   const onSubmit = async (data: FormData) => {
     setServerError('');
     try {
       const result = await login(data.email, data.password);
-
       if (result.status === 'AUTHENTICATED') {
-        // Success: store token and redirect based on role
         localStorage.setItem('accessToken', result.accessToken);
-        console.log(`[AUTH] ✅ Login: ${result.user.email} (${result.user.role})`);
         router.push(result.user.role === 'ADMIN' ? '/admin/dashboard' : '/courses');
       } else if (result.status === 'EMAIL_VERIFICATION_REQUIRED') {
-        // Email not verified: switch to verify mode
         setVerifyEmail(result.email);
         setVerifyExpires(result.verificationExpiresInSeconds);
         startCountdown(result.verificationExpiresInSeconds);
@@ -116,24 +104,18 @@ export default function LoginPage() {
     }
   };
 
-  // ── Step 2: Verify OTP ─────────────────────────────────
   const handleOtpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setOtpError('');
     const code = digits.join('');
-    if (code.length !== 5) {
-      setOtpError('Enter the complete 5-digit code');
-      return;
-    }
+    if (code.length !== 5) { setOtpError('Enter the complete 5-digit code'); return; }
     try {
       const result = await verifyOtp(verifyEmail, code);
       localStorage.setItem('accessToken', result.accessToken);
-      console.log(`[AUTH] ✅ OTP verified: ${result.user.email} (${result.user.role})`);
       router.push(result.user.role === 'ADMIN' ? '/admin/dashboard' : '/courses');
     } catch (err: unknown) {
       const ae = err as any;
-      const message = ae?.response?.data?.message || ae?.message || 'Verification failed. Please try again.';
-      setOtpError(message);
+      setOtpError(ae?.response?.data?.message || ae?.message || 'Verification failed. Please try again.');
       setDigits(['', '', '', '', '']);
     }
   };
@@ -150,23 +132,18 @@ export default function LoginPage() {
     }
   };
 
-  // ── Render: Forgot password mode ──────────────────────
-  if (mode === 'forgot') {
-    return <ForgotPasswordFlow onBack={() => setMode('login')} />;
-  }
+  if (mode === 'forgot') return <ForgotPasswordFlow onBack={() => setMode('login')} />;
 
-  // ── Render: Verify mode ────────────────────────────────
   if (mode === 'verify') {
     return (
       <AuthCard>
         <button
           type="button"
           onClick={() => { setMode('login'); setDigits(['', '', '', '', '']); }}
-          className="flex items-center gap-1.5 text-xs text-[var(--muted)] hover:text-[var(--text)] transition-colors mb-5"
+          className="flex items-center gap-1.5 text-[13px] text-slate-500 hover:text-slate-800 transition-colors mb-6"
         >
-          <i className="fas fa-arrow-left" /> Back
+          <i className="fas fa-arrow-left text-[11px]" /> Back to Sign In
         </button>
-
         <OtpVerificationStep
           email={verifyEmail}
           otp={digits}
@@ -180,59 +157,95 @@ export default function LoginPage() {
           onResend={handleResend}
           isVerifying={verifyLoading}
           isResending={resendLoading}
-          message={`A 5-digit code has been sent to `}
+          message="A 5-digit code has been sent to "
         />
       </AuthCard>
     );
   }
 
-  // ── Render: Login form ─────────────────────────────────
   return (
     <AuthCard>
-      {/* Tabs */}
-      <div className="flex border-b border-[var(--border)] mb-7">
-        <span className="flex-1 py-2.5 text-center text-sm font-semibold text-[var(--red)] border-b-2 border-[var(--red)] mb-[-1px]">
-          Sign In
-        </span>
-        <Link href="/signup" className="flex-1 py-2.5 text-center text-sm font-semibold text-[var(--muted)] hover:text-[var(--text)] transition-colors">
-          Sign Up
-        </Link>
+      {/* Mobile logo (hidden on md — left panel covers it) */}
+      <div className="mb-8 md:hidden">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/logo.png" alt="AskAI Tutor" className="w-full object-contain" />
       </div>
 
-      <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
-        <Input label="Email" icon="fas fa-envelope" type="email" placeholder="you@example.com"
-          error={errors.email?.message} {...register('email')} />
-        <Input label="Password" icon="fas fa-lock" type="password" showPasswordToggle placeholder="••••••••"
-          error={errors.password?.message} {...register('password')} />
+      {/* Heading */}
+      <h1 className="text-[24px] font-bold text-slate-900 mb-1">Welcome back</h1>
+      <p className="text-[13px] text-slate-500 mb-6 leading-relaxed">
+        Please enter your credentials to access your dashboard.
+      </p>
 
-        <div className="text-right -mt-1">
-          <button
-            type="button"
-            onClick={() => setMode('forgot')}
-            className="text-xs text-[var(--accent)] hover:underline"
-          >
-            Forgot password?
-          </button>
+      <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-5">
+
+        {/* Email */}
+        <div className="flex flex-col gap-1.5">
+          <label className="text-[13px] font-semibold text-slate-700">Email</label>
+          <Input
+            iconInField="fas fa-envelope"
+            type="email"
+            placeholder="you@example.com"
+            error={errors.email?.message}
+            className="bg-white border-slate-200 focus:border-[#065fd4] py-3"
+            {...register('email')}
+          />
+        </div>
+
+        {/* Password */}
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center justify-between">
+            <label className="text-[13px] font-semibold text-slate-700">Password</label>
+            <button
+              type="button"
+              onClick={() => setMode('forgot')}
+              className="text-[12px] text-[#065fd4] hover:underline font-medium"
+            >
+              Forgot password?
+            </button>
+          </div>
+          <Input
+            iconInField="fas fa-lock"
+            type="password"
+            showPasswordToggle
+            placeholder="••••••••"
+            error={errors.password?.message}
+            className="bg-white border-slate-200 focus:border-[#065fd4] py-3"
+            {...register('password')}
+          />
         </div>
 
         {serverError && (
-          <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2.5 text-sm text-red-600 flex items-center gap-2">
-            <i className="fas fa-circle-exclamation" /> {serverError}
+          <div className="bg-red-50 border border-red-200 rounded-lg px-3.5 py-3 text-[13px] text-red-600 flex items-center gap-2">
+            <i className="fas fa-circle-exclamation shrink-0" /> {serverError}
           </div>
         )}
 
-        <Button type="submit" size="lg" loading={isSubmitting} className="mt-1 w-full rounded-lg">
-          <i className="fas fa-sign-in-alt" /> Sign In
+        <Button
+          type="submit"
+          size="lg"
+          loading={isSubmitting}
+          className="mt-1 w-full rounded-lg py-3 text-[14px] font-semibold"
+        >
+          Sign In
         </Button>
 
-        <div className="relative flex items-center gap-3 my-1">
-          <div className="flex-1 h-px bg-[var(--border)]" />
-          <span className="text-xs text-[var(--muted2)]">or</span>
-          <div className="flex-1 h-px bg-[var(--border)]" />
+        <div className="relative flex items-center gap-3">
+          <div className="flex-1 h-px bg-slate-200" />
+          <span className="text-[12px] text-slate-400">or</span>
+          <div className="flex-1 h-px bg-slate-200" />
         </div>
 
         <GoogleButton />
       </form>
+
+      {/* Footer */}
+      <p className="text-center text-[13px] text-slate-500 mt-7">
+        New to AskAITutor?{' '}
+        <Link href="/signup" className="text-[#065fd4] font-semibold hover:underline">
+          Sign Up
+        </Link>
+      </p>
     </AuthCard>
   );
 }

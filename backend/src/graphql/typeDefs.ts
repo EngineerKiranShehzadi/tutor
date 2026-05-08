@@ -66,6 +66,12 @@ export const typeDefs = `#graphql
     sources: [ChunkSource!]!
   }
 
+  type ChatHistoryPage {
+    entries: [ChatHistoryEntry!]!
+    total:   Int!
+    hasMore: Boolean!
+  }
+
   type ChatHistoryEntry {
     id:        Int!
     question:  String!
@@ -104,22 +110,105 @@ export const typeDefs = `#graphql
   }
 
   type StudentEntry {
-    id:        String!
-    name:      String!
-    email:     String!
-    createdAt: String!
+    id:            String!
+    name:          String!
+    email:         String!
+    createdAt:     String!
+    questionCount: Int!
+    status:        String!
+  }
+
+  # ── User Management ───────────────────────────────────
+  type UserManagementEntry {
+    id:         String!
+    name:       String!
+    email:      String!
+    role:       String!
+    isVerified: Boolean!
+    createdAt:  String!
+  }
+
+  # ── Q&A Chunks (dataset preview) ──────────────────────
+  type QnaChunk {
+    id:        Int!
+    topic:     String
+    question:  String!
+    answer:    String!
+    startTime: String
+    endTime:   String
+    keywords:  String
+  }
+
+  # ── AI Agent Detail ────────────────────────────────────
+  type LectureAgentDetail {
+    id:         Int!
+    title:      String!
+    status:     String!
+    chunkCount: Int!
+    createdAt:  String!
+    updatedAt:  String!
+  }
+
+  # ── Student Journey ───────────────────────────────────
+  type JourneyQuestion {
+    id:           Int!
+    question:     String!
+    lectureTitle: String!
+    lectureId:    Int!
+    createdAt:    String!
+  }
+
+  type LectureEngagement {
+    lectureId:     Int!
+    lectureTitle:  String!
+    questionCount: Int!
+    firstAsked:    String!
+    lastAsked:     String!
+  }
+
+  type StudentJourney {
+    studentId:       String!
+    studentName:     String!
+    studentEmail:    String!
+    status:          String!
+    questionCount:   Int!
+    lecturesEngaged: Int!
+    joinedAt:        String!
+    firstActivity:   String
+    lastActivity:    String
+    questions:       [JourneyQuestion!]!
+    byLecture:       [LectureEngagement!]!
+  }
+
+  # ── Content Gap ────────────────────────────────────────
+  type LectureGapAnalysis {
+    lectureId:      Int!
+    lectureTitle:   String!
+    questionsAsked: Int!
+    chunkCount:     Int!
+    coverageScore:  Float!
+    gapTopics:      [String!]!
+    coveredTopics:  [String!]!
+    status:         String!
   }
 
   # ── Queries ───────────────────────────────────────────
   type Query {
-    lectures:              [Lecture!]!
-    lecture(id: String!):  Lecture!
-    chatHistory(lectureId: Int!): [ChatHistoryEntry!]!
-    analyticsSummary:      AnalyticsSummary!
-    questionsPerLecture:   [QuestionPerLecture!]!
-    recentQuestions:       [RecentQuestion!]!
-    lectureStatusList:     [LectureStatusEntry!]!
-    registeredStudents:    [StudentEntry!]!
+    lectures:                        [Lecture!]!
+    lecture(id: String!):            Lecture!
+    chatHistory(lectureId: Int!):                                            [ChatHistoryEntry!]!
+    paginatedChatHistory(lectureId: Int!, limit: Int!, offset: Int!):        ChatHistoryPage!
+    searchChatHistory(lectureId: Int!, query: String!):                      [ChatHistoryEntry!]!
+    analyticsSummary:                AnalyticsSummary!
+    questionsPerLecture:             [QuestionPerLecture!]!
+    recentQuestions(limit: Int):     [RecentQuestion!]!
+    lectureStatusList:               [LectureStatusEntry!]!
+    registeredStudents:              [StudentEntry!]!
+    allUsers:                        [UserManagementEntry!]!
+    lectureChunks(lectureId: Int!):  [QnaChunk!]!
+    lectureAgentDetails:             [LectureAgentDetail!]!
+    studentJourney(id: String!):     StudentJourney!
+    contentGaps:                     [LectureGapAnalysis!]!
   }
 
   # ── Mutations ─────────────────────────────────────────
@@ -136,5 +225,10 @@ export const typeDefs = `#graphql
     deleteLecture(id: String!):                                   Boolean!
     askLectureAgent(input: AskLectureAgentInput!):                ChatAnswerResponse!
     clearChat(lectureId: Int!):                                   SuccessResponse!
+    deleteChatEntry(id: Int!):                                    Boolean!
+    renameChatEntry(id: Int!, label: String!):                    Boolean!
+    deleteUser(id: String!):                                      Boolean!
+    updateUserRole(id: String!, role: String!):                   UserManagementEntry!
+    updateAdminProfile(name: String, currentPassword: String, newPassword: String): AuthUserPayload!
   }
 `;

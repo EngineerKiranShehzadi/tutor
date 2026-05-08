@@ -6,7 +6,8 @@ export interface User {
   id: string;           // UUID
   name: string;
   email: string;
-  password_hash: string;
+  password_hash: string | null;
+  google_id: string | null;
   avatar_url: string | null;
   is_verified: boolean;
   role: UserRole;

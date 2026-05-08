@@ -52,6 +52,11 @@ export const loginUser = async (email: string, password: string): Promise<LoginR
     throw new AppError('Invalid email or password', 401);
   }
 
+  if (!user.password_hash) {
+    logger.warn(`[AUTH] loginUser: Google-only account attempted password login — "${email}"`);
+    throw new AppError('This account uses Google sign-in. Please log in with Google.', 401);
+  }
+
   const valid = await comparePassword(password, user.password_hash);
   if (!valid) {
     logger.warn(`[AUTH] loginUser: wrong password for "${email}"`);
@@ -488,6 +493,46 @@ export const verifySignupOtp = async (
   return { user: safeUser, accessToken, refreshToken };
 };
 
+// ── GOOGLE OAUTH ──────────────────────────────────────
+export const googleOAuthUser = async (profile: {
+  googleId: string;
+  name: string;
+  email: string;
+  avatarUrl?: string;
+}) => {
+  const { googleId, name, email, avatarUrl } = profile;
+  logger.info(`[AUTH] googleOAuthUser: email="${email}" googleId="${googleId}"`);
+
+  const { rows } = await query<User>(
+    'SELECT * FROM users WHERE google_id = $1 OR email = $2 LIMIT 1',
+    [googleId, email.toLowerCase()]
+  );
+  let user = rows[0];
+
+  if (user) {
+    if (!user.google_id) {
+      await query('UPDATE users SET google_id = $1, is_verified = TRUE WHERE id = $2', [googleId, user.id]);
+    }
+    logger.info(`[AUTH] googleOAuthUser: existing user "${email}" (id=${user.id})`);
+  } else {
+    const { rows: newRows } = await query<User>(
+      `INSERT INTO users (name, email, google_id, avatar_url, is_verified)
+       VALUES ($1, $2, $3, $4, TRUE)
+       RETURNING *`,
+      [name.trim(), email.toLowerCase(), googleId, avatarUrl ?? null]
+    );
+    user = newRows[0];
+    logger.info(`[AUTH] googleOAuthUser: new user created "${email}" (id=${user.id})`);
+  }
+
+  const accessToken  = generateAccessToken(user.id, user.role);
+  const refreshToken = generateRefreshToken(user.id, user.role);
+  await storeRefreshToken(user.id, refreshToken);
+
+  const { password_hash: _, ...safeUser } = user;
+  return { user: safeUser, accessToken, refreshToken };
+};
+
 // ── HELPER ────────────────────────────────────────────
 const storeRefreshToken = async (userId: string, token: string) => {
   const tokenHash = hashToken(token);
@@ -496,4 +541,39 @@ const storeRefreshToken = async (userId: string, token: string) => {
     'INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)',
     [userId, tokenHash, expiresAt]
   );
+};
+
+// ── UPDATE PROFILE ────────────────────────────────────
+export const updateProfile = async (
+  userId: string,
+  params: { name?: string; currentPassword?: string; newPassword?: string; avatarUrl?: string }
+): Promise<Pick<User, 'id' | 'name' | 'email' | 'role' | 'avatar_url'>> => {
+  const { name, currentPassword, newPassword, avatarUrl } = params;
+
+  const { rows } = await query<User>('SELECT * FROM users WHERE id = $1', [userId]);
+  const user = rows[0];
+  if (!user) throw new AppError('User not found', 404);
+
+  if (newPassword) {
+    if (!currentPassword) throw new AppError('Current password is required to set a new one.', 400);
+    if (!user.password_hash) throw new AppError('This account uses Google sign-in and has no password to change.', 400);
+    const valid = await comparePassword(currentPassword, user.password_hash);
+    if (!valid) throw new AppError('Current password is incorrect.', 401);
+    if (newPassword.length < 8) throw new AppError('New password must be at least 8 characters.', 400);
+  }
+
+  const newHash = newPassword ? await hashPassword(newPassword) : null;
+
+  const { rows: updated } = await query<Pick<User, 'id' | 'name' | 'email' | 'role' | 'avatar_url'>>(
+    `UPDATE users
+     SET name        = COALESCE($1, name),
+         password_hash = CASE WHEN $2::text IS NOT NULL THEN $2 ELSE password_hash END,
+         avatar_url  = COALESCE($3, avatar_url)
+     WHERE id = $4
+     RETURNING id, name, email, role, avatar_url`,
+    [name?.trim() || null, newHash, avatarUrl ?? null, userId]
+  );
+
+  logger.info(`[AUTH] ✅ Profile updated for user ${userId}`);
+  return updated[0];
 };

@@ -21,8 +21,8 @@ export const protect = async (
 
   try {
     const payload = verifyAccessToken(token);
-    const { rows } = await query<Pick<import('../types').User, 'id' | 'name' | 'email' | 'role'>>(
-      'SELECT id, name, email, role FROM users WHERE id = $1',
+    const { rows } = await query<Pick<import('../types').User, 'id' | 'name' | 'email' | 'role' | 'avatar_url'>>(
+      'SELECT id, name, email, role, avatar_url FROM users WHERE id = $1',
       [payload.userId]
     );
 

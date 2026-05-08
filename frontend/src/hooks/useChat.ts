@@ -22,10 +22,19 @@ const FALLBACK_REPLY = "I'm having trouble connecting. Please try again in a mom
 
 export const useChat = (lectureTitle: string, lectureId: number, agentName: string) => {
   const [localMessages, setLocalMessages] = useState<ChatMessage[]>([]);
-  const [isTyping,  setTyping]  = useState(false);
-  const [isOpen,    setOpen]    = useState(false);
-  const [mode,      setMode]    = useState<'text' | 'voice'>('text');
-  const prevCountRef = useRef(0);
+  const [isTyping,      setTyping]      = useState(false);
+  const [isOpen,        setOpen]        = useState(false);
+  const [mode,          setMode]        = useState<'text' | 'voice'>('text');
+  const [isNewSession,  setIsNewSession] = useState(false);
+  const [autoSpeak,     setAutoSpeak]   = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem('askaitutor_autospeak') === 'true';
+  });
+  // Refs so sendMessage can read current values without going into its deps array
+  const autoSpeakRef   = useRef(autoSpeak);
+  const voiceModeRef   = useRef<'text' | 'voice'>(mode);
+  const voiceSpeakRef  = useRef<(text: string) => void>(() => {});
+  const streamTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const { data: historyData, loading: historyLoading, refetch: refetchHistory } = useQuery(
     CHAT_HISTORY_QUERY,
@@ -58,24 +67,31 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
         type:      'text',
         content:   entry.answer,
         sources:   entry.sources,
-        citation:  entry.sources?.[0]?.topic
-          ? `${entry.sources[0].topic}${entry.sources[0].startTime ? ' · ' + entry.sources[0].startTime : ''}`
+        citation:  entry.sources?.[0]?.startTime
+          ? `Lecture content · ${entry.sources[0].startTime}`
           : 'Lecture content',
         timestamp: new Date(entry.createdAt),
       },
     ]
   );
 
-  const messages: ChatMessage[] = [welcomeMsg, ...dbMessages, ...localMessages];
+  // In new-session mode, hide DB history from view but keep it available for the AI (via backend history loading)
+  const messages: ChatMessage[] = [welcomeMsg, ...(isNewSession ? [] : dbMessages), ...localMessages];
 
   const sendMessage = useCallback(
     async (content: string) => {
       if (!content.trim()) return;
 
+      // Cancel any in-progress typewriter animation from a previous message
+      if (streamTimerRef.current) {
+        clearInterval(streamTimerRef.current);
+        streamTimerRef.current = null;
+      }
+
       const userMsg: ChatMessage = {
         id: uuidv4(), role: 'user', type: 'text', content, timestamp: new Date(),
       };
-      setLocalMessages((prev) => [...prev, userMsg]);
+      setLocalMessages(prev => [...prev, userMsg]);
       setTyping(true);
       console.log(`[CHAT] 📤 Sending to lecture #${lectureId}: "${content.slice(0, 60)}..."`);
 
@@ -84,29 +100,54 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
           variables: { input: { lectureId, question: content } },
         });
 
-        const response = data?.askLectureAgent;
+        const response  = data?.askLectureAgent;
+        const rawAnswer = response?.answer ?? FALLBACK_REPLY;
         const sources: ChunkSource[] = response?.sources ?? [];
-        const citation = sources.length > 0
-          ? `${sources[0].topic ?? 'Lecture content'}${sources[0].startTime ? ' · ' + sources[0].startTime : ''}`
+        const citation = sources.length > 0 && sources[0].startTime
+          ? `Lecture content · ${sources[0].startTime}`
           : 'Lecture content';
 
-        const aiMsg: ChatMessage = {
-          id:        uuidv4(),
-          role:      'ai',
-          type:      'text',
-          content:   response?.answer ?? FALLBACK_REPLY,
-          citation,
-          sources,
-          timestamp: new Date(),
-        };
-        setLocalMessages((prev) => [...prev, aiMsg]);
-        console.log(`[CHAT] ✅ Answer received (${response?.answer?.length ?? 0} chars)`);
+        // Strip HTML to get plain words for the animation; full HTML renders when done
+        const words = rawAnswer.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
+        const msgId = uuidv4();
+
+        // Add placeholder — streaming begins, typing indicator stops simultaneously
+        setLocalMessages(prev => [...prev, {
+          id: msgId, role: 'ai', type: 'text',
+          content: '', citation, sources, timestamp: new Date(),
+          isStreaming: true,
+        }]);
+        setTyping(false);
+
+        // Auto-speak starts at the same time as text streaming (teacher speaks while text appears)
+        if (autoSpeakRef.current || voiceModeRef.current === 'voice') {
+          voiceSpeakRef.current(rawAnswer);
+        }
+
+        // Reveal one word every 35 ms
+        let idx = 0;
+        streamTimerRef.current = setInterval(() => {
+          idx++;
+          const partial = words.slice(0, idx).join(' ');
+          setLocalMessages(prev =>
+            prev.map(m => m.id === msgId ? { ...m, content: partial } : m)
+          );
+          if (idx >= words.length) {
+            clearInterval(streamTimerRef.current!);
+            streamTimerRef.current = null;
+            // Swap plain text for the full formatted HTML and mark stream done
+            setLocalMessages(prev =>
+              prev.map(m => m.id === msgId ? { ...m, content: rawAnswer, isStreaming: false } : m)
+            );
+            console.log(`[CHAT] ✅ Stream complete (${rawAnswer.length} chars)`);
+          }
+        }, 35);
+
       } catch (err) {
         console.error('[CHAT] ❌ Error:', err);
-        setLocalMessages((prev) => [...prev, {
+        setLocalMessages(prev => [...prev, {
           id: uuidv4(), role: 'ai', type: 'text', content: FALLBACK_REPLY, timestamp: new Date(),
         }]);
-      } finally {
         setTyping(false);
       }
     },
@@ -117,6 +158,7 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
     try {
       await clearChatMutation({ variables: { lectureId } });
       setLocalMessages([]);
+      setIsNewSession(false);
       await refetchHistory();
       console.log(`[CHAT] ✅ Chat cleared for lecture #${lectureId}`);
     } catch (err) {
@@ -124,15 +166,35 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
     }
   }, [lectureId, clearChatMutation, refetchHistory]);
 
+  // Starts a fresh visual session without deleting DB history.
+  // The AI backend still has full context from prior turns.
+  const startNewSession = useCallback(() => {
+    setLocalMessages([]);
+    setIsNewSession(true);
+    console.log(`[CHAT] 🆕 New session started for lecture #${lectureId}`);
+  }, [lectureId]);
+
   const voice = useVoice({ onTranscript: sendMessage, enabled: mode === 'voice' });
 
+  // Keep refs in sync with current state/voice so sendMessage can read them
+  // without capturing them as useCallback deps (which would re-create it too often)
+  autoSpeakRef.current  = autoSpeak;
+  voiceModeRef.current  = mode;
+  voiceSpeakRef.current = voice.speak;
+
+  // Cancel stream on unmount (e.g., navigating away mid-stream)
   useEffect(() => {
-    if (mode !== 'voice') return;
-    if (messages.length <= prevCountRef.current) { prevCountRef.current = messages.length; return; }
-    prevCountRef.current = messages.length;
-    const last = messages[messages.length - 1];
-    if (last?.role === 'ai') voice.speak(last.content);
-  }, [messages]); // eslint-disable-line react-hooks/exhaustive-deps
+    return () => { if (streamTimerRef.current) clearInterval(streamTimerRef.current); };
+  }, []);
+
+  const toggleAutoSpeak = useCallback(() => {
+    setAutoSpeak(prev => {
+      const next = !prev;
+      localStorage.setItem('askaitutor_autospeak', String(next));
+      if (!next) voice.stopSpeaking();
+      return next;
+    });
+  }, [voice.stopSpeaking]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleChat = useCallback(() => setOpen((o) => !o), []);
 
@@ -141,12 +203,17 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
     isTyping,
     isOpen,
     isLoadingHistory: historyLoading,
+    isNewSession,
+    historyEntries: (historyData?.chatHistory ?? []) as HistoryEntry[],
     mode,
     setMode,
     sendMessage,
     clearChat,
+    startNewSession,
     toggleChat,
     agentName,
+    autoSpeak,
+    toggleAutoSpeak,
     isRecording:       voice.isListening,
     isSpeaking:        voice.isSpeaking,
     interimText:       voice.interimText,

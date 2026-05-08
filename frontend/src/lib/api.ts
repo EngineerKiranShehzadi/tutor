@@ -16,20 +16,47 @@ api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 });
 
 // Auto-refresh access token on 401
+let refreshPromise: Promise<string | null> | null = null;
+
 api.interceptors.response.use(
   (res) => res,
   async (error: AxiosError) => {
     const original = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
+
+    // These endpoints return 401 as a legitimate business error (wrong password,
+    // Google-only account, bad OTP, etc.) — never treat them as expired sessions.
+    const AUTH_ENDPOINTS = ['/auth/login', '/auth/register', '/auth/refresh-token',
+                            '/auth/verify-email', '/auth/forgot-password', '/auth/reset-password'];
+    if (AUTH_ENDPOINTS.some(p => original.url?.includes(p))) {
+      if (original.url?.includes('/auth/refresh-token')) {
+        localStorage.removeItem('accessToken');
+        if (typeof window !== 'undefined') window.location.href = '/login';
+      }
+      return Promise.reject(error);
+    }
+
     if (error.response?.status === 401 && !original._retry) {
       original._retry = true;
       try {
-        const { data } = await api.post('/auth/refresh-token');
-        localStorage.setItem('accessToken', data.data.accessToken);
-        original.headers.Authorization = `Bearer ${data.data.accessToken}`;
+        // Deduplicate: reuse an in-flight refresh rather than firing N parallel ones
+        if (!refreshPromise) {
+          refreshPromise = api.post('/auth/refresh-token')
+            .then(({ data }) => data.data.accessToken as string)
+            .catch(() => null)
+            .finally(() => { refreshPromise = null; });
+        }
+        const newToken = await refreshPromise;
+        if (!newToken) {
+          localStorage.removeItem('accessToken');
+          if (typeof window !== 'undefined') window.location.href = '/login';
+          return Promise.reject(error);
+        }
+        localStorage.setItem('accessToken', newToken);
+        original.headers.Authorization = `Bearer ${newToken}`;
         return api(original);
       } catch {
         localStorage.removeItem('accessToken');
-        window.location.href = '/login';
+        if (typeof window !== 'undefined') window.location.href = '/login';
       }
     }
     return Promise.reject(error);
@@ -50,6 +77,8 @@ export const authApi = {
   resetPassword:    (token: string, password: string) =>
                       api.post(`/auth/reset-password/${token}`, { password }),
   getMe:            () => api.get('/auth/me'),
+  updateProfile:    (data: { name?: string; currentPassword?: string; newPassword?: string; avatarUrl?: string }) =>
+                      api.patch('/auth/me', data),
 };
 
 export const datasetApi = {

@@ -8,28 +8,28 @@ import { useAuth } from '@/hooks/useAuth';
 /* ─────────────────────────────────── DATA */
 
 const SLIDES = [
-  { tag: 'AI-Powered Islamic Learning', title: 'Your Personal Tutor\nFor Every Lecture', body: 'Ask any question and receive answers drawn exclusively from your course content — precise, sourced, and never hallucinated.', accent: '#065fd4', tagColor: '#60a5fa', icon: 'fas fa-robot' },
-  { tag: 'Voice-Powered Interaction',   title: 'Speak Your Question,\nHear the Answer',   body: 'Switch to voice mode for a fully hands-free experience. The AI listens, thinks, and speaks back to you in real time.',             accent: '#7c3aed', tagColor: '#a78bfa', icon: 'fas fa-microphone' },
-  { tag: 'Knowledge Integrity',         title: 'RAG-Scoped AI.\nZero Hallucinations.',     body: 'Every agent answers only what the instructor taught. Powered by Gemini embeddings + pgvector — no internet, no guessing.',          accent: '#059669', tagColor: '#34d399', icon: 'fas fa-shield-halved' },
+  { tag: 'AI-Powered Prompt Engineering', title: 'Your Personal Tutor\nFor Every Lecture', body: 'Ask any question and receive answers drawn exclusively from your course content — precise, sourced, and never hallucinated.', accent: '#065fd4', tagColor: '#60a5fa', icon: 'fas fa-robot' },
+  { tag: 'Voice-Powered Interaction',     title: 'Speak Your Question,\nHear the Answer',   body: 'Switch to voice mode for a fully hands-free experience. The AI listens, thinks, and speaks back to you in real time.',           accent: '#7c3aed', tagColor: '#a78bfa', icon: 'fas fa-microphone' },
+  { tag: 'Knowledge Integrity',           title: 'RAG-Scoped AI.\nZero Hallucinations.',     body: 'Every agent answers only what the instructor taught. Powered by vector search + RAG — no internet, no guessing.',                 accent: '#059669', tagColor: '#34d399', icon: 'fas fa-shield-halved' },
 ];
 
 const CHAT_DEMO = [
-  { role: 'user', text: 'What is the definition of Fiqh?' },
-  { role: 'ai',   text: 'Fiqh is Islamic jurisprudence — the human understanding of Sharia derived from the Quran, Sunnah, Ijma (scholarly consensus) and Qiyas (analogical reasoning).', sources: ['Topic: Introduction to Islamic Law', 'Lecture 1 · 02:14'] },
-  { role: 'user', text: 'What are the four major schools of Fiqh?' },
-  { role: 'ai',   text: "The four Sunni madhabs are: Hanafi, Maliki, Shafi'i, and Hanbali — each founded by a great scholar and followed by millions globally.", sources: ['Topic: Schools of Jurisprudence', 'Lecture 1 · 08:40'] },
+  { role: 'user', text: 'What is prompt engineering?' },
+  { role: 'ai',   text: 'Prompt engineering is the practice of designing and optimizing input prompts to guide AI language models toward producing accurate, relevant, and useful responses — without changing the model itself.', sources: ['Topic: Introduction to Prompt Engineering', 'Lecture 1 · 02:45'] },
+  { role: 'user', text: 'What are the key elements of an effective prompt?' },
+  { role: 'ai',   text: 'An effective prompt includes four elements: Clarity (be specific), Context (provide background), Constraints (define scope/format), and Examples (few-shot samples to guide the model).', sources: ['Topic: Elements of Effective Prompts', 'Lecture 1 · 09:10'] },
 ];
 
 const PLAYLIST = [
-  { title: 'Introduction to Islamic Jurisprudence', ready: true,  active: true  },
-  { title: 'Sources of Fiqh — Quran & Sunnah',      ready: true,  active: false },
-  { title: 'Ijma and Qiyas Explained',               ready: true,  active: false },
-  { title: 'The Four Major Madhabs',                  ready: false, active: false },
+  { title: 'Introduction to Prompt Engineering',                          ready: true,  active: true  },
+  { title: 'Fundamentals of Crafting Simple, Fast & Accurate Prompts',   ready: true,  active: false },
+  { title: 'Advanced Prompting Techniques',                               ready: false, active: false },
+  { title: 'Real-World Prompt Engineering Applications',                  ready: false, active: false },
 ];
 
 const STATS = [
   { value: 100, suffix: '%', label: 'Lecture-Sourced Answers', icon: 'fas fa-bullseye', color: '#065fd4' },
-  { value: 3072, suffix: 'd', label: 'Gemini Embedding Dims',  icon: 'fas fa-brain',    color: '#7c3aed' },
+  { value: 3072, suffix: 'd', label: 'Vector Embedding Dims',  icon: 'fas fa-brain',    color: '#7c3aed' },
   { value: 0,   suffix: 'ms', label: 'Hallucination Rate',     icon: 'fas fa-ban',      color: '#059669' },
   { value: 2,   suffix: ' modes', label: 'Text + Voice Input', icon: 'fas fa-microphone', color: '#d97706' },
 ];
@@ -171,27 +171,25 @@ export default function Home() {
 
       {/* ══════════════════════════════════════════ NAVBAR */}
       <nav className="fixed top-0 left-0 right-0 z-50 border-b border-white/10" style={{ background: 'rgba(6,13,31,0.96)', backdropFilter: 'blur(12px)' }}>
-        <div className="max-w-7xl mx-auto px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #065fd4, #1a7fe8)' }}>
-              <i className="fas fa-robot text-white text-[14px]" />
-            </div>
-            <span className="text-[17px] font-extrabold text-white">AskAI<span style={{ color: '#60a5fa' }}>Tutor</span></span>
+        <div className="max-w-7xl mx-auto px-8 h-[140px] flex items-center justify-between">
+          <div className="flex items-center">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/logo.png" alt="AskAI Tutor" className="h-32 w-auto object-contain" />
           </div>
-          <div className="hidden md:flex items-center gap-7 text-[13px] font-medium" style={{ color: '#94a3b8' }}>
+          <div className="hidden md:flex items-center gap-7 text-[19px] font-semibold" style={{ color: '#e2e8f0' }}>
             {['#features', '#demo', '#how', '#faq'].map((h) => (
               <a key={h} href={h} className="hover:text-white transition-colors capitalize">{h.slice(1)}</a>
             ))}
           </div>
           <div className="flex items-center gap-3">
-            <Link href="/login" className="px-4 py-2 text-[13px] font-semibold rounded-lg transition-colors" style={{ color: '#94a3b8' }}>Sign In</Link>
-            <Link href="/signup" className="px-5 py-2.5 text-[13px] font-bold text-white rounded-xl shadow-lg transition-all hover:scale-105" style={{ background: 'linear-gradient(135deg,#065fd4,#1a7fe8)' }}>Get Started Free</Link>
+            <Link href="/login" className="px-4 py-2 text-[19px] font-semibold rounded-lg transition-colors" style={{ color: '#e2e8f0' }}>Sign In</Link>
+            <Link href="/signup" className="px-5 py-2.5 text-[19px] font-bold text-white rounded-xl shadow-lg transition-all hover:scale-105" style={{ background: 'linear-gradient(135deg,#065fd4,#1a7fe8)' }}>Get Started Free</Link>
           </div>
         </div>
       </nav>
 
       {/* ══════════════════════════════════════════ HERO */}
-      <section className="relative flex items-center pt-16 overflow-hidden" style={{ minHeight: '100vh', background: 'linear-gradient(140deg,#060d1f 0%,#0d1f45 45%,#060d1f 100%)' }}>
+      <section className="relative flex items-center pt-[140px] overflow-hidden" style={{ minHeight: '100vh', background: 'linear-gradient(140deg,#060d1f 0%,#0d1f45 45%,#060d1f 100%)' }}>
         <div className="absolute inset-0 opacity-[0.03]" style={{ backgroundImage: 'radial-gradient(circle,#fff 1px,transparent 1px)', backgroundSize: '38px 38px' }} />
         <div className="absolute top-1/3 left-1/4  w-[600px] h-[600px] rounded-full opacity-[0.07] blur-3xl pointer-events-none" style={{ background: '#065fd4' }} />
         <div className="absolute bottom-1/4 right-1/5 w-[400px] h-[400px] rounded-full opacity-[0.06] blur-3xl pointer-events-none" style={{ background: '#7c3aed' }} />
@@ -199,7 +197,7 @@ export default function Home() {
         <div className="relative max-w-7xl mx-auto px-8 py-20 w-full grid grid-cols-2 gap-16 items-center">
           {/* Left */}
           <div>
-            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-[12px] font-bold mb-6 border"
+            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-[13px] font-bold mb-6 border"
               style={{ opacity: slideVisible ? 1 : 0, transition: 'opacity .5s', background: `${slide.accent}18`, borderColor: `${slide.accent}44`, color: slide.tagColor }}>
               <i className={`${slide.icon} text-[11px]`} />{slide.tag}
             </div>
@@ -233,11 +231,11 @@ export default function Home() {
             {/* Trust row */}
             <div className="flex items-center gap-4 mt-8 pt-8 border-t border-white/10">
               {[
-                { icon: 'fas fa-lock',          text: 'No internet access' },
-                { icon: 'fas fa-database',       text: 'pgvector powered' },
-                { icon: 'fas fa-microphone',     text: 'Voice enabled' },
+                { icon: 'fas fa-database',   text: 'pgvector powered' },
+                { icon: 'fas fa-microphone', text: 'Voice enabled' },
+                { icon: 'fas fa-robot',      text: 'Gemini AI powered' },
               ].map(({ icon, text }) => (
-                <div key={text} className="flex items-center gap-1.5 text-[12px]" style={{ color: '#64748b' }}>
+                <div key={text} className="flex items-center gap-1.5 text-[14px]" style={{ color: '#64748b' }}>
                   <i className={`${icon} text-[11px]`} style={{ color: '#60a5fa' }} />{text}
                 </div>
               ))}
@@ -267,18 +265,18 @@ export default function Home() {
                       <div className="w-12 h-12 rounded-full bg-white/20 flex items-center justify-center mx-auto mb-2 hover:bg-white/30 transition-colors cursor-pointer">
                         <i className="fas fa-play text-white text-sm ml-1" />
                       </div>
-                      <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: 9 }}>Introduction to Islamic Jurisprudence</p>
-                      <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: 8 }}>Fazal Qadir Khan Islamic Institute · 24:15</p>
+                      <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: 9 }}>Introduction to Prompt Engineering</p>
+                      <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: 8 }}>AskAI Tutor · 24:15</p>
                     </div>
                   </div>
                   {/* lecture info */}
                   <div className="px-3 py-2 flex-1 overflow-hidden">
                     <p style={{ fontSize: 11, fontWeight: 700, color: '#111', marginBottom: 4, lineHeight: 1.3 }}>
-                      Lecture 1 — Introduction to Islamic Jurisprudence (Fiqh)
+                      Lecture 1 — Introduction to Prompt Engineering
                     </p>
                     <div className="flex items-center gap-2 mb-2.5">
-                      <div className="w-5 h-5 rounded-full bg-purple-600 flex items-center justify-center text-white shrink-0" style={{ fontSize: 7, fontWeight: 700 }}>FQ</div>
-                      <span style={{ fontSize: 9, color: '#555', fontWeight: 600 }}>Fazal Qadir Khan Islamic Institute</span>
+                      <div className="w-5 h-5 rounded-full bg-indigo-600 flex items-center justify-center text-white shrink-0" style={{ fontSize: 7, fontWeight: 700 }}>AI</div>
+                      <span style={{ fontSize: 9, color: '#555', fontWeight: 600 }}>AskAI Tutor Course</span>
                     </div>
                     {/* AI ready bar */}
                     <div className="flex items-center gap-2 rounded-lg px-2.5 py-2" style={{ background: '#065fd4' }}>
@@ -321,14 +319,14 @@ export default function Home() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <p style={{ fontSize: 11, fontWeight: 700, color: '#111' }}>AI Tutor — Lecture 1 Agent</p>
-                    <p style={{ fontSize: 8, color: '#888' }}>Answers only from: Lecture 1</p>
+                    <p style={{ fontSize: 8, color: '#888' }}>Answers only from: Intro to Prompt Engineering</p>
                   </div>
                   <div className="flex items-center gap-1 rounded-full px-2 py-0.5" style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', fontSize: 8, fontWeight: 700, color: '#16a34a' }}>
                     <span className="w-1 h-1 rounded-full bg-green-500 animate-pulse inline-block" />Live
                   </div>
                 </div>
                 <div className="flex items-center gap-2 rounded-full px-3 py-2" style={{ background: '#f5f5f5', border: '1px solid #e5e5e5' }}>
-                  <span style={{ flex: 1, fontSize: 10, color: '#aaa' }}>Ask about this lecture…</span>
+                  <span style={{ flex: 1, fontSize: 10, color: '#aaa' }}>Ask about Prompt Engineering…</span>
                   <i className="fas fa-microphone" style={{ fontSize: 10, color: '#aaa' }} />
                   <div className="w-6 h-6 rounded-full flex items-center justify-center" style={{ background: '#065fd4' }}>
                     <i className="fas fa-paper-plane text-white" style={{ fontSize: 8 }} />
@@ -342,7 +340,7 @@ export default function Home() {
               {[
                 { icon: 'fas fa-shield-halved', color: '#22c55e', text: 'Lecture-scoped' },
                 { icon: 'fas fa-microphone',    color: '#a78bfa', text: 'Voice enabled'  },
-                { icon: 'fas fa-robot',         color: '#60a5fa', text: 'Gemini AI'      },
+                { icon: 'fas fa-robot',         color: '#60a5fa', text: 'AI Powered'     },
               ].map(({ icon, color, text }) => (
                 <div key={text} className="flex items-center gap-2 px-3 py-2 rounded-xl border shadow-lg backdrop-blur text-[11px] font-semibold" style={{ background: 'rgba(6,13,31,0.85)', borderColor: 'rgba(255,255,255,0.12)', color: '#e2e8f0' }}>
                   <i className={`${icon} text-[11px]`} style={{ color }} />{text}
@@ -373,7 +371,7 @@ export default function Home() {
                 <p className="text-[32px] font-black text-white leading-none tabular-nums">
                   {counters[i]}{st.suffix}
                 </p>
-                <p className="text-[12px] mt-1" style={{ color: '#64748b' }}>{st.label}</p>
+                <p className="text-[14px] mt-1" style={{ color: '#64748b' }}>{st.label}</p>
               </div>
             </div>
           ))}
@@ -391,7 +389,7 @@ export default function Home() {
                 <div className="w-10 h-10 rounded-xl overflow-hidden shrink-0"><Image src="/agent-avatar.png" alt="AI" width={40} height={40} className="w-full h-full object-cover" /></div>
                 <div className="flex-1">
                   <p className="text-[14px] font-bold" style={{ color: '#111' }}>AI Tutor — Lecture 1 Agent</p>
-                  <p className="text-[11px]" style={{ color: '#888' }}>Answers only from: Introduction to Fiqh</p>
+                  <p className="text-[11px]" style={{ color: '#888' }}>Answers only from: Introduction to Prompt Engineering</p>
                 </div>
                 <div className="flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-bold" style={{ background: '#f0fdf4', color: '#16a34a', border: '1px solid #bbf7d0' }}>
                   <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse inline-block" />AI Ready
@@ -401,7 +399,7 @@ export default function Home() {
               <div className="mx-4 mt-4">
                 <div className="flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px]" style={{ background: '#f8fafc', color: '#888' }}>
                   <i className="fas fa-circle-check text-[10px]" style={{ color: '#065fd4' }} />
-                  Agent scoped — answers only from <strong style={{ color: '#065fd4' }}>this lecture</strong>
+                  Agent scoped — answers only from <strong style={{ color: '#065fd4' }}>Intro to Prompt Engineering</strong>
                 </div>
               </div>
 
@@ -455,7 +453,7 @@ export default function Home() {
               {/* input */}
               <div className="px-4 pb-4">
                 <div className="flex items-center gap-2 rounded-3xl px-4 py-2.5 border" style={{ background: '#f8fafc', borderColor: '#e2e8f0' }}>
-                  <span className="flex-1 text-[13px]" style={{ color: '#aaa' }}>Ask about this lecture…</span>
+                  <span className="flex-1 text-[13px]" style={{ color: '#aaa' }}>Ask about Prompt Engineering…</span>
                   <i className="fas fa-microphone text-[13px]" style={{ color: '#ccc' }} />
                   <div className="w-8 h-8 rounded-full flex items-center justify-center" style={{ background: '#065fd4' }}>
                     <i className="fas fa-paper-plane text-white text-[11px]" />
@@ -467,12 +465,12 @@ export default function Home() {
 
           {/* Right: explanation */}
           <div>
-            <span className="text-[12px] font-bold uppercase tracking-widest px-3 py-1 rounded-full" style={{ background: '#eff6ff', color: '#065fd4' }}>Live Demo</span>
+            <span className="text-[13px] font-bold uppercase tracking-widest px-3 py-1 rounded-full" style={{ background: '#eff6ff', color: '#065fd4' }}>Live Demo</span>
             <h2 className="text-[40px] font-extrabold mt-4 mb-5 leading-tight" style={{ color: '#111' }}>
               Real Answers.<br />Real Sources.<br />Every Time.
             </h2>
             <p className="text-[16px] leading-relaxed mb-8" style={{ color: '#666' }}>
-              Watch a live conversation about Islamic Jurisprudence — every AI response cites the exact topic and timestamp from the lecture. No external knowledge, no hallucinations.
+              Watch a live conversation about Prompt Engineering — every AI response cites the exact topic and timestamp from the lecture. No external knowledge, no hallucinations.
             </p>
             <div className="flex flex-col gap-3">
               {[
@@ -480,13 +478,13 @@ export default function Home() {
                 { icon: 'fas fa-microphone',   color: '#7c3aed', text: 'Voice mode for hands-free Q&A' },
                 { icon: 'fas fa-shield-halved',color: '#065fd4', text: 'Cannot answer outside lecture scope' },
                 { icon: 'fas fa-clock-rotate-left', color: '#d97706', text: 'Full conversation history saved per student' },
-                { icon: 'fas fa-robot',        color: '#0891b2', text: 'Powered by Gemini 2.5 Flash LLM' },
+                { icon: 'fas fa-robot',        color: '#0891b2', text: 'State-of-the-art AI responses' },
               ].map(({ icon, color, text }) => (
                 <div key={text} className="flex items-center gap-3 p-3 rounded-xl hover:shadow-sm transition-shadow" style={{ background: 'white', border: '1px solid #e2e8f0' }}>
                   <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: color + '15' }}>
-                    <i className={`${icon} text-[13px]`} style={{ color }} />
+                    <i className={`${icon} text-[14px]`} style={{ color }} />
                   </div>
-                  <span className="text-[14px] font-medium" style={{ color: '#222' }}>{text}</span>
+                  <span className="text-[15px] font-medium" style={{ color: '#222' }}>{text}</span>
                 </div>
               ))}
             </div>
@@ -498,9 +496,9 @@ export default function Home() {
       <section id="features" className="py-24 px-8" style={{ background: 'white' }}>
         <div className="max-w-7xl mx-auto">
           <div className="text-center mb-16">
-            <span className="text-[12px] font-bold uppercase tracking-widest px-3 py-1 rounded-full" style={{ background: '#f8fafc', color: '#065fd4', border: '1px solid #e2e8f0' }}>Platform Features</span>
+            <span className="text-[13px] font-bold uppercase tracking-widest px-3 py-1 rounded-full" style={{ background: '#f8fafc', color: '#065fd4', border: '1px solid #e2e8f0' }}>Platform Features</span>
             <h2 className="text-[40px] font-extrabold mt-4 mb-4" style={{ color: '#111' }}>Built for Lecture-Specific AI Tutoring</h2>
-            <p className="text-[16px] max-w-2xl mx-auto" style={{ color: '#666' }}>Every feature is designed around one principle — answers must come from the lecture, not the internet.</p>
+            <p className="text-[17px] max-w-2xl mx-auto" style={{ color: '#666' }}>Every feature is designed around one principle — answers must come from the lecture, not the internet.</p>
           </div>
 
           <div className="flex flex-col gap-20">
@@ -515,7 +513,7 @@ export default function Home() {
                     <div className="rounded-3xl p-8 border" style={{ background: f.bg + '07', borderColor: f.bg + '20' }}>
                       {idx === 0 && (
                         <div className="space-y-3">
-                          {['What is the meaning of Ijma in Islam?', 'Explain Qiyas with an example', 'Difference between Fard and Wajib?'].map((q, i) => (
+                          {['What is prompt engineering?', 'Explain zero-shot vs few-shot prompting', 'How do I write a better prompt?'].map((q, i) => (
                             <div key={q} className="bg-white rounded-2xl p-3.5 shadow-sm border" style={{ borderColor: '#f0f0f0' }}>
                               <div className="flex items-center gap-2 mb-2">
                                 <div className="w-5 h-5 rounded-full flex items-center justify-center" style={{ background: f.bg + '20' }}>
@@ -527,7 +525,7 @@ export default function Home() {
                               <div className="h-1.5 rounded-full" style={{ background: f.bg + '15', width: `${55 - i * 10}%` }} />
                               <div className="flex gap-1.5 mt-2">
                                 <span className="text-[9px] px-2 py-0.5 rounded-full font-medium" style={{ background: '#eff6ff', color: '#065fd4', border: '1px solid #bfdbfe' }}>
-                                  <i className="fas fa-book-open mr-0.5 text-[7px]" />Topic: Islamic Law
+                                  <i className="fas fa-book-open mr-0.5 text-[7px]" />Topic: Prompt Engineering
                                 </span>
                                 <span className="text-[9px] px-2 py-0.5 rounded-full font-medium" style={{ background: '#eff6ff', color: '#065fd4', border: '1px solid #bfdbfe' }}>
                                   Lecture 1 · 0{3 + i}:{10 + i * 15}
@@ -536,7 +534,7 @@ export default function Home() {
                             </div>
                           ))}
                           <div className="flex items-center gap-2 px-3 py-2 rounded-xl text-[11px] font-semibold border" style={{ background: f.bg + '10', borderColor: f.bg + '30', color: f.bg }}>
-                            <i className="fas fa-shield-halved text-[10px]" />Scoped to Lecture 1 only — internet access blocked
+                            <i className="fas fa-shield-halved text-[10px]" />Scoped to Intro to Prompt Engineering — internet blocked
                           </div>
                         </div>
                       )}
@@ -608,8 +606,8 @@ export default function Home() {
                     <p className="text-[15px] leading-relaxed mb-6" style={{ color: '#666' }}>{f.body}</p>
                     <ul className="space-y-2.5">
                       {f.points.map((p) => (
-                        <li key={p} className="flex items-start gap-2.5 text-[14px]" style={{ color: '#333' }}>
-                          <i className="fas fa-check-circle text-[13px] mt-0.5 shrink-0" style={{ color: f.bg }} />{p}
+                        <li key={p} className="flex items-start gap-2.5 text-[15px]" style={{ color: '#333' }}>
+                          <i className="fas fa-check-circle text-[14px] mt-0.5 shrink-0" style={{ color: f.bg }} />{p}
                         </li>
                       ))}
                     </ul>
@@ -625,26 +623,26 @@ export default function Home() {
       <section style={{ background: '#0a1628', padding: '96px 0' }}>
         <div className="max-w-5xl mx-auto px-8">
           <div className="text-center mb-12">
-            <span className="text-[12px] font-bold uppercase tracking-widest px-3 py-1 rounded-full" style={{ background: 'rgba(6,95,212,0.15)', color: '#60a5fa', border: '1px solid rgba(6,95,212,0.3)' }}>Why AskAITutor</span>
+            <span className="text-[13px] font-bold uppercase tracking-widest px-3 py-1 rounded-full" style={{ background: 'rgba(6,95,212,0.15)', color: '#60a5fa', border: '1px solid rgba(6,95,212,0.3)' }}>Why AskAITutor</span>
             <h2 className="text-[38px] font-extrabold text-white mt-4 mb-3">AI Tutor vs Traditional Studying</h2>
-            <p className="text-[15px]" style={{ color: '#64748b' }}>See why lecture-scoped RAG beats general AI assistants for course learning.</p>
+            <p className="text-[16px]" style={{ color: '#64748b' }}>See why lecture-scoped RAG beats general AI assistants for course learning.</p>
           </div>
           <div className="rounded-2xl overflow-hidden border border-white/10">
-            <div className="grid grid-cols-3 text-[12px] font-bold uppercase tracking-widest px-6 py-3.5 border-b border-white/10" style={{ background: 'rgba(255,255,255,0.04)', color: '#64748b' }}>
+            <div className="grid grid-cols-3 text-[13px] font-bold uppercase tracking-widest px-6 py-3.5 border-b border-white/10" style={{ background: 'rgba(255,255,255,0.04)', color: '#64748b' }}>
               <div>Aspect</div>
               <div className="text-center" style={{ color: '#60a5fa' }}>AskAITutor</div>
               <div className="text-center">Traditional / General AI</div>
             </div>
             {WHY_ROWS.map((row, i) => (
               <div key={row.aspect} className="grid grid-cols-3 items-center px-6 py-4 border-b border-white/[0.06] last:border-0" style={{ background: i % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'transparent' }}>
-                <span className="text-[13px] font-semibold" style={{ color: '#94a3b8' }}>{row.aspect}</span>
+                <span className="text-[14px] font-semibold" style={{ color: '#94a3b8' }}>{row.aspect}</span>
                 <div className="flex items-center justify-center gap-2">
-                  <i className="fas fa-check-circle text-[12px]" style={{ color: '#22c55e' }} />
-                  <span className="text-[13px] font-semibold" style={{ color: '#e2e8f0' }}>{row.ai}</span>
+                  <i className="fas fa-check-circle text-[13px]" style={{ color: '#22c55e' }} />
+                  <span className="text-[14px] font-semibold" style={{ color: '#e2e8f0' }}>{row.ai}</span>
                 </div>
                 <div className="flex items-center justify-center gap-2">
-                  <i className="fas fa-xmark text-[12px]" style={{ color: '#ef4444' }} />
-                  <span className="text-[13px]" style={{ color: '#64748b' }}>{row.old}</span>
+                  <i className="fas fa-xmark text-[13px]" style={{ color: '#ef4444' }} />
+                  <span className="text-[14px]" style={{ color: '#64748b' }}>{row.old}</span>
                 </div>
               </div>
             ))}
@@ -656,26 +654,26 @@ export default function Home() {
       <section id="how" className="py-24 px-8" style={{ background: '#f8fafc' }}>
         <div className="max-w-6xl mx-auto">
           <div className="text-center mb-16">
-            <span className="text-[12px] font-bold uppercase tracking-widest px-3 py-1 rounded-full" style={{ background: 'white', color: '#065fd4', border: '1px solid #e2e8f0' }}>How It Works</span>
+            <span className="text-[13px] font-bold uppercase tracking-widest px-3 py-1 rounded-full" style={{ background: 'white', color: '#065fd4', border: '1px solid #e2e8f0' }}>How It Works</span>
             <h2 className="text-[40px] font-extrabold mt-4 mb-3" style={{ color: '#111' }}>From Lecture to Answer in 4 Steps</h2>
-            <p className="text-[16px] max-w-xl mx-auto" style={{ color: '#666' }}>No complex setup. Open a lecture, ask your question, get a sourced answer.</p>
+            <p className="text-[17px] max-w-xl mx-auto" style={{ color: '#666' }}>No setup needed. Open a lecture, the AI chat is right there — ask by text or voice and get a sourced answer.</p>
           </div>
           <div className="grid grid-cols-4 gap-6 relative">
             <div className="absolute top-10 left-[12.5%] right-[12.5%] h-px hidden md:block" style={{ background: 'linear-gradient(90deg, #065fd4, #7c3aed, #065fd4)' }} />
             {[
-              { num: '01', icon: 'fas fa-play-circle',   title: 'Watch the Lecture',   body: 'Open any AI-ready lecture from the course page and watch it in the embedded YouTube player.',              col: '#065fd4' },
-              { num: '02', icon: 'fas fa-comments',       title: 'Open AI Tutor',       body: 'Click "Ask AI Tutor" at the bottom. The chat drawer slides up, scoped to that lecture only.',            col: '#7c3aed' },
-              { num: '03', icon: 'fas fa-microphone',     title: 'Ask by Text or Voice', body: 'Type your question or switch to voice mode. Speak naturally — auto-sends after 1.5 s of silence.',   col: '#059669' },
-              { num: '04', icon: 'fas fa-circle-check',  title: 'Get Sourced Answers', body: 'Every response cites the exact topic and timestamp from the lecture dataset — fully traceable.',          col: '#d97706' },
+              { num: '01', icon: 'fas fa-graduation-cap', title: 'Browse Courses',        body: 'Go to the Courses page and pick any AI-ready lecture. Each lecture shows its AI agent status before you open it.',  col: '#065fd4' },
+              { num: '02', icon: 'fas fa-comments',        title: 'Chat is Always Ready',  body: 'The AI chat panel sits alongside the video. Type your question in the input box at the bottom of the chat and hit Send.', col: '#7c3aed' },
+              { num: '03', icon: 'fas fa-microphone',      title: 'Ask by Text or Voice',  body: 'Type your question or switch to voice mode. Speak naturally — the AI auto-sends after 1.5 s of silence.',            col: '#059669' },
+              { num: '04', icon: 'fas fa-circle-check',   title: 'Get Sourced Answers',   body: 'Every response cites the exact topic and timestamp from the lecture content — no internet, no hallucinations.',        col: '#d97706' },
             ].map((step, i) => (
               <div key={step.num} className="relative bg-white rounded-2xl border p-6 shadow-sm hover:shadow-md transition-shadow"
                 style={{ borderColor: '#e2e8f0', animation: `fadeInUp 0.45s ease ${i * 0.15}s both` }}>
-                <div className="absolute -top-3.5 left-5 w-8 h-8 rounded-full flex items-center justify-center text-[12px] font-black text-white shadow-md" style={{ background: step.col }}>{step.num}</div>
+                <div className="absolute -top-3.5 left-5 w-8 h-8 rounded-full flex items-center justify-center text-[13px] font-black text-white shadow-md" style={{ background: step.col }}>{step.num}</div>
                 <div className="w-12 h-12 rounded-xl flex items-center justify-center mt-3 mb-4" style={{ background: step.col + '15' }}>
                   <i className={`${step.icon} text-[18px]`} style={{ color: step.col }} />
                 </div>
-                <h3 className="text-[15px] font-bold mb-2" style={{ color: '#111' }}>{step.title}</h3>
-                <p className="text-[13px] leading-relaxed" style={{ color: '#666' }}>{step.body}</p>
+                <h3 className="text-[16px] font-bold mb-2" style={{ color: '#111' }}>{step.title}</h3>
+                <p className="text-[14px] leading-relaxed" style={{ color: '#666' }}>{step.body}</p>
               </div>
             ))}
           </div>
@@ -686,9 +684,9 @@ export default function Home() {
       <section className="py-24 px-8" style={{ background: 'white', borderTop: '1px solid #f0f0f0' }}>
         <div className="max-w-6xl mx-auto">
           <div className="text-center mb-14">
-            <span className="text-[12px] font-bold uppercase tracking-widest px-3 py-1 rounded-full" style={{ background: '#f8fafc', color: '#065fd4', border: '1px solid #e2e8f0' }}>Student Feedback</span>
+            <span className="text-[13px] font-bold uppercase tracking-widest px-3 py-1 rounded-full" style={{ background: '#f8fafc', color: '#065fd4', border: '1px solid #e2e8f0' }}>Student Feedback</span>
             <h2 className="text-[38px] font-extrabold mt-4 mb-3" style={{ color: '#111' }}>What Students Are Saying</h2>
-            <p className="text-[15px] max-w-lg mx-auto" style={{ color: '#666' }}>Real feedback from students and instructors using AskAITutor.</p>
+            <p className="text-[16px] max-w-lg mx-auto" style={{ color: '#666' }}>Real feedback from students and instructors using AskAITutor.</p>
           </div>
           <div className="grid grid-cols-3 gap-6">
             {TESTIMONIALS.map((t, i) => (
@@ -697,7 +695,7 @@ export default function Home() {
                 <div className="flex gap-1 mb-4">
                   {[0,1,2,3,4].map((s) => <i key={s} className="fas fa-star text-[13px]" style={{ color: '#f59e0b' }} />)}
                 </div>
-                <p className="text-[14px] leading-relaxed mb-5" style={{ color: '#444' }}>"{t.quote}"</p>
+                <p className="text-[15px] leading-relaxed mb-5" style={{ color: '#444' }}>"{t.quote}"</p>
                 <div className="flex items-center gap-3 pt-4 border-t" style={{ borderColor: '#e2e8f0' }}>
                   <div className="relative shrink-0">
                     <div className="w-10 h-10 rounded-full flex items-center justify-center text-white text-[12px] font-bold" style={{ background: t.color }}>{t.avatar}</div>
@@ -706,8 +704,8 @@ export default function Home() {
                     </div>
                   </div>
                   <div>
-                    <p className="text-[13px] font-bold" style={{ color: '#111' }}>{t.name}</p>
-                    <p className="text-[11px]" style={{ color: '#888' }}>{t.role}</p>
+                    <p className="text-[14px] font-bold" style={{ color: '#111' }}>{t.name}</p>
+                    <p className="text-[12px]" style={{ color: '#888' }}>{t.role}</p>
                   </div>
                 </div>
               </div>
@@ -720,22 +718,22 @@ export default function Home() {
       <section id="faq" className="py-24 px-8" style={{ background: '#f8fafc', borderTop: '1px solid #e2e8f0' }}>
         <div className="max-w-3xl mx-auto">
           <div className="text-center mb-14">
-            <span className="text-[12px] font-bold uppercase tracking-widest px-3 py-1 rounded-full" style={{ background: 'white', color: '#065fd4', border: '1px solid #e2e8f0' }}>FAQ</span>
+            <span className="text-[13px] font-bold uppercase tracking-widest px-3 py-1 rounded-full" style={{ background: 'white', color: '#065fd4', border: '1px solid #e2e8f0' }}>FAQ</span>
             <h2 className="text-[38px] font-extrabold mt-4 mb-3" style={{ color: '#111' }}>Frequently Asked Questions</h2>
-            <p className="text-[15px]" style={{ color: '#666' }}>Everything you need to know before getting started.</p>
+            <p className="text-[16px]" style={{ color: '#666' }}>Everything you need to know before getting started.</p>
           </div>
           <div className="space-y-3">
             {FAQS.map((faq, i) => (
               <div key={i} className="bg-white rounded-2xl border overflow-hidden shadow-sm" style={{ borderColor: openFaq === i ? '#065fd4' : '#e2e8f0', transition: 'border-color .2s' }}>
                 <button className="w-full flex items-center justify-between px-6 py-4 text-left gap-4 hover:bg-slate-50 transition-colors" onClick={() => setOpenFaq(openFaq === i ? null : i)}>
-                  <span className="text-[14px] font-semibold" style={{ color: '#111' }}>{faq.q}</span>
+                  <span className="text-[15px] font-semibold" style={{ color: '#111' }}>{faq.q}</span>
                   <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-all duration-200" style={{ background: openFaq === i ? '#065fd4' : '#f0f0f0', transform: openFaq === i ? 'rotate(45deg)' : 'rotate(0deg)' }}>
                     <i className="fas fa-plus text-[11px]" style={{ color: openFaq === i ? 'white' : '#888' }} />
                   </div>
                 </button>
                 {openFaq === i && (
                   <div className="px-6 pb-5 border-t" style={{ borderColor: '#f0f0f0' }}>
-                    <p className="text-[14px] leading-relaxed mt-4" style={{ color: '#555' }}>{faq.a}</p>
+                    <p className="text-[15px] leading-relaxed mt-4" style={{ color: '#555' }}>{faq.a}</p>
                   </div>
                 )}
               </div>
@@ -748,12 +746,12 @@ export default function Home() {
       <section style={{ background: 'white', borderTop: '1px solid #f0f0f0', padding: '80px 0' }}>
         <div className="max-w-6xl mx-auto px-8">
           <div className="text-center mb-12">
-            <span className="text-[12px] font-bold uppercase tracking-widest px-3 py-1 rounded-full" style={{ background: '#f8fafc', color: '#065fd4', border: '1px solid #e2e8f0' }}>Technology</span>
+            <span className="text-[13px] font-bold uppercase tracking-widest px-3 py-1 rounded-full" style={{ background: '#f8fafc', color: '#065fd4', border: '1px solid #e2e8f0' }}>Technology</span>
             <h2 className="text-[34px] font-extrabold mt-4 mb-3" style={{ color: '#111' }}>Built on Production-Grade AI Infrastructure</h2>
           </div>
           <div className="grid grid-cols-3 gap-5">
             {[
-              { icon: 'fas fa-brain',           label: 'Gemini AI',        sub: 'Powers both embeddings and LLM response generation via Gemini 2.5 Flash',  color: '#065fd4' },
+              { icon: 'fas fa-brain',           label: 'Advanced AI',      sub: 'Powers both semantic embeddings and intelligent response generation',       color: '#065fd4' },
               { icon: 'fas fa-database',         label: 'pgvector',         sub: 'PostgreSQL vector extension for cosine similarity search across 3072-dim embeddings',  color: '#7c3aed' },
               { icon: 'fas fa-diagram-project',  label: 'RAG Pipeline',     sub: 'Retrieval-augmented generation — every answer is sourced, not invented',    color: '#059669' },
               { icon: 'fab fa-node-js',          label: 'Node.js + Apollo', sub: 'GraphQL API with Apollo Server — type-safe, real-time, and scalable',       color: '#d97706' },
@@ -767,7 +765,7 @@ export default function Home() {
                 </div>
                 <div>
                   <p className="text-[16px] font-bold mb-1" style={{ color: '#111' }}>{t.label}</p>
-                  <p className="text-[13px] leading-relaxed" style={{ color: '#666' }}>{t.sub}</p>
+                  <p className="text-[14px] leading-relaxed" style={{ color: '#666' }}>{t.sub}</p>
                 </div>
               </div>
             ))}
@@ -780,12 +778,11 @@ export default function Home() {
         <div className="absolute inset-0 opacity-[0.03]" style={{ backgroundImage: 'radial-gradient(circle,#fff 1px,transparent 1px)', backgroundSize: '36px 36px' }} />
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] rounded-full opacity-[0.08] blur-3xl pointer-events-none" style={{ background: '#065fd4' }} />
         <div className="relative max-w-3xl mx-auto text-center">
-          <div className="w-20 h-20 rounded-3xl mx-auto mb-8 flex items-center justify-center shadow-2xl" style={{ background: 'linear-gradient(135deg,#065fd4,#1a7fe8)' }}>
-            <i className="fas fa-robot text-white text-3xl" />
-          </div>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo.png" alt="AskAI Tutor" className="h-64 w-auto object-contain mx-auto mb-8" />
           <h2 className="text-[46px] font-black text-white mb-5 leading-tight">Ready to Learn Smarter?</h2>
           <p className="text-[17px] mb-10 leading-relaxed" style={{ color: '#94a3b8' }}>
-            Join the platform where every question is answered from the lecture itself — not the internet. Powered by Gemini AI and RAG.
+            Join the platform where every question is answered from the lecture itself — not the internet. Powered by AI and RAG.
           </p>
           <div className="flex items-center justify-center gap-4">
             <Link href="/signup" className="flex items-center gap-2.5 px-10 py-4 text-[15px] font-bold text-white rounded-2xl shadow-2xl hover:scale-105 transition-transform"
@@ -797,8 +794,8 @@ export default function Home() {
               Already have an account?
             </Link>
           </div>
-          <p className="text-[12px] mt-6" style={{ color: '#475569' }}>
-            <i className="fas fa-lock text-[10px] mr-1" />No credit card required · Lecture-scoped AI · Zero hallucinations
+          <p className="text-[13px] mt-6" style={{ color: '#475569' }}>
+            <i className="fas fa-lock text-[11px] mr-1" />No credit card required · Lecture-scoped AI · Zero hallucinations
           </p>
         </div>
       </section>
@@ -806,17 +803,13 @@ export default function Home() {
       {/* ══════════════════════════════════════════ FOOTER */}
       <footer style={{ background: '#060d1f', borderTop: '1px solid rgba(255,255,255,0.07)' }}>
         <div className="max-w-7xl mx-auto px-8 py-10 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: '#065fd4' }}>
-              <i className="fas fa-robot text-white text-[13px]" />
-            </div>
-            <div>
-              <p className="text-[15px] font-extrabold text-white">AskAI<span style={{ color: '#60a5fa' }}>Tutor</span></p>
-              <p className="text-[10px]" style={{ color: '#475569' }}>Lecture-scoped AI Tutoring Platform</p>
-            </div>
+          <div className="flex flex-col gap-1">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/logo.png" alt="AskAI Tutor" className="h-24 w-auto object-contain" />
+            <p className="text-[12px]" style={{ color: '#475569' }}>Lecture-scoped AI Tutoring Platform</p>
           </div>
-          <p className="text-[12px]" style={{ color: '#475569' }}>Built with Gemini 2.5 Flash · pgvector · Next.js 14 · Apollo GraphQL</p>
-          <div className="flex items-center gap-6 text-[13px]">
+          <p className="text-[13px]" style={{ color: '#475569' }}>Built with AI + pgvector · Next.js 14 · Apollo GraphQL</p>
+          <div className="flex items-center gap-6 text-[14px]">
             <Link href="/login"  className="hover:text-white transition-colors" style={{ color: '#64748b' }}>Sign In</Link>
             <Link href="/signup" className="hover:text-white transition-colors" style={{ color: '#64748b' }}>Sign Up</Link>
           </div>

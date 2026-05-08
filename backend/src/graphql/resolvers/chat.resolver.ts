@@ -4,7 +4,11 @@ import { AuthenticatedRequest, QnaChunk } from '../../types';
 import {
   askLectureAgent,
   getChatHistory,
+  getPaginatedChatHistory,
+  searchChatHistory,
   clearChat,
+  deleteChatEntry,
+  renameChatEntry,
 } from '../../services/chat.service';
 import { AppError } from '../../middleware/errorHandler';
 import { logger } from '../../utils/logger';
@@ -68,6 +72,63 @@ export const chatResolvers = {
           };
         });
       }),
+
+    paginatedChatHistory: (
+      _: unknown,
+      { lectureId, limit, offset }: { lectureId: number; limit: number; offset: number },
+      ctx: GraphQLContext
+    ) =>
+      wrap(async () => {
+        const student = getStudent(ctx);
+        const { entries, total } = await getPaginatedChatHistory(student.id, lectureId, limit, offset);
+        const mapped = entries.map(e => {
+          const detail = ((e as unknown as Record<string, unknown>).sources_detail ?? []) as Array<{
+            id: number; topic: string | null; question: string; start_time: string | null; end_time: string | null;
+          }>;
+          return {
+            id:        e.id,
+            question:  e.question,
+            answer:    e.answer,
+            createdAt: e.created_at.toISOString(),
+            sources:   detail.map(s => ({
+              id:        s.id,
+              topic:     s.topic     ?? null,
+              question:  s.question,
+              startTime: s.start_time ?? null,
+              endTime:   s.end_time   ?? null,
+            })),
+          };
+        });
+        return { entries: mapped, total, hasMore: offset + limit < total };
+      }),
+
+    searchChatHistory: (
+      _: unknown,
+      { lectureId, query }: { lectureId: number; query: string },
+      ctx: GraphQLContext
+    ) =>
+      wrap(async () => {
+        const student = getStudent(ctx);
+        const entries = await searchChatHistory(student.id, lectureId, query);
+        return entries.map(e => {
+          const detail = ((e as unknown as Record<string, unknown>).sources_detail ?? []) as Array<{
+            id: number; topic: string | null; question: string; start_time: string | null; end_time: string | null;
+          }>;
+          return {
+            id:        e.id,
+            question:  e.question,
+            answer:    e.answer,
+            createdAt: e.created_at.toISOString(),
+            sources:   detail.map(s => ({
+              id:        s.id,
+              topic:     s.topic     ?? null,
+              question:  s.question,
+              startTime: s.start_time ?? null,
+              endTime:   s.end_time   ?? null,
+            })),
+          };
+        });
+      }),
   },
 
   Mutation: {
@@ -99,6 +160,26 @@ export const chatResolvers = {
         const student = getStudent(ctx);
         await clearChat(student.id, lectureId);
         return { success: true, message: 'Chat cleared.' };
+      }),
+
+    deleteChatEntry: (
+      _: unknown,
+      { id }: { id: number },
+      ctx: GraphQLContext
+    ) =>
+      wrap(async () => {
+        const student = getStudent(ctx);
+        return deleteChatEntry(student.id, id);
+      }),
+
+    renameChatEntry: (
+      _: unknown,
+      { id, label }: { id: number; label: string },
+      ctx: GraphQLContext
+    ) =>
+      wrap(async () => {
+        const student = getStudent(ctx);
+        return renameChatEntry(student.id, id, label);
       }),
   },
 };

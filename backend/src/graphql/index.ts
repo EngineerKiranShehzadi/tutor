@@ -6,6 +6,7 @@ import { resolvers as authResolvers } from './resolvers/auth.resolver';
 import { chatResolvers } from './resolvers/chat.resolver';
 import { lectureResolvers } from './resolvers/lecture.resolver';
 import { analyticsResolvers } from './resolvers/analytics.resolver';
+import { userResolvers } from './resolvers/user.resolver';
 import { GraphQLContext } from './context';
 import { verifyAccessToken } from '../utils/jwt';
 import { query } from '../config/database';
@@ -18,11 +19,13 @@ const mergedResolvers = {
     ...lectureResolvers.Query,
     ...chatResolvers.Query,
     ...analyticsResolvers.Query,
+    ...userResolvers.Query,
   },
   Mutation: {
     ...authResolvers.Mutation,
     ...lectureResolvers.Mutation,
     ...chatResolvers.Mutation,
+    ...userResolvers.Mutation,
   },
 };
 

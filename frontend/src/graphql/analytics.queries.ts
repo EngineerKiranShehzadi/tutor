@@ -44,6 +44,51 @@ export const GET_LECTURE_STATUS_LIST = gql`
   }
 `;
 
+export const GET_STUDENT_JOURNEY = gql`
+  query StudentJourney($id: String!) {
+    studentJourney(id: $id) {
+      studentId
+      studentName
+      studentEmail
+      status
+      questionCount
+      lecturesEngaged
+      joinedAt
+      firstActivity
+      lastActivity
+      questions {
+        id
+        question
+        lectureTitle
+        lectureId
+        createdAt
+      }
+      byLecture {
+        lectureId
+        lectureTitle
+        questionCount
+        firstAsked
+        lastAsked
+      }
+    }
+  }
+`;
+
+export const GET_CONTENT_GAPS = gql`
+  query ContentGaps {
+    contentGaps {
+      lectureId
+      lectureTitle
+      questionsAsked
+      chunkCount
+      coverageScore
+      gapTopics
+      coveredTopics
+      status
+    }
+  }
+`;
+
 export const GET_REGISTERED_STUDENTS = gql`
   query RegisteredStudents {
     registeredStudents {
@@ -51,6 +96,8 @@ export const GET_REGISTERED_STUDENTS = gql`
       name
       email
       createdAt
+      questionCount
+      status
     }
   }
 `;

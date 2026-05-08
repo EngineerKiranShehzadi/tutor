@@ -10,15 +10,22 @@ const ICONS: Record<string, string> = {
 interface Props { onSelect: (text: string) => void }
 
 export const SuggestionChips = ({ onSelect }: Props) => (
-  <div className="flex gap-1.5 px-4 py-2 overflow-x-auto border-t border-[var(--border)] shrink-0" style={{ scrollbarWidth: 'none' }}>
-    {AI_SUGGESTIONS.map((s) => (
-      <button
-        key={s}
-        onClick={() => onSelect(s)}
-        className="whitespace-nowrap px-3 py-1.5 bg-[var(--surface)] border border-[var(--border)] rounded-2xl text-[12px] text-[var(--muted)] flex items-center gap-1.5 shrink-0 hover:border-[var(--accent)] hover:text-[var(--accent)] transition-colors"
-      >
-        <i className={`${ICONS[s] ?? 'fas fa-star'} text-[10px]`} /> {s}
-      </button>
-    ))}
+  <div className="border-t border-[var(--border)] shrink-0 px-4 pt-2 pb-2.5">
+    {/* Visibility: labelled section so user knows what these are */}
+    <p className="text-[11px] font-semibold text-[var(--muted)] uppercase tracking-wider mb-1.5">
+      Try asking
+    </p>
+    <div className="flex gap-1.5 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
+      {AI_SUGGESTIONS.map((s) => (
+        <button
+          key={s}
+          onClick={() => onSelect(s)}
+          /* Affordances: bg changes on hover + active scale press gives clear click feedback */
+          className="whitespace-nowrap flex-shrink-0 px-3 py-1.5 bg-[var(--surface)] border border-[var(--border)] rounded-2xl text-[13px] text-[var(--muted)] flex items-center gap-1.5 hover:bg-indigo-50 hover:border-indigo-300 hover:text-indigo-700 active:scale-95 transition-all"
+        >
+          <i className={`${ICONS[s] ?? 'fas fa-star'} text-[11px]`} /> {s}
+        </button>
+      ))}
+    </div>
   </div>
 );

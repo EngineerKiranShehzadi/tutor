@@ -86,10 +86,95 @@ export const getMe = asyncHandler(async (req: AuthenticatedRequest, res: Respons
   sendSuccess(res, 'User fetched', req.user);
 });
 
+export const updateMe = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const { name, currentPassword, newPassword, avatarUrl } = req.body;
+  logger.info(`[AUTH] UpdateMe: "${req.user?.email}"`);
+  const updated = await AuthService.updateProfile(req.user!.id, { name, currentPassword, newPassword, avatarUrl });
+  sendSuccess(res, 'Profile updated', updated);
+});
+
 export const resendLoginOtp = asyncHandler(async (req: Request, res: Response) => {
   const { email } = req.body;
   logger.info(`[AUTH] Resend login OTP requested for: "${email}"`);
   const expiresInSeconds = await AuthService.resendLoginOtp(email.toLowerCase());
   logger.info(`[AUTH] ✅ Login OTP resent to "${email}" (expires in ${expiresInSeconds}s)`);
   sendSuccess(res, 'Verification code sent', { email, verificationExpiresInSeconds: expiresInSeconds });
+});
+
+// ── Google OAuth ──────────────────────────────────────
+export const googleRedirect = (_req: Request, res: Response): void => {
+  const { CLIENT_ID, CALLBACK_URL } = env.GOOGLE;
+  if (!CLIENT_ID) {
+    res.status(503).send('Google OAuth is not configured on this server.');
+    return;
+  }
+  const params = new URLSearchParams({
+    client_id:     CLIENT_ID,
+    redirect_uri:  CALLBACK_URL,
+    response_type: 'code',
+    scope:         'openid email profile',
+    access_type:   'offline',
+    prompt:        'select_account',
+  });
+  res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
+};
+
+export const googleCallback = asyncHandler(async (req: Request, res: Response) => {
+  const { code } = req.query as { code?: string };
+  const { CLIENT_ID, CLIENT_SECRET, CALLBACK_URL } = env.GOOGLE;
+
+  if (!code || !CLIENT_ID || !CLIENT_SECRET) {
+    logger.warn('[AUTH] Google OAuth callback missing code or config');
+    res.redirect(`${env.FRONTEND_URL}/login?error=oauth_failed`);
+    return;
+  }
+
+  // Exchange authorization code for tokens
+  const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body:    new URLSearchParams({
+      code,
+      client_id:     CLIENT_ID,
+      client_secret: CLIENT_SECRET,
+      redirect_uri:  CALLBACK_URL,
+      grant_type:    'authorization_code',
+    }),
+  });
+
+  if (!tokenRes.ok) {
+    logger.error(`[AUTH] Google token exchange failed: ${tokenRes.status}`);
+    res.redirect(`${env.FRONTEND_URL}/login?error=oauth_failed`);
+    return;
+  }
+
+  const { access_token } = await tokenRes.json() as { access_token?: string };
+
+  // Get Google user profile
+  const profileRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+    headers: { Authorization: `Bearer ${access_token}` },
+  });
+
+  if (!profileRes.ok) {
+    logger.error(`[AUTH] Google userinfo fetch failed: ${profileRes.status}`);
+    res.redirect(`${env.FRONTEND_URL}/login?error=oauth_failed`);
+    return;
+  }
+
+  const googleUser = await profileRes.json() as {
+    id: string; name: string; email: string; picture?: string;
+  };
+
+  logger.info(`[AUTH] Google OAuth: profile for "${googleUser.email}"`);
+
+  const { accessToken, refreshToken } = await AuthService.googleOAuthUser({
+    googleId:  googleUser.id,
+    name:      googleUser.name,
+    email:     googleUser.email,
+    avatarUrl: googleUser.picture,
+  });
+
+  res.cookie('refreshToken', refreshToken, COOKIE_OPTS);
+  logger.info(`[AUTH] ✅ Google OAuth success: "${googleUser.email}"`);
+  res.redirect(`${env.FRONTEND_URL}/auth/google/callback?token=${accessToken}`);
 });

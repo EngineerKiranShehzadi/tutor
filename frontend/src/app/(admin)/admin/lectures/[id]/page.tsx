@@ -3,8 +3,11 @@ import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { useQuery, useMutation } from '@apollo/client';
 import { GET_LECTURE, UPDATE_LECTURE_MUTATION } from '@/graphql/lecture.queries';
+import { GET_LECTURE_CHUNKS } from '@/graphql/admin.queries';
 import { datasetApi } from '@/lib/api';
 import { DBLecture } from '@/types';
+
+interface QnaChunk { id: number; topic: string | null; question: string; answer: string; startTime: string | null; endTime: string | null; keywords: string | null }
 
 const POLLING_STATUSES = new Set(['DATASET_UPLOADED', 'PROCESSING', 'EMBEDDING']);
 
@@ -31,6 +34,24 @@ export default function LectureDetailPage({ params }: Props) {
   const [updateLecture, { loading: updating }] = useMutation(UPDATE_LECTURE_MUTATION);
 
   const lecture: DBLecture | undefined = data?.lecture;
+
+  const [chunkSearch, setChunkSearch] = useState('');
+  const [chunkPage,   setChunkPage]   = useState(1);
+  const CHUNK_PAGE_SIZE = 10;
+
+  const { data: chunksData, loading: chunksLoading } = useQuery(GET_LECTURE_CHUNKS, {
+    variables: { lectureId: parseInt(params.id, 10) },
+    fetchPolicy: 'network-only',
+    skip: !data?.lecture || data.lecture.status !== 'READY',
+  });
+  const allChunks: QnaChunk[] = chunksData?.lectureChunks ?? [];
+  const filteredChunks = allChunks.filter(c =>
+    !chunkSearch ||
+    c.question.toLowerCase().includes(chunkSearch.toLowerCase()) ||
+    (c.topic ?? '').toLowerCase().includes(chunkSearch.toLowerCase())
+  );
+  const chunkPages = Math.max(1, Math.ceil(filteredChunks.length / CHUNK_PAGE_SIZE));
+  const pagedChunks = filteredChunks.slice((chunkPage - 1) * CHUNK_PAGE_SIZE, chunkPage * CHUNK_PAGE_SIZE);
 
   const [editMode,    setEditMode]    = useState(false);
   const [editForm,    setEditForm]    = useState({ title: '', description: '', youtubeUrl: '' });
@@ -287,6 +308,86 @@ export default function LectureDetailPage({ params }: Props) {
           </div>
         </div>
       </div>
+
+      {/* Dataset preview — only shown when READY */}
+      {lecture.status === 'READY' && (
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden mt-5">
+          <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/60">
+            <div className="flex items-center gap-2.5">
+              <div className="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center">
+                <i className="fas fa-list-check text-white text-[11px]" />
+              </div>
+              <span className="text-[14px] font-semibold text-slate-700">Dataset Preview</span>
+              {allChunks.length > 0 && (
+                <span className="text-[11px] font-semibold text-indigo-600 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-full">
+                  {allChunks.length} Q&A pairs
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="px-6 pt-4 pb-2">
+            <div className="relative">
+              <i className="fas fa-search absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-[11px]" />
+              <input
+                value={chunkSearch}
+                onChange={e => { setChunkSearch(e.target.value); setChunkPage(1); }}
+                placeholder="Search questions or topics…"
+                className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-[13px] text-slate-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all"
+              />
+            </div>
+          </div>
+
+          {chunksLoading ? (
+            <div className="px-6 py-4 space-y-3">
+              {[1,2,3].map(i => <div key={i} className="h-16 bg-slate-100 rounded-xl animate-pulse" />)}
+            </div>
+          ) : pagedChunks.length === 0 ? (
+            <div className="px-6 py-8 text-center text-slate-400 text-[13px]">No Q&A pairs found.</div>
+          ) : (
+            <div className="divide-y divide-slate-100 px-6 py-2">
+              {pagedChunks.map((chunk) => (
+                <div key={chunk.id} className="py-4">
+                  <div className="flex items-start gap-3">
+                    <div className="w-5 h-5 rounded-lg bg-blue-100 flex items-center justify-center shrink-0 mt-0.5">
+                      <i className="fas fa-circle-question text-blue-600 text-[10px]" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      {chunk.topic && (
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">{chunk.topic}</span>
+                          {chunk.startTime && (
+                            <span className="text-[10px] text-slate-400 font-mono">{chunk.startTime}{chunk.endTime ? ` – ${chunk.endTime}` : ''}</span>
+                          )}
+                        </div>
+                      )}
+                      <p className="text-[13px] font-semibold text-slate-800 mb-1.5">{chunk.question}</p>
+                      <p className="text-[12px] text-slate-500 leading-relaxed line-clamp-3">{chunk.answer}</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {chunkPages > 1 && (
+            <div className="px-6 py-3 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between">
+              <span className="text-[12px] text-slate-400">{filteredChunks.length} pair{filteredChunks.length !== 1 ? 's' : ''}</span>
+              <div className="flex items-center gap-1.5">
+                <button onClick={() => setChunkPage(p => Math.max(1, p - 1))} disabled={chunkPage === 1}
+                  className="w-7 h-7 rounded-lg border border-slate-200 flex items-center justify-center text-slate-500 hover:bg-slate-100 disabled:opacity-30 text-[11px]">
+                  <i className="fas fa-chevron-left" />
+                </button>
+                <span className="text-[12px] text-slate-600 font-medium">{chunkPage} / {chunkPages}</span>
+                <button onClick={() => setChunkPage(p => Math.min(chunkPages, p + 1))} disabled={chunkPage === chunkPages}
+                  className="w-7 h-7 rounded-lg border border-slate-200 flex items-center justify-center text-slate-500 hover:bg-slate-100 disabled:opacity-30 text-[11px]">
+                  <i className="fas fa-chevron-right" />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

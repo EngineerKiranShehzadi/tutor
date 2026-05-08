@@ -2,10 +2,11 @@
 export type UserRole = 'STUDENT' | 'ADMIN';
 
 export interface User {
-  id:         string;
-  name:       string;
-  email:      string;
-  role:       UserRole;
+  id:          string;
+  name:        string;
+  email:       string;
+  role:        UserRole;
+  avatar_url?: string | null;
   created_at?: string;
 }
 
@@ -63,11 +64,12 @@ export interface ChunkSource {
 }
 
 export interface ChatMessage {
-  id:        string;
-  role:      MessageRole;
-  type:      MessageType;
-  content:   string;
-  citation?: string;
-  timestamp: Date;
-  sources?:  ChunkSource[];
+  id:          string;
+  role:        MessageRole;
+  type:        MessageType;
+  content:     string;
+  citation?:   string;
+  timestamp:   Date;
+  sources?:    ChunkSource[];
+  isStreaming?: boolean; // true while the typewriter animation is in progress
 }

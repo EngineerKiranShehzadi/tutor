@@ -50,6 +50,11 @@ export const env = {
 
   BCRYPT_SALT_ROUNDS: parseInt(optional('BCRYPT_SALT_ROUNDS', '12'), 10),
 
-  // Gemini — used for both embeddings and LLM answer generation
   GEMINI_API_KEY: optional('GEMINI_API_KEY', ''),
+
+  GOOGLE: {
+    CLIENT_ID:     optional('GOOGLE_CLIENT_ID', ''),
+    CLIENT_SECRET: optional('GOOGLE_CLIENT_SECRET', ''),
+    CALLBACK_URL:  optional('GOOGLE_CALLBACK_URL', 'http://localhost:5000/api/v1/auth/google/callback'),
+  },
 } as const;
