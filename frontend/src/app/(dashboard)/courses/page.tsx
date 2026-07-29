@@ -40,7 +40,7 @@ export default function CoursesPage() {
   const firstReady = lectures.find((l) => l.status === 'READY');
 
   return (
-    <div className="px-4 py-5">
+    <div className="px-6 py-8">
       <div className="flex gap-5 items-start">
 
       {/* LEFT — Playlist embed */}
@@ -63,8 +63,8 @@ export default function CoursesPage() {
         <div className="px-4 py-4 border-b border-[var(--border)]">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-[18px] font-bold text-[var(--text)]">Course Lectures</h1>
-              <p className="text-[13px] text-[var(--muted)] mt-0.5">
+              <h1 className="text-[21px] font-bold text-[var(--text)]">Course Lectures</h1>
+              <p className="text-[14px] text-[var(--muted)] mt-0.5">
                 {lectures.length} lecture{lectures.length !== 1 ? 's' : ''} available
               </p>
             </div>
@@ -122,7 +122,7 @@ export default function CoursesPage() {
 
                   {/* Info */}
                   <div className="flex-1 min-w-0">
-                    <p className="text-[14px] font-semibold leading-snug line-clamp-2 mb-1.5 text-[var(--text)]">
+                    <p className="text-[15px] font-semibold leading-snug line-clamp-2 mb-1.5 text-[var(--text)]">
                       {lec.title}
                     </p>
                     <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[12px] font-bold ${badge.color}`}>

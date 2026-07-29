@@ -41,8 +41,8 @@ export const OtpVerificationStep = ({
 
   return (
     <div>
-      <h2 className="text-xl font-bold mb-1 text-[var(--text)]">Verify your email</h2>
-      <p className="text-sm text-[var(--muted)] mb-6">
+      <h2 className="text-[26px] font-bold mb-2 text-[var(--text)]">Verify your email</h2>
+      <p className="text-[15px] text-[var(--muted)] mb-7">
         {message || `A 5-digit code has been sent to `}
         <strong className="text-[var(--text)]">{email}</strong>
       </p>
@@ -59,19 +59,19 @@ export const OtpVerificationStep = ({
               value={digit}
               onChange={e => onOtpChange(i, e.target.value)}
               onKeyDown={e => onOtpKeyDown(i, e)}
-              className="w-11 text-center text-xl font-bold border-[1.5px] rounded-lg outline-none transition-all bg-[var(--surface)] text-[var(--text)] border-[var(--border)] focus:border-[var(--red)]"
-              style={{ height: '52px' }}
+              className="w-14 text-center text-2xl font-bold border-[1.5px] rounded-lg outline-none transition-all bg-[var(--surface)] text-[var(--text)] border-[var(--border)] focus:border-[var(--red)]"
+              style={{ height: '62px' }}
             />
           ))}
         </div>
 
         {error && (
-          <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2.5 text-sm text-red-600 flex items-center gap-2">
+          <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2.5 text-[14px] text-red-600 flex items-center gap-2">
             <i className="fas fa-circle-exclamation" /> {error}
           </div>
         )}
 
-        <div className="text-center text-sm text-[var(--muted)]">
+        <div className="text-center text-[15px] text-[var(--muted)]">
           {canResend ? (
             <button
               type="button"
@@ -87,7 +87,7 @@ export const OtpVerificationStep = ({
         </div>
 
         {resendError && (
-          <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2.5 text-sm text-red-600 flex items-center gap-2">
+          <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2.5 text-[14px] text-red-600 flex items-center gap-2">
             <i className="fas fa-circle-exclamation" /> {resendError}
           </div>
         )}

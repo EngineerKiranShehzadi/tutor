@@ -1,4 +1,5 @@
 import { ReactNode } from 'react';
+import { Logo } from '@/components/ui/Logo';
 
 const FEATURES = [
   'Interactive AI-powered tutoring',
@@ -115,9 +116,9 @@ export const AuthCard = ({ children }: Props) => (
 
     {/* ── 5. Main card — elevated with colored glow shadow ── */}
     <div
-      className="relative w-full max-w-[820px] rounded-2xl overflow-hidden flex"
+      className="relative w-full max-w-[1040px] rounded-2xl overflow-hidden flex"
       style={{
-        minHeight: '520px',
+        minHeight: '620px',
         boxShadow: [
           '0 0 0 1px rgba(77,159,240,0.12)',       /* subtle blue border */
           '0 0 60px rgba(6,95,212,0.2)',            /* soft blue halo */
@@ -129,7 +130,7 @@ export const AuthCard = ({ children }: Props) => (
 
       {/* ── Left branding panel ── */}
       <div
-        className="hidden md:flex w-[320px] shrink-0 flex-col px-8 py-9 relative overflow-hidden"
+        className="hidden md:flex w-[420px] shrink-0 flex-col px-10 py-10 relative overflow-hidden"
         style={{ background: 'linear-gradient(155deg, #0d1b4b 0%, #112060 55%, #0b1535 100%)' }}
       >
         {/* inner glow */}
@@ -145,32 +146,31 @@ export const AuthCard = ({ children }: Props) => (
             backgroundSize: '40px 40px',
           }} />
 
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/logo.png" alt="AskAI Tutor" className="relative mb-auto w-full object-contain" />
+        <Logo variant="dark" className="relative mb-auto h-11 w-auto" />
 
         {/* Copy */}
         <div className="relative my-auto py-8">
-          <h1 className="text-[30px] font-extrabold text-white leading-[1.15] mb-3">
+          <h1 className="text-[38px] font-extrabold text-white leading-[1.15] mb-4">
             Student<br/>
             <span style={{ color: '#60A5FA' }}>Learning Portal</span>
           </h1>
-          <p className="text-[13px] leading-relaxed mb-8 max-w-[240px]" style={{ color: '#B8C7E8' }}>
+          <p className="text-[15px] leading-relaxed mb-8 max-w-[300px]" style={{ color: '#B8C7E8' }}>
             Your AI-powered hub for academic resources, interactive lectures, and personalised learning.
           </p>
-          <div className="flex flex-col gap-3.5">
+          <div className="flex flex-col gap-4">
             {FEATURES.map(f => (
               <div key={f} className="flex items-center gap-3">
-                <div className="w-5 h-5 rounded-full border border-[#1a5bb0] bg-[#0a1f4d] flex items-center justify-center shrink-0">
-                  <i className="fas fa-check text-[11px]" style={{ color: '#38BDF8' }} />
+                <div className="w-6 h-6 rounded-full border border-[#1a5bb0] bg-[#0a1f4d] flex items-center justify-center shrink-0">
+                  <i className="fas fa-check text-[12px]" style={{ color: '#38BDF8' }} />
                 </div>
-                <span className="text-[12px] font-medium" style={{ color: '#D6E4FF' }}>{f}</span>
+                <span className="text-[14px] font-medium" style={{ color: '#D6E4FF' }}>{f}</span>
               </div>
             ))}
           </div>
         </div>
 
         {/* Footer */}
-        <div className="relative flex items-center justify-between text-[10px]" style={{ color: 'rgba(184,199,232,0.65)' }}>
+        <div className="relative flex items-center justify-between text-[12px]" style={{ color: 'rgba(184,199,232,0.65)' }}>
           <span>© 2026 AskAI Tutor</span>
           <div className="flex gap-3">
             <a href="#" className="transition-colors hover:text-[#D6E4FF]">Privacy</a>
@@ -180,8 +180,8 @@ export const AuthCard = ({ children }: Props) => (
       </div>
 
       {/* ── Right form panel ── */}
-      <div className="flex-1 bg-white flex items-center justify-center px-8 py-9">
-        <div className="auth-dark w-full max-w-[340px]">
+      <div className="flex-1 bg-white flex items-center justify-center px-10 py-10">
+        <div className="auth-dark w-full max-w-[400px]">
           {children}
         </div>
       </div>

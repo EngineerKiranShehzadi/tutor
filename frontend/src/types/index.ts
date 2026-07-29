@@ -8,6 +8,7 @@ export interface User {
   role:        UserRole;
   avatar_url?: string | null;
   created_at?: string;
+  google_id?:  string | null;
 }
 
 export interface AuthState {
@@ -30,14 +31,16 @@ export interface ApiResponse<T = undefined> {
 
 // ── DB Lecture (from GraphQL) ─────────────────────────
 export interface DBLecture {
-  id:             string;
-  title:          string;
-  description?:   string;
-  youtubeUrl:     string;
+  id:              string;
+  title:           string;
+  description?:    string;
+  youtubeUrl:      string;
   youtubeVideoId?: string;
-  status:         'NO_DATASET' | 'DATASET_UPLOADED' | 'PROCESSING' | 'EMBEDDING' | 'READY' | 'FAILED';
-  createdAt:      string;
-  updatedAt:      string;
+  status:          'NO_DATASET' | 'DATASET_UPLOADED' | 'PROCESSING' | 'EMBEDDING' | 'READY' | 'FAILED';
+  progressCurrent: number;
+  progressTotal:   number;
+  createdAt:       string;
+  updatedAt:       string;
 }
 
 // ── Legacy local Lecture (hardcoded constants) ────────

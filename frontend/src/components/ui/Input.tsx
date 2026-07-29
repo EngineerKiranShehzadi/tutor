@@ -18,7 +18,7 @@ export const Input = forwardRef<HTMLInputElement, Props>(
     return (
       <div className="flex flex-col gap-1.5">
         {label && (
-          <label className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
+          <label className="flex items-center gap-1.5 text-[13px] font-semibold uppercase tracking-wide text-[var(--muted)]">
             {icon && <i className={`${icon} text-[10px]`} />}
             {label}
           </label>
@@ -33,7 +33,7 @@ export const Input = forwardRef<HTMLInputElement, Props>(
             ref={ref}
             type={resolvedType}
             className={cn(
-              'w-full px-3.5 py-2.5 text-sm border-[1.5px] rounded-lg outline-none transition-all',
+              'w-full px-3.5 py-3 text-[15px] border-[1.5px] rounded-lg outline-none transition-all',
               'bg-[var(--surface)] text-[var(--text)] placeholder:text-[var(--muted2)]',
               /* Consistency: same focus ring as other inputs across the app */
               'focus:ring-2 focus:ring-blue-100',
@@ -60,7 +60,7 @@ export const Input = forwardRef<HTMLInputElement, Props>(
           )}
         </div>
         {error && (
-          <p className="text-xs text-red-500 flex items-center gap-1">
+          <p className="text-[13px] text-red-500 flex items-center gap-1">
             <i className="fas fa-circle-exclamation text-[10px]" />{error}
           </p>
         )}

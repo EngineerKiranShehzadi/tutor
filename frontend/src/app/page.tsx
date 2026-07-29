@@ -1,6 +1,7 @@
 'use client';
 import Image from 'next/image';
 import Link from 'next/link';
+import { Logo } from '@/components/ui/Logo';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
@@ -41,9 +42,12 @@ const FEATURES = [
 ];
 
 const TESTIMONIALS = [
-  { name: 'Mahnoor Saleha',  role: 'BS SE Student · COMSATS University Lahore', avatar: 'MS', color: '#e91e8c', gender: 'f', quote: 'I was struggling with Fiqh definitions until AskAITutor cited exactly where each concept appeared in the lecture. The source timestamps made revision so much easier before exams.' },
-  { name: 'Maryam Munawer',  role: 'BS SE Student · COMSATS University Lahore', avatar: 'MM', color: '#7c3aed', gender: 'f', quote: 'The voice mode is a game changer for me. I revise while commuting — I just ask questions out loud and the AI responds instantly. It feels like a personal tutor available 24/7.' },
-  { name: 'Khuld Zulfiqar',  role: 'BS SE Student · COMSATS University Lahore', avatar: 'KZ', color: '#059669', gender: 'f', quote: 'What impressed me most is that the AI only answers from the lecture content. No random internet answers — every response is traceable back to the exact topic taught in class.' },
+  { name: 'Mahnoor Saleha',  role: 'BS SE Student · COMSATS University Lahore', avatar: 'MS', color: '#e91e8c', gender: 'f', quote: 'I was struggling with understanding zero-shot vs few-shot prompting until AskAITutor cited exactly where each concept appeared in the lecture. The source timestamps made revision so much easier before exams.' },
+  { name: 'Maryam Munawer',  role: 'BS SE Student · COMSATS University Lahore', avatar: 'MM', color: '#7c3aed', gender: 'f', quote: 'The voice mode is a game changer for me. I revise my Prompt Engineering notes while commuting — I just ask questions out loud and the AI responds instantly from the lecture content.' },
+  { name: 'Khuld Zulfiqar',  role: 'BS SE Student · COMSATS University Lahore', avatar: 'KZ', color: '#059669', gender: 'f', quote: 'What impressed me most is that the AI only answers from our lecture content. When I asked about chain-of-thought prompting, it gave me the exact explanation our instructor taught — no internet noise.' },
+  { name: 'Hassan Raza',     role: 'BS SE Student · COMSATS University Lahore', avatar: 'HR', color: '#065fd4', gender: 'm', quote: 'The chat history feature is incredibly useful. I can revisit every question I asked about prompt templates across different sessions — it is like having a personal study log tied directly to each lecture.' },
+  { name: 'Engr. Zara Tahir', role: 'Instructor · COMSATS University Lahore',  avatar: 'ZT', color: '#d97706', gender: 'f', quote: 'The admin dashboard gives me real visibility into how students engage with each lecture. I can see which prompt engineering topics generate the most questions and refine my dataset accordingly.' },
+  { name: 'Bilal Ashraf',    role: 'BS SE Student · COMSATS University Lahore', avatar: 'BA', color: '#dc2626', gender: 'm', quote: 'I used to search YouTube for explanations after every lecture. Now I just open AskAITutor and ask — the AI explains role prompting, temperature settings, and token limits exactly the way our course defines them.' },
 ];
 
 const FAQS = [
@@ -173,8 +177,7 @@ export default function Home() {
       <nav className="fixed top-0 left-0 right-0 z-50 border-b border-white/10" style={{ background: 'rgba(6,13,31,0.96)', backdropFilter: 'blur(12px)' }}>
         <div className="max-w-7xl mx-auto px-8 h-[140px] flex items-center justify-between">
           <div className="flex items-center">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/logo.png" alt="AskAI Tutor" className="h-32 w-auto object-contain" />
+            <Logo variant="dark" className="h-12 w-auto" />
           </div>
           <div className="hidden md:flex items-center gap-7 text-[19px] font-semibold" style={{ color: '#e2e8f0' }}>
             {['#features', '#demo', '#how', '#faq'].map((h) => (
@@ -778,8 +781,7 @@ export default function Home() {
         <div className="absolute inset-0 opacity-[0.03]" style={{ backgroundImage: 'radial-gradient(circle,#fff 1px,transparent 1px)', backgroundSize: '36px 36px' }} />
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] rounded-full opacity-[0.08] blur-3xl pointer-events-none" style={{ background: '#065fd4' }} />
         <div className="relative max-w-3xl mx-auto text-center">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo.png" alt="AskAI Tutor" className="h-64 w-auto object-contain mx-auto mb-8" />
+          <Logo variant="dark" className="h-16 w-auto mx-auto block mb-8" />
           <h2 className="text-[46px] font-black text-white mb-5 leading-tight">Ready to Learn Smarter?</h2>
           <p className="text-[17px] mb-10 leading-relaxed" style={{ color: '#94a3b8' }}>
             Join the platform where every question is answered from the lecture itself — not the internet. Powered by AI and RAG.
@@ -804,8 +806,7 @@ export default function Home() {
       <footer style={{ background: '#060d1f', borderTop: '1px solid rgba(255,255,255,0.07)' }}>
         <div className="max-w-7xl mx-auto px-8 py-10 flex items-center justify-between">
           <div className="flex flex-col gap-1">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/logo.png" alt="AskAI Tutor" className="h-24 w-auto object-contain" />
+            <Logo variant="dark" className="h-10 w-auto" />
             <p className="text-[12px]" style={{ color: '#475569' }}>Lecture-scoped AI Tutoring Platform</p>
           </div>
           <p className="text-[13px]" style={{ color: '#475569' }}>Built with AI + pgvector · Next.js 14 · Apollo GraphQL</p>

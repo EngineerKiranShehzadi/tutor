@@ -6,8 +6,23 @@ import { cn } from '@/lib/cn';
 
 const FIELD = 'w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-800 outline-none focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-100 transition-all placeholder:text-slate-400';
 
+const RULES = [
+  { label: 'At least 8 characters',        test: (p: string) => p.length >= 8           },
+  { label: 'At least one uppercase letter', test: (p: string) => /[A-Z]/.test(p)         },
+  { label: 'At least one number',           test: (p: string) => /[0-9]/.test(p)         },
+  { label: 'At least one special character',test: (p: string) => /[^A-Za-z0-9]/.test(p) },
+];
+
+function strengthLabel(score: number): { label: string; color: string } {
+  if (score <= 1) return { label: 'Weak',   color: 'bg-red-500'     };
+  if (score === 2) return { label: 'Fair',   color: 'bg-amber-400'   };
+  if (score === 3) return { label: 'Good',   color: 'bg-blue-500'    };
+  return                  { label: 'Strong', color: 'bg-emerald-500' };
+}
+
 export default function ProfilePage() {
-  const { user, setUser, logout } = useAuth();
+  const { user, setUser } = useAuth();
+  const isGoogleUser = !!user?.google_id;
 
   const [name,            setName]            = useState(user?.name ?? '');
   const [currentPassword, setCurrentPassword] = useState('');
@@ -18,13 +33,17 @@ export default function ProfilePage() {
   const [saving,          setSaving]          = useState(false);
   const [showCurrent,     setShowCurrent]     = useState(false);
   const [showNew,         setShowNew]         = useState(false);
+  const [showConfirm,     setShowConfirm]     = useState(false);
   const [avatarPreview,   setAvatarPreview]   = useState<string | null>(user?.avatar_url ?? null);
   const [avatarBase64,    setAvatarBase64]    = useState<string | null>(null);
-  const [confirmLogout,   setConfirmLogout]   = useState(false);
-  const [activeTab,       setActiveTab]       = useState<'profile' | 'security'>('profile');
+  const [activeTab,       setActiveTab]       = useState<'profile' | 'password'>('profile');
 
-  const fileRef = useRef<HTMLInputElement>(null);
+  const fileRef  = useRef<HTMLInputElement>(null);
   const initials = user?.name?.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() ?? 'U';
+
+  const passScore      = RULES.filter(r => r.test(newPassword)).length;
+  const { label: strengthText, color: strengthColor } = strengthLabel(passScore);
+  const passwordsMatch = confirmPassword === newPassword;
 
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -42,26 +61,23 @@ export default function ProfilePage() {
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setSuccessMsg(''); setErrorMsg('');
-
-    if (newPassword && newPassword !== confirmPassword) {
-      setErrorMsg('New passwords do not match.'); return;
+    if (activeTab === 'password') {
+      if (!currentPassword) { setErrorMsg('Enter your current password.'); return; }
+      if (passScore < 3)    { setErrorMsg('New password is too weak. Follow the rules below.'); return; }
+      if (!passwordsMatch)  { setErrorMsg('Passwords do not match.'); return; }
     }
-    if (newPassword && newPassword.length < 8) {
-      setErrorMsg('New password must be at least 8 characters.'); return;
-    }
-
     setSaving(true);
     try {
       const payload: Record<string, string> = {};
       if (name.trim() && name.trim() !== user?.name) payload.name = name.trim();
       if (avatarBase64) payload.avatarUrl = avatarBase64;
-      if (newPassword) { payload.currentPassword = currentPassword; payload.newPassword = newPassword; }
-
+      if (activeTab === 'password' && newPassword) {
+        payload.currentPassword = currentPassword;
+        payload.newPassword     = newPassword;
+      }
       const res = await authApi.updateProfile(payload);
       const updated = res.data?.data;
-      if (updated) {
-        setUser({ ...user!, name: updated.name, avatar_url: updated.avatar_url });
-      }
+      if (updated) setUser({ ...user!, name: updated.name, avatar_url: updated.avatar_url });
       setSuccessMsg('Profile updated successfully.');
       setCurrentPassword(''); setNewPassword(''); setConfirmPassword('');
       setAvatarBase64(null);
@@ -78,45 +94,27 @@ export default function ProfilePage() {
     ? new Date(user.created_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
     : null;
 
+  const tabs = [
+    { key: 'profile',  label: 'Profile',         icon: 'fa-user' },
+    ...(!isGoogleUser ? [{ key: 'password', label: 'Change Password', icon: 'fa-lock' }] : []),
+  ] as { key: 'profile' | 'password'; label: string; icon: string }[];
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white">
 
       {/* ── Hero banner ── */}
-      <div className="relative bg-gradient-to-r from-indigo-600 via-indigo-500 to-violet-600 overflow-hidden">
-        {/* decorative blobs */}
+      <div className="relative bg-gradient-to-r from-slate-800 via-slate-700 to-indigo-800 overflow-hidden">
         <div className="absolute -top-10 -right-10 w-56 h-56 rounded-full bg-white/5" />
         <div className="absolute bottom-0 left-1/3 w-40 h-40 rounded-full bg-white/5" />
-
-        {/* Sign out — top-right of banner, always visible */}
-        <div className="absolute top-4 right-4 sm:top-5 sm:right-6">
-          <button
-            type="button"
-            onClick={() => { if (!confirmLogout) { setConfirmLogout(true); return; } logout(); }}
-            onBlur={() => setConfirmLogout(false)}
-            className={cn(
-              'flex items-center gap-2 px-4 py-2 rounded-xl text-[12px] font-semibold transition-all active:scale-95',
-              confirmLogout
-                ? 'bg-red-500 text-white hover:bg-red-600 shadow-lg'
-                : 'bg-white/15 text-white border border-white/25 hover:bg-white/25 backdrop-blur-sm'
-            )}
-          >
-            <i className="fas fa-right-from-bracket text-[11px]" />
-            {confirmLogout ? 'Yes, sign me out' : 'Sign Out'}
-          </button>
-        </div>
 
         <div className="relative max-w-3xl mx-auto px-6 pt-10 pb-16 flex items-center gap-6">
           {/* Avatar */}
           <div className="relative shrink-0 group cursor-pointer" onClick={() => fileRef.current?.click()}>
             {avatarPreview ? (
-              /* eslint-disable-next-line @next/next/no-img-element */
-              <img
-                src={avatarPreview}
-                alt="Profile"
-                className="w-24 h-24 rounded-3xl object-cover border-4 border-white/30 shadow-2xl"
-              />
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={avatarPreview} alt="Profile" className="w-24 h-24 rounded-3xl object-cover border-4 border-white/30 shadow-2xl" />
             ) : (
-              <div className="w-24 h-24 rounded-3xl bg-white/20 backdrop-blur-sm flex items-center justify-center text-white text-3xl font-bold border-4 border-white/30 shadow-2xl">
+              <div className="w-24 h-24 rounded-3xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white text-3xl font-bold border-4 border-white/20 shadow-2xl">
                 {initials}
               </div>
             )}
@@ -139,10 +137,15 @@ export default function ProfilePage() {
               <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-white/20 text-white border border-white/30 uppercase tracking-widest">
                 Student
               </span>
+              {isGoogleUser && (
+                <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-blue-500/30 text-blue-200 border border-blue-400/30 uppercase tracking-widest flex items-center gap-1">
+                  <i className="fab fa-google text-[9px]" /> Google
+                </span>
+              )}
             </div>
-            <p className="text-indigo-100 text-sm mt-0.5 truncate">{user?.email}</p>
+            <p className="text-slate-300 text-sm mt-0.5 truncate">{user?.email}</p>
             {joinedDate && (
-              <p className="text-indigo-200 text-xs mt-2 flex items-center gap-1.5">
+              <p className="text-slate-400 text-xs mt-2 flex items-center gap-1.5">
                 <i className="fas fa-calendar-days" />
                 Member since {joinedDate}
               </p>
@@ -151,17 +154,14 @@ export default function ProfilePage() {
         </div>
       </div>
 
-      {/* ── Tab bar (floats over banner bottom) ── */}
-      <div className="sticky top-14 z-20 max-w-3xl mx-auto px-6">
+      {/* ── Tab bar ── */}
+      <div className="sticky top-0 z-20 max-w-3xl mx-auto px-6">
         <div className="flex gap-1 bg-white rounded-2xl shadow-lg border border-slate-200 p-1.5 -mt-6">
-          {([
-            { key: 'profile',  label: 'Profile',  icon: 'fa-user' },
-            { key: 'security', label: 'Security', icon: 'fa-shield-halved' },
-          ] as const).map(t => (
+          {tabs.map(t => (
             <button
               key={t.key}
               type="button"
-              onClick={() => setActiveTab(t.key)}
+              onClick={() => { setActiveTab(t.key); setSuccessMsg(''); setErrorMsg(''); }}
               className={cn(
                 'flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-semibold transition-all',
                 activeTab === t.key
@@ -180,9 +180,9 @@ export default function ProfilePage() {
       <form onSubmit={handleSave}>
         <div className="max-w-3xl mx-auto px-6 py-6 flex flex-col gap-5">
 
+          {/* ── Profile tab ── */}
           {activeTab === 'profile' && (
             <>
-              {/* Profile info card */}
               <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
                 <div className="flex items-center gap-2.5 px-6 py-4 border-b border-slate-100 bg-slate-50/60">
                   <div className="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center">
@@ -191,12 +191,11 @@ export default function ProfilePage() {
                   <span className="text-[14px] font-semibold text-slate-700">Personal Information</span>
                 </div>
                 <div className="p-6 flex flex-col gap-5">
-
                   {/* Avatar upload row */}
                   <div className="flex items-center gap-5 p-4 rounded-xl bg-gradient-to-r from-indigo-50 to-violet-50 border border-indigo-100">
                     <div className="relative shrink-0 group cursor-pointer" onClick={() => fileRef.current?.click()}>
                       {avatarPreview ? (
-                        /* eslint-disable-next-line @next/next/no-img-element */
+                        // eslint-disable-next-line @next/next/no-img-element
                         <img src={avatarPreview} alt="Profile" className="w-16 h-16 rounded-2xl object-cover border-2 border-indigo-200" />
                       ) : (
                         <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white text-xl font-bold border-2 border-indigo-200">
@@ -210,35 +209,28 @@ export default function ProfilePage() {
                     <div>
                       <p className="text-[13px] font-semibold text-slate-800">Profile photo</p>
                       <p className="text-[11px] text-slate-500 mt-0.5">JPG, PNG or WebP · max 2 MB</p>
-                      <button
-                        type="button"
-                        onClick={() => fileRef.current?.click()}
-                        className="mt-2 inline-flex items-center gap-1.5 text-[12px] font-semibold text-indigo-600 hover:text-indigo-700 transition-colors"
-                      >
-                        <i className="fas fa-upload text-[10px]" />
-                        Upload new photo
+                      <button type="button" onClick={() => fileRef.current?.click()} className="mt-2 inline-flex items-center gap-1.5 text-[12px] font-semibold text-indigo-600 hover:text-indigo-700 transition-colors">
+                        <i className="fas fa-upload text-[10px]" /> Upload new photo
                       </button>
                     </div>
                   </div>
 
                   {/* Name */}
                   <div>
-                    <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1.5">
-                      Display Name
-                    </label>
+                    <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Display Name</label>
                     <input
                       value={name}
                       onChange={e => setName(e.target.value)}
+                      maxLength={100} minLength={2} required
                       className={FIELD}
                       placeholder="Your full name"
                     />
+                    <p className="text-[11px] text-slate-400 mt-1">{name.length}/100 characters</p>
                   </div>
 
                   {/* Email (read-only) */}
                   <div>
-                    <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1.5">
-                      Email Address
-                    </label>
+                    <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Email Address</label>
                     <div className="relative">
                       <input value={user?.email ?? ''} disabled className={cn(FIELD, 'opacity-60 cursor-not-allowed pr-10')} />
                       <i className="fas fa-lock absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-[11px]" />
@@ -248,7 +240,7 @@ export default function ProfilePage() {
                 </div>
               </div>
 
-              {/* Account details card */}
+              {/* Account details */}
               <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
                 <div className="flex items-center gap-2.5 px-6 py-4 border-b border-slate-100 bg-slate-50/60">
                   <div className="w-7 h-7 rounded-lg bg-violet-600 flex items-center justify-center">
@@ -258,21 +250,19 @@ export default function ProfilePage() {
                 </div>
                 <div className="p-6 grid grid-cols-2 gap-4">
                   {[
-                    { label: 'Role',          value: 'Student',   icon: 'fa-graduation-cap', color: 'indigo' },
-                    { label: 'Member Since',  value: joinedDate ?? '—', icon: 'fa-calendar-check', color: 'emerald' },
-                    { label: 'Account Type',  value: 'Standard',  icon: 'fa-id-badge',       color: 'violet' },
-                    { label: 'Status',        value: 'Active',    icon: 'fa-circle-check',   color: 'green' },
+                    { label: 'Role',         value: 'Student',                               icon: 'fa-graduation-cap', color: 'indigo'  },
+                    { label: 'Member Since', value: joinedDate ?? '—',                        icon: 'fa-calendar-check', color: 'emerald' },
+                    { label: 'Account Type', value: isGoogleUser ? 'Google OAuth' : 'Standard', icon: 'fa-id-badge',    color: 'violet'  },
+                    { label: 'Status',       value: 'Active',                                icon: 'fa-circle-check',   color: 'green'   },
                   ].map(item => (
                     <div key={item.label} className="flex items-start gap-3 p-3.5 rounded-xl bg-slate-50 border border-slate-100">
-                      <div className={cn(
-                        'w-8 h-8 rounded-lg flex items-center justify-center shrink-0',
+                      <div className={cn('w-8 h-8 rounded-lg flex items-center justify-center shrink-0',
                         item.color === 'indigo'  && 'bg-indigo-100',
                         item.color === 'emerald' && 'bg-emerald-100',
                         item.color === 'violet'  && 'bg-violet-100',
                         item.color === 'green'   && 'bg-green-100',
                       )}>
-                        <i className={cn(
-                          'fas text-[12px]', item.icon,
+                        <i className={cn('fas text-[12px]', item.icon,
                           item.color === 'indigo'  && 'text-indigo-600',
                           item.color === 'emerald' && 'text-emerald-600',
                           item.color === 'violet'  && 'text-violet-600',
@@ -290,7 +280,8 @@ export default function ProfilePage() {
             </>
           )}
 
-          {activeTab === 'security' && (
+          {/* ── Change Password tab ── */}
+          {activeTab === 'password' && !isGoogleUser && (
             <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
               <div className="flex items-center gap-2.5 px-6 py-4 border-b border-slate-100 bg-slate-50/60">
                 <div className="w-7 h-7 rounded-lg bg-emerald-600 flex items-center justify-center">
@@ -299,46 +290,89 @@ export default function ProfilePage() {
                 <span className="text-[14px] font-semibold text-slate-700">Change Password</span>
               </div>
               <div className="p-6 flex flex-col gap-5">
-                <div className="flex items-start gap-3 p-4 rounded-xl bg-amber-50 border border-amber-200">
-                  <i className="fas fa-circle-info text-amber-500 mt-0.5 shrink-0" />
-                  <p className="text-[12px] text-amber-700 leading-relaxed">
-                    Leave these fields blank if you only want to update your profile info. A strong password is at least 8 characters.
-                  </p>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Current Password</label>
+                  <div className="relative">
+                    <input
+                      type={showCurrent ? 'text' : 'password'}
+                      value={currentPassword}
+                      onChange={e => setCurrentPassword(e.target.value)}
+                      className={cn(FIELD, 'pr-10')}
+                      placeholder="Your current password"
+                      required
+                    />
+                    <button type="button" onClick={() => setShowCurrent(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-[12px]">
+                      <i className={cn('fas', showCurrent ? 'fa-eye-slash' : 'fa-eye')} />
+                    </button>
+                  </div>
                 </div>
 
-                {[
-                  { label: 'Current Password', value: currentPassword, setter: setCurrentPassword, show: showCurrent, toggle: () => setShowCurrent(v => !v), placeholder: 'Your current password' },
-                  { label: 'New Password',      value: newPassword,     setter: setNewPassword,     show: showNew,     toggle: () => setShowNew(v => !v),     placeholder: 'Min. 8 characters' },
-                ].map(({ label, value, setter, show, toggle, placeholder }) => (
-                  <div key={label}>
-                    <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1.5">{label}</label>
-                    <div className="relative">
-                      <input
-                        type={show ? 'text' : 'password'}
-                        value={value}
-                        onChange={e => setter(e.target.value)}
-                        className={cn(FIELD, 'pr-10')}
-                        placeholder={placeholder}
-                      />
-                      <button type="button" onClick={toggle} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-[12px]">
-                        <i className={cn('fas', show ? 'fa-eye-slash' : 'fa-eye')} />
-                      </button>
-                    </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1.5">New Password</label>
+                  <div className="relative">
+                    <input
+                      type={showNew ? 'text' : 'password'}
+                      value={newPassword}
+                      onChange={e => setNewPassword(e.target.value)}
+                      className={cn(FIELD, 'pr-10')}
+                      placeholder="Min. 8 characters"
+                      required
+                    />
+                    <button type="button" onClick={() => setShowNew(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-[12px]">
+                      <i className={cn('fas', showNew ? 'fa-eye-slash' : 'fa-eye')} />
+                    </button>
                   </div>
-                ))}
+                  {newPassword && (
+                    <>
+                      <div className="flex gap-1 mt-2.5 mb-1.5">
+                        {[0,1,2,3].map(i => (
+                          <div key={i} className={cn('h-1.5 flex-1 rounded-full transition-all', i < passScore ? strengthColor : 'bg-slate-200')} />
+                        ))}
+                      </div>
+                      <p className={cn('text-[11px] font-semibold',
+                        passScore <= 1 ? 'text-red-500' : passScore === 2 ? 'text-amber-500' : passScore === 3 ? 'text-blue-500' : 'text-emerald-600'
+                      )}>
+                        Password strength: {strengthText}
+                      </p>
+                      <ul className="mt-2 flex flex-col gap-1">
+                        {RULES.map(r => (
+                          <li key={r.label} className={cn('flex items-center gap-2 text-[11px]', r.test(newPassword) ? 'text-emerald-600' : 'text-slate-400')}>
+                            <i className={cn('fas text-[10px]', r.test(newPassword) ? 'fa-circle-check text-emerald-500' : 'fa-circle-xmark text-slate-300')} />
+                            {r.label}
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+                </div>
 
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Confirm New Password</label>
-                  <input
-                    type="password"
-                    value={confirmPassword}
-                    onChange={e => setConfirmPassword(e.target.value)}
-                    className={cn(FIELD, confirmPassword && confirmPassword !== newPassword ? 'border-red-300 focus:border-red-400 focus:ring-red-100' : '')}
-                    placeholder="Repeat new password"
-                  />
-                  {confirmPassword && confirmPassword !== newPassword && (
+                  <div className="relative">
+                    <input
+                      type={showConfirm ? 'text' : 'password'}
+                      value={confirmPassword}
+                      onChange={e => setConfirmPassword(e.target.value)}
+                      className={cn(FIELD, 'pr-10',
+                        confirmPassword && !passwordsMatch ? 'border-red-300 focus:border-red-400 focus:ring-red-100' : '',
+                        confirmPassword &&  passwordsMatch ? 'border-emerald-300 focus:border-emerald-400 focus:ring-emerald-100' : '',
+                      )}
+                      placeholder="Repeat new password"
+                      required
+                    />
+                    <button type="button" onClick={() => setShowConfirm(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-[12px]">
+                      <i className={cn('fas', showConfirm ? 'fa-eye-slash' : 'fa-eye')} />
+                    </button>
+                  </div>
+                  {confirmPassword && !passwordsMatch && (
                     <p className="text-[11px] text-red-500 mt-1.5 flex items-center gap-1">
                       <i className="fas fa-circle-exclamation text-[10px]" /> Passwords do not match
+                    </p>
+                  )}
+                  {confirmPassword && passwordsMatch && (
+                    <p className="text-[11px] text-emerald-600 mt-1.5 flex items-center gap-1">
+                      <i className="fas fa-circle-check text-[10px]" /> Passwords match
                     </p>
                   )}
                 </div>
@@ -364,12 +398,12 @@ export default function ProfilePage() {
             </div>
           )}
 
-          {/* Save button */}
-          <div className="flex items-center justify-between gap-4">
+          {/* Save */}
+          <div className="flex items-center gap-4">
             <button
               type="submit"
-              disabled={saving}
-              className="flex items-center gap-2 px-7 py-3 bg-indigo-600 text-white rounded-xl text-[14px] font-semibold hover:bg-indigo-700 active:scale-95 disabled:opacity-60 transition-all shadow-sm shadow-indigo-200"
+              disabled={saving || (activeTab === 'password' && (!passwordsMatch || passScore < 3))}
+              className="flex items-center gap-2 px-7 py-3 bg-indigo-600 text-white rounded-xl text-[14px] font-semibold hover:bg-indigo-700 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm shadow-indigo-200"
             >
               {saving
                 ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Saving…</>

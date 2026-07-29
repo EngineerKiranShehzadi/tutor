@@ -34,6 +34,8 @@ function toGql(lecture: import('../../types').Lecture) {
     youtubeUrl: lecture.youtube_url,
     youtubeVideoId: lecture.youtube_video_id ?? null,
     status: lecture.status,
+    progressCurrent: lecture.progress_current ?? 0,
+    progressTotal: lecture.progress_total ?? 0,
     createdAt: lecture.created_at.toISOString(),
     updatedAt: lecture.updated_at.toISOString(),
   };

@@ -9,6 +9,11 @@ import {
   clearChat,
   deleteChatEntry,
   renameChatEntry,
+  getChatSessions,
+  getSessionHistory,
+  createChatSession,
+  deleteChatSession,
+  renameChatSession,
 } from '../../services/chat.service';
 import { AppError } from '../../middleware/errorHandler';
 import { logger } from '../../utils/logger';
@@ -42,35 +47,61 @@ function wrap(fn: () => Promise<unknown>) {
   });
 }
 
+// Shared mapper: DB row → GraphQL ChatHistoryEntry
+function mapEntry(e: Record<string, unknown>) {
+  const detail = (e.sources_detail ?? []) as Array<{
+    id: number; topic: string | null; question: string; start_time: string | null; end_time: string | null;
+  }>;
+  return {
+    id:           e.id as number,
+    question:     e.question as string,
+    answer:       e.answer as string,
+    createdAt:    (e.created_at as Date).toISOString(),
+    displayLabel: (e.display_label as string) ?? null,
+    sources:      detail.map(s => ({
+      id:        s.id,
+      topic:     s.topic     ?? null,
+      question:  s.question,
+      startTime: s.start_time ?? null,
+      endTime:   s.end_time   ?? null,
+    })),
+  };
+}
+
 export const chatResolvers = {
   Query: {
-    chatHistory: (
+    // ── Session queries ──────────────────────────────────────
+    chatSessions: (
       _: unknown,
       { lectureId }: { lectureId: number },
       ctx: GraphQLContext
     ) =>
       wrap(async () => {
         const student = getStudent(ctx);
-        const entries = await getChatHistory(student.id, lectureId);
-        return entries.map(e => {
-          // sources_detail is a JSON array injected by the SQL subquery in getChatHistory
-          const detail = ((e as unknown as Record<string, unknown>).sources_detail ?? []) as Array<{
-            id: number; topic: string | null; question: string; start_time: string | null; end_time: string | null;
-          }>;
-          return {
-            id:        e.id,
-            question:  e.question,
-            answer:    e.answer,
-            createdAt: e.created_at.toISOString(),
-            sources:   detail.map(s => ({
-              id:        s.id,
-              topic:     s.topic     ?? null,
-              question:  s.question,
-              startTime: s.start_time ?? null,
-              endTime:   s.end_time   ?? null,
-            })),
-          };
-        });
+        return getChatSessions(student.id, lectureId);
+      }),
+
+    sessionHistory: (
+      _: unknown,
+      { sessionId }: { sessionId: number },
+      ctx: GraphQLContext
+    ) =>
+      wrap(async () => {
+        const student = getStudent(ctx);
+        const entries = await getSessionHistory(student.id, sessionId);
+        return entries.map(e => mapEntry(e as unknown as Record<string, unknown>));
+      }),
+
+    // ── Legacy queries (kept for ChatDrawer / backward compat) ──
+    chatHistory: (
+      _: unknown,
+      { lectureId }: { lectureId: number },
+      ctx: GraphQLContext
+    ) =>
+      wrap(async () => {
+        const student  = getStudent(ctx);
+        const entries  = await getChatHistory(student.id, lectureId);
+        return entries.map(e => mapEntry(e as unknown as Record<string, unknown>));
       }),
 
     paginatedChatHistory: (
@@ -81,25 +112,11 @@ export const chatResolvers = {
       wrap(async () => {
         const student = getStudent(ctx);
         const { entries, total } = await getPaginatedChatHistory(student.id, lectureId, limit, offset);
-        const mapped = entries.map(e => {
-          const detail = ((e as unknown as Record<string, unknown>).sources_detail ?? []) as Array<{
-            id: number; topic: string | null; question: string; start_time: string | null; end_time: string | null;
-          }>;
-          return {
-            id:        e.id,
-            question:  e.question,
-            answer:    e.answer,
-            createdAt: e.created_at.toISOString(),
-            sources:   detail.map(s => ({
-              id:        s.id,
-              topic:     s.topic     ?? null,
-              question:  s.question,
-              startTime: s.start_time ?? null,
-              endTime:   s.end_time   ?? null,
-            })),
-          };
-        });
-        return { entries: mapped, total, hasMore: offset + limit < total };
+        return {
+          entries: entries.map(e => mapEntry(e as unknown as Record<string, unknown>)),
+          total,
+          hasMore: offset + limit < total,
+        };
       }),
 
     searchChatHistory: (
@@ -108,33 +125,48 @@ export const chatResolvers = {
       ctx: GraphQLContext
     ) =>
       wrap(async () => {
-        const student = getStudent(ctx);
-        const entries = await searchChatHistory(student.id, lectureId, query);
-        return entries.map(e => {
-          const detail = ((e as unknown as Record<string, unknown>).sources_detail ?? []) as Array<{
-            id: number; topic: string | null; question: string; start_time: string | null; end_time: string | null;
-          }>;
-          return {
-            id:        e.id,
-            question:  e.question,
-            answer:    e.answer,
-            createdAt: e.created_at.toISOString(),
-            sources:   detail.map(s => ({
-              id:        s.id,
-              topic:     s.topic     ?? null,
-              question:  s.question,
-              startTime: s.start_time ?? null,
-              endTime:   s.end_time   ?? null,
-            })),
-          };
-        });
+        const student  = getStudent(ctx);
+        const entries  = await searchChatHistory(student.id, lectureId, query);
+        return entries.map(e => mapEntry(e as unknown as Record<string, unknown>));
       }),
   },
 
   Mutation: {
+    // ── Session mutations ─────────────────────────────────────
+    createChatSession: (
+      _: unknown,
+      { lectureId }: { lectureId: number },
+      ctx: GraphQLContext
+    ) =>
+      wrap(async () => {
+        const student = getStudent(ctx);
+        return createChatSession(student.id, lectureId);
+      }),
+
+    deleteChatSession: (
+      _: unknown,
+      { id }: { id: number },
+      ctx: GraphQLContext
+    ) =>
+      wrap(async () => {
+        const student = getStudent(ctx);
+        return deleteChatSession(student.id, id);
+      }),
+
+    renameChatSession: (
+      _: unknown,
+      { id, title }: { id: number; title: string },
+      ctx: GraphQLContext
+    ) =>
+      wrap(async () => {
+        const student = getStudent(ctx);
+        return renameChatSession(student.id, id, title);
+      }),
+
+    // ── Core AI mutation ──────────────────────────────────────
     askLectureAgent: (
       _: unknown,
-      { input }: { input: { lectureId: number; question: string } },
+      { input }: { input: { lectureId: number; question: string; sessionId: number } },
       ctx: GraphQLContext
     ) =>
       wrap(async () => {
@@ -142,15 +174,17 @@ export const chatResolvers = {
         if (!input.question.trim()) {
           throw new GraphQLError('Question cannot be empty', { extensions: { code: 'BAD_REQUEST' } });
         }
-        logger.info(`[CHAT] Student "${student.email}" → lecture #${input.lectureId}: "${input.question.slice(0, 80)}"`);
+        logger.info(`[CHAT] "${student.email}" → session #${input.sessionId}: "${input.question.slice(0, 80)}"`);
         const { answer, sources } = await askLectureAgent({
           studentId: student.id,
           lectureId: input.lectureId,
           question:  input.question.trim(),
+          sessionId: input.sessionId,
         });
         return { answer, sources: sources.map(chunkToGql) };
       }),
 
+    // ── Legacy mutations ──────────────────────────────────────
     clearChat: (
       _: unknown,
       { lectureId }: { lectureId: number },

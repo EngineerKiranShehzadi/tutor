@@ -22,7 +22,7 @@ export const protect = async (
   try {
     const payload = verifyAccessToken(token);
     const { rows } = await query<Pick<import('../types').User, 'id' | 'name' | 'email' | 'role' | 'avatar_url'>>(
-      'SELECT id, name, email, role, avatar_url FROM users WHERE id = $1',
+      'SELECT id, name, email, role, avatar_url, google_id, created_at FROM users WHERE id = $1',
       [payload.userId]
     );
 

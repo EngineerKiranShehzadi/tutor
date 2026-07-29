@@ -36,8 +36,9 @@ export const ChatDrawer = ({
   isSpeechSupported = true,
 }: Props) => {
   const bottomRef = useRef<HTMLDivElement>(null);
-  const [recSecs, setRecSecs]           = useState(0);
-  const [confirmClear, setConfirmClear] = useState(false);
+  const [recSecs,       setRecSecs]       = useState(0);
+  const [confirmClear,  setConfirmClear]  = useState(false);
+  const [inputText,     setInputText]     = useState('');
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -180,6 +181,8 @@ export const ChatDrawer = ({
       {/* Input */}
       <ChatInput
         onSend={onSend}
+        value={inputText}
+        onChange={setInputText}
         isRecording={isRecording}
         onToggleRecord={onToggleRecord}
         recSeconds={recSecs}

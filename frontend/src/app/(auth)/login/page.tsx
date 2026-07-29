@@ -1,12 +1,13 @@
 'use client';
 import Link from 'next/link';
 import { useState, useRef, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { AxiosError } from 'axios';
 import { AuthCard } from '@/components/auth/AuthCard';
+import { Logo } from '@/components/ui/Logo';
 import { GoogleButton } from '@/components/auth/GoogleButton';
 import { OtpVerificationStep } from '@/components/auth/OtpVerificationStep';
 import { Input } from '@/components/ui/Input';
@@ -15,6 +16,7 @@ import { useLogin } from '@/hooks/useLogin';
 import { useResendLoginOtp } from '@/hooks/useResendLoginOtp';
 import { useVerifySignupOtp } from '@/hooks/useVerifySignupOtp';
 import { ForgotPasswordFlow } from '@/components/auth/ForgotPasswordFlow';
+import { useAuth } from '@/hooks/useAuth';
 
 type Mode = 'login' | 'forgot' | 'verify';
 
@@ -26,8 +28,13 @@ type FormData = z.infer<typeof schema>;
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [mode, setMode] = useState<Mode>('login');
-  const [serverError, setServerError] = useState('');
+  const [serverError, setServerError] = useState(
+    searchParams.get('error') === 'oauth_failed'
+      ? 'Google sign-in failed. Please try again or use email and password.'
+      : ''
+  );
 
   const [verifyEmail, setVerifyEmail] = useState('');
   const [verifyExpires, setVerifyExpires] = useState(0);
@@ -38,7 +45,15 @@ export default function LoginPage() {
   const [canResend, setCanResend] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  const { user, isLoading, setUser } = useAuth();
   const { login } = useLogin();
+
+  // Redirect already-logged-in users away from this page
+  useEffect(() => {
+    if (!isLoading && user) {
+      router.replace(user.role === 'ADMIN' ? '/admin/dashboard' : '/courses');
+    }
+  }, [user, isLoading, router]);
   const { resendOtp, isLoading: resendLoading, getErrorMessage: getResendError } = useResendLoginOtp();
   const { mutateAsync: verifyOtp, isLoading: verifyLoading } = useVerifySignupOtp();
   const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<FormData>({
@@ -88,6 +103,7 @@ export default function LoginPage() {
       const result = await login(data.email, data.password);
       if (result.status === 'AUTHENTICATED') {
         localStorage.setItem('accessToken', result.accessToken);
+        setUser(result.user);
         router.push(result.user.role === 'ADMIN' ? '/admin/dashboard' : '/courses');
       } else if (result.status === 'EMAIL_VERIFICATION_REQUIRED') {
         setVerifyEmail(result.email);
@@ -112,6 +128,7 @@ export default function LoginPage() {
     try {
       const result = await verifyOtp(verifyEmail, code);
       localStorage.setItem('accessToken', result.accessToken);
+      setUser(result.user);
       router.push(result.user.role === 'ADMIN' ? '/admin/dashboard' : '/courses');
     } catch (err: unknown) {
       const ae = err as any;
@@ -167,21 +184,20 @@ export default function LoginPage() {
     <AuthCard>
       {/* Mobile logo (hidden on md — left panel covers it) */}
       <div className="mb-8 md:hidden">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/logo.png" alt="AskAI Tutor" className="w-full object-contain" />
+        <Logo variant="light" className="h-10 w-auto" />
       </div>
 
       {/* Heading */}
-      <h1 className="text-[24px] font-bold text-slate-900 mb-1">Welcome back</h1>
-      <p className="text-[13px] text-slate-500 mb-6 leading-relaxed">
+      <h1 className="text-[30px] font-bold text-slate-900 mb-2">Welcome back</h1>
+      <p className="text-[15px] text-slate-500 mb-7 leading-relaxed">
         Please enter your credentials to access your dashboard.
       </p>
 
-      <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-5">
+      <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-6">
 
         {/* Email */}
         <div className="flex flex-col gap-1.5">
-          <label className="text-[13px] font-semibold text-slate-700">Email</label>
+          <label className="text-[15px] font-semibold text-slate-700">Email</label>
           <Input
             iconInField="fas fa-envelope"
             type="email"
@@ -195,11 +211,11 @@ export default function LoginPage() {
         {/* Password */}
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center justify-between">
-            <label className="text-[13px] font-semibold text-slate-700">Password</label>
+            <label className="text-[15px] font-semibold text-slate-700">Password</label>
             <button
               type="button"
               onClick={() => setMode('forgot')}
-              className="text-[12px] text-[#065fd4] hover:underline font-medium"
+              className="text-[13px] text-[#065fd4] hover:underline font-medium"
             >
               Forgot password?
             </button>
@@ -216,7 +232,7 @@ export default function LoginPage() {
         </div>
 
         {serverError && (
-          <div className="bg-red-50 border border-red-200 rounded-lg px-3.5 py-3 text-[13px] text-red-600 flex items-center gap-2">
+          <div className="bg-red-50 border border-red-200 rounded-lg px-3.5 py-3 text-[14px] text-red-600 flex items-center gap-2">
             <i className="fas fa-circle-exclamation shrink-0" /> {serverError}
           </div>
         )}
@@ -225,7 +241,7 @@ export default function LoginPage() {
           type="submit"
           size="lg"
           loading={isSubmitting}
-          className="mt-1 w-full rounded-lg py-3 text-[14px] font-semibold"
+          className="mt-1 w-full rounded-lg py-3.5 text-[16px] font-semibold"
         >
           Sign In
         </Button>
@@ -240,7 +256,7 @@ export default function LoginPage() {
       </form>
 
       {/* Footer */}
-      <p className="text-center text-[13px] text-slate-500 mt-7">
+      <p className="text-center text-[15px] text-slate-500 mt-7">
         New to AskAITutor?{' '}
         <Link href="/signup" className="text-[#065fd4] font-semibold hover:underline">
           Sign Up

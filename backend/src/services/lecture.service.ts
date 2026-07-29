@@ -109,3 +109,18 @@ export const updateLectureStatus = async (
     logger.info(`[LECTURE] Lecture #${id} status → ${status}`);
   }
 };
+
+export const updateLectureProgress = async (
+  id: number,
+  current: number,
+  total?: number
+): Promise<void> => {
+  if (total !== undefined) {
+    await query(
+      'UPDATE lectures SET progress_current = $1, progress_total = $2 WHERE id = $3',
+      [current, total, id]
+    );
+  } else {
+    await query('UPDATE lectures SET progress_current = $1 WHERE id = $2', [current, id]);
+  }
+};

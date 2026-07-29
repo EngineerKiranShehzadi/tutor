@@ -1,6 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
+import { Logo } from '@/components/ui/Logo';
 import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { cn } from '@/lib/cn';
@@ -14,32 +15,36 @@ export const Navbar = () => {
   const router   = useRouter();
   const pathname = usePathname();
 
-  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [dropdownOpen,  setDropdownOpen]  = useState(false);
+  const [bellOpen,      setBellOpen]      = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const bellRef     = useRef<HTMLDivElement>(null);
 
   const initials = user?.name?.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() ?? 'U';
 
-  // Close dropdown when clicking outside
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
         setDropdownOpen(false);
+      }
+      if (bellRef.current && !bellRef.current.contains(e.target as Node)) {
+        setBellOpen(false);
       }
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  // Close dropdown on route change
-  useEffect(() => { setDropdownOpen(false); }, [pathname]);
+  useEffect(() => { setDropdownOpen(false); setBellOpen(false); }, [pathname]);
 
   return (
-    <nav className="sticky top-0 z-50 bg-white border-b border-slate-200 flex items-center px-6 h-14 gap-4 shadow-sm">
-
+    <nav
+      className="sticky top-0 z-50 border-b border-white/10 flex items-center px-8 h-[80px] gap-4 bg-gradient-to-r from-slate-800 via-slate-700 to-indigo-800"
+      style={{ backdropFilter: 'blur(12px)' }}
+    >
       {/* Logo */}
       <Link href="/courses" className="flex items-center shrink-0">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/logo.png" alt="AskAI Tutor" className="h-12 w-auto object-contain" />
+        <Logo variant="dark" className="h-12 w-auto" />
       </Link>
 
       {/* Nav links */}
@@ -49,12 +54,12 @@ export const Navbar = () => {
           return (
             <Link key={href} href={href}
               className={cn(
-                'flex items-center gap-2 px-4 py-2 rounded-lg text-[15px] font-bold transition-colors',
+                'flex items-center gap-2 px-4 py-2 rounded-lg text-[18px] font-semibold transition-colors',
                 active
-                  ? 'bg-indigo-50 text-indigo-700'
-                  : 'text-slate-700 hover:bg-slate-100 hover:text-slate-900'
+                  ? 'bg-white/10 text-white'
+                  : 'text-slate-300 hover:bg-white/8 hover:text-white'
               )}>
-              <i className={cn(icon, 'text-[13px]')} />
+              <i className={cn(icon, 'text-[12px]')} />
               {label}
             </Link>
           );
@@ -68,10 +73,32 @@ export const Navbar = () => {
       <div className="flex items-center gap-2">
 
         {/* Notification bell */}
-        <button className="relative w-9 h-9 rounded-xl flex items-center justify-center bg-indigo-50 hover:bg-indigo-100 transition-colors text-indigo-500 border border-indigo-100">
-          <i className="fas fa-bell text-[14px]" />
-          <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-indigo-500 rounded-full border-2 border-white" />
-        </button>
+        <div className="relative" ref={bellRef}>
+          <button
+            onClick={() => { setBellOpen(v => !v); setDropdownOpen(false); }}
+            className="relative w-11 h-11 rounded-xl flex items-center justify-center hover:bg-white/10 transition-colors text-slate-300 hover:text-white border border-white/10"
+          >
+            <i className="fas fa-bell text-[18px]" />
+          </button>
+
+          {bellOpen && (
+            <div
+              className="absolute right-0 top-[calc(100%+8px)] w-72 rounded-2xl border border-white/10 shadow-2xl z-50 overflow-hidden"
+              style={{ background: 'linear-gradient(135deg,#1e293b,#312e81)', backdropFilter: 'blur(16px)' }}
+            >
+              <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
+                <span className="text-[14px] font-semibold text-white">Notifications</span>
+                <span className="text-[11px] text-slate-400">0 new</span>
+              </div>
+              <div className="flex flex-col items-center justify-center py-10 gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-white/8 flex items-center justify-center">
+                  <i className="fas fa-bell-slash text-slate-400 text-[20px]" />
+                </div>
+                <p className="text-[13px] text-slate-400">No recent notifications</p>
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* Profile dropdown */}
         <div className="relative" ref={dropdownRef}>
@@ -80,8 +107,8 @@ export const Navbar = () => {
             className={cn(
               'flex items-center gap-2 pl-2 pr-3 py-1.5 rounded-xl border transition-colors',
               dropdownOpen
-                ? 'bg-indigo-50 border-indigo-200'
-                : 'border-slate-200 hover:bg-slate-50'
+                ? 'bg-white/10 border-white/20'
+                : 'border-white/10 hover:bg-white/8 hover:border-white/20'
             )}
           >
             {/* Avatar */}
@@ -93,12 +120,12 @@ export const Navbar = () => {
                 className="w-8 h-8 rounded-lg object-cover shrink-0"
               />
             ) : (
-              <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white text-[12px] font-bold shrink-0">
+              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white text-[12px] font-bold shrink-0">
                 {initials}
               </div>
             )}
             <div className="text-left hidden sm:block">
-              <p className="text-[13px] font-semibold text-slate-800 leading-none">{user?.name}</p>
+              <p className="text-[14px] font-semibold text-white leading-none">{user?.name}</p>
               <p className="text-[11px] text-slate-400 mt-0.5">Student</p>
             </div>
             <i className={cn(
@@ -109,21 +136,24 @@ export const Navbar = () => {
 
           {/* Dropdown panel */}
           {dropdownOpen && (
-            <div className="absolute right-0 top-[calc(100%+6px)] w-56 bg-white rounded-2xl border border-slate-200 shadow-xl z-50 overflow-hidden">
+            <div
+              className="absolute right-0 top-[calc(100%+6px)] w-56 rounded-2xl border border-white/10 shadow-2xl z-50 overflow-hidden"
+              style={{ background: 'linear-gradient(135deg,#1e293b,#312e81)', backdropFilter: 'blur(16px)' }}
+            >
               {/* User info header */}
-              <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
+              <div className="px-4 py-3 border-b border-white/10" style={{ background: 'rgba(255,255,255,0.04)' }}>
                 <div className="flex items-center gap-2.5">
                   {user?.avatar_url ? (
                     /* eslint-disable-next-line @next/next/no-img-element */
                     <img src={user.avatar_url} alt={user?.name} className="w-9 h-9 rounded-xl object-cover shrink-0" />
                   ) : (
-                    <div className="w-9 h-9 rounded-xl bg-indigo-600 flex items-center justify-center text-white text-[13px] font-bold shrink-0">
+                    <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white text-[13px] font-bold shrink-0">
                       {initials}
                     </div>
                   )}
                   <div className="min-w-0">
-                    <p className="text-[13px] font-semibold text-slate-800 truncate">{user?.name}</p>
-                    <p className="text-[12px] text-slate-400 truncate">{user?.email}</p>
+                    <p className="text-[13px] font-semibold text-white truncate">{user?.name}</p>
+                    <p className="text-[11px] text-slate-400 truncate">{user?.email}</p>
                   </div>
                 </div>
               </div>
@@ -132,23 +162,23 @@ export const Navbar = () => {
               <div className="py-1.5">
                 <Link
                   href="/profile"
-                  className="flex items-center gap-3 px-4 py-2.5 text-[13px] text-slate-700 hover:bg-slate-50 transition-colors"
+                  className="flex items-center gap-3 px-4 py-2.5 text-[13px] text-slate-300 hover:bg-white/8 hover:text-white transition-colors"
                 >
-                  <div className="w-7 h-7 rounded-lg bg-indigo-50 flex items-center justify-center shrink-0">
-                    <i className="fas fa-user text-indigo-500 text-[11px]" />
+                  <div className="w-7 h-7 rounded-lg bg-white/10 flex items-center justify-center shrink-0">
+                    <i className="fas fa-user text-slate-300 text-[11px]" />
                   </div>
-                  My Profile
+                  Dashboard
                 </Link>
               </div>
 
               {/* Divider + logout */}
-              <div className="border-t border-slate-100 py-1.5">
+              <div className="border-t border-white/10 py-1.5">
                 <button
                   onClick={() => { setDropdownOpen(false); logout(); }}
-                  className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-red-600 hover:bg-red-50 transition-colors"
+                  className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-red-400 hover:bg-red-500/10 hover:text-red-300 transition-colors"
                 >
-                  <div className="w-7 h-7 rounded-lg bg-red-50 flex items-center justify-center shrink-0">
-                    <i className="fas fa-right-from-bracket text-red-500 text-[11px]" />
+                  <div className="w-7 h-7 rounded-lg bg-red-500/10 flex items-center justify-center shrink-0">
+                    <i className="fas fa-right-from-bracket text-red-400 text-[11px]" />
                   </div>
                   Sign Out
                 </button>

@@ -1,7 +1,7 @@
 import * as XLSX from 'xlsx';
 import { query } from '../config/database';
 import { generateEmbedding } from './embedding.service';
-import { updateLectureStatus } from './lecture.service';
+import { updateLectureStatus, updateLectureProgress } from './lecture.service';
 import { logger } from '../utils/logger';
 import { AppError } from '../middleware/errorHandler';
 
@@ -12,6 +12,7 @@ interface RawRow {
   start_time?: string;
   end_time?: string;
   keywords?: string;
+  llm_name?: string;
 }
 
 function buildChunkText(row: RawRow): string {
@@ -97,13 +98,16 @@ export async function processDataset(lectureId: number, buffer: Buffer): Promise
   await query('DELETE FROM lecture_qna_chunks WHERE lecture_id = $1', [lectureId]);
   logger.info(`[DATASET] 🗑️  Cleared old chunks for lecture #${lectureId}`);
 
+  await updateLectureProgress(lectureId, 0, validRows.length);
   const chunkIds: number[] = [];
-  for (const row of validRows) {
+  const total = validRows.length;
+  for (let i = 0; i < total; i++) {
+    const row = validRows[i];
     const chunkText = buildChunkText(row);
     const { rows: inserted } = await query<{ id: number }>(
       `INSERT INTO lecture_qna_chunks
-         (lecture_id, topic, question, answer, chunk_text, start_time, end_time, keywords)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         (lecture_id, topic, question, answer, chunk_text, start_time, end_time, keywords, llm_name)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
        RETURNING id`,
       [
         lectureId,
@@ -114,14 +118,20 @@ export async function processDataset(lectureId: number, buffer: Buffer): Promise
         String(row.start_time ?? '').trim() || null,
         String(row.end_time   ?? '').trim() || null,
         String(row.keywords   ?? '').trim() || null,
+        String(row.llm_name   ?? '').trim() || null,
       ]
     );
     chunkIds.push(inserted[0].id);
+    if ((i + 1) % 500 === 0 || i + 1 === total) {
+      logger.info(`[DATASET] 📥 Inserting chunks: ${i + 1}/${total}`);
+      await updateLectureProgress(lectureId, i + 1);
+    }
   }
   logger.info(`[DATASET] ✅ Inserted ${chunkIds.length} chunks for lecture #${lectureId}`);
 
   // EMBEDDING: generate and store embeddings
   await updateLectureStatus(lectureId, 'EMBEDDING');
+  await updateLectureProgress(lectureId, 0, validRows.length);
 
   let embeddedCount = 0;
   for (let i = 0; i < validRows.length; i++) {
@@ -129,20 +139,19 @@ export async function processDataset(lectureId: number, buffer: Buffer): Promise
       const embedding = await generateEmbedding(buildChunkText(validRows[i]));
       const vectorLiteral = `[${embedding.join(',')}]`;
       await query(
-        'UPDATE lecture_qna_chunks SET embedding = $1 WHERE id = $2',
+        'UPDATE lecture_qna_chunks SET local_embedding = $1::vector WHERE id = $2',
         [vectorLiteral, chunkIds[i]]
       );
       embeddedCount++;
-      logger.info(`[DATASET] Embedded chunk ${i + 1}/${validRows.length} (id=${chunkIds[i]})`);
-      // Small delay to stay within Gemini free-tier rate limits
-      await new Promise(r => setTimeout(r, 400));
+      await updateLectureProgress(lectureId, embeddedCount);
+      logger.info(`[DATASET] Embedded chunk ${embeddedCount}/${validRows.length} (id=${chunkIds[i]})`);
     } catch (err) {
       logger.error(`[DATASET] ❌ Failed to embed chunk ${i + 1} (id=${chunkIds[i]})`, err);
     }
   }
 
   if (embeddedCount === 0) {
-    await updateLectureStatus(lectureId, 'FAILED', 'All embeddings failed — check GEMINI_API_KEY');
+    await updateLectureStatus(lectureId, 'FAILED', 'All embeddings failed — is the embedding server running? python scripts/embedding_server.py');
     throw new AppError('Embedding generation failed for all chunks', 500);
   }
 

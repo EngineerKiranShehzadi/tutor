@@ -1,11 +1,55 @@
 import { Request, Response } from 'express';
 import { body } from 'express-validator';
+import * as https from 'https';
 import * as AuthService from '../services/auth.service';
 import { sendSuccess, sendError } from '../utils/response';
 import { asyncHandler } from '../middleware/errorHandler';
 import { AuthenticatedRequest } from '../types';
 import { env } from '../config/env';
 import { logger } from '../utils/logger';
+
+function httpsPost(url: string, body: string, headers: Record<string, string>): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    try {
+      const u = new URL(url);
+      const req = https.request({
+        hostname: u.hostname,
+        path: u.pathname + u.search,
+        method: 'POST',
+        family: 4,
+        headers: { ...headers, 'Content-Length': Buffer.byteLength(body) },
+      }, (res) => {
+        let data = '';
+        res.on('data', chunk => { data += chunk; });
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body: data }));
+      });
+      req.on('error', reject);
+      req.write(body);
+      req.end();
+    } catch (syncErr: unknown) {
+      reject(syncErr);
+    }
+  });
+}
+
+function httpsGet(url: string, headers: Record<string, string>): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const req = https.request({
+      hostname: u.hostname,
+      path: u.pathname + u.search,
+      method: 'GET',
+      family: 4,
+      headers,
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, body: data }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
 
 const COOKIE_OPTS = {
   httpOnly: true,
@@ -130,38 +174,55 @@ export const googleCallback = asyncHandler(async (req: Request, res: Response) =
   }
 
   // Exchange authorization code for tokens
-  const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body:    new URLSearchParams({
+  let tokenResult: { status: number; body: string };
+  try {
+    const tokenBody = new URLSearchParams({
       code,
       client_id:     CLIENT_ID,
       client_secret: CLIENT_SECRET,
       redirect_uri:  CALLBACK_URL,
       grant_type:    'authorization_code',
-    }),
-  });
-
-  if (!tokenRes.ok) {
-    logger.error(`[AUTH] Google token exchange failed: ${tokenRes.status}`);
+    }).toString();
+    tokenResult = await httpsPost(
+      'https://oauth2.googleapis.com/token',
+      tokenBody,
+      { 'Content-Type': 'application/x-www-form-urlencoded' },
+    );
+  } catch (err: unknown) {
+    const e = err as NodeJS.ErrnoException;
+    logger.error(`[AUTH] Google token exchange network error: ${e?.code ?? e?.message ?? String(err)}`);
     res.redirect(`${env.FRONTEND_URL}/login?error=oauth_failed`);
     return;
   }
 
-  const { access_token } = await tokenRes.json() as { access_token?: string };
+  if (tokenResult.status < 200 || tokenResult.status >= 300) {
+    logger.error(`[AUTH] Google token exchange failed: ${tokenResult.status} — ${tokenResult.body.slice(0, 200)}`);
+    res.redirect(`${env.FRONTEND_URL}/login?error=oauth_failed`);
+    return;
+  }
+
+  const { access_token } = JSON.parse(tokenResult.body) as { access_token?: string };
 
   // Get Google user profile
-  const profileRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
-    headers: { Authorization: `Bearer ${access_token}` },
-  });
-
-  if (!profileRes.ok) {
-    logger.error(`[AUTH] Google userinfo fetch failed: ${profileRes.status}`);
+  let profileResult: { status: number; body: string };
+  try {
+    profileResult = await httpsGet(
+      'https://www.googleapis.com/oauth2/v2/userinfo',
+      { Authorization: `Bearer ${access_token}` },
+    );
+  } catch (err: unknown) {
+    logger.error(`[AUTH] Google userinfo network error: ${(err as Error)?.message ?? String(err)}`);
     res.redirect(`${env.FRONTEND_URL}/login?error=oauth_failed`);
     return;
   }
 
-  const googleUser = await profileRes.json() as {
+  if (profileResult.status < 200 || profileResult.status >= 300) {
+    logger.error(`[AUTH] Google userinfo fetch failed: ${profileResult.status}`);
+    res.redirect(`${env.FRONTEND_URL}/login?error=oauth_failed`);
+    return;
+  }
+
+  const googleUser = JSON.parse(profileResult.body) as {
     id: string; name: string; email: string; picture?: string;
   };
 

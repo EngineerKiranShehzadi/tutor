@@ -1,7 +1,7 @@
 'use client';
 import Image from 'next/image';
 import { notFound } from 'next/navigation';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@apollo/client';
 import { GET_LECTURE, GET_LECTURES } from '@/graphql/lecture.queries';
 import { DBLecture } from '@/types';
@@ -42,11 +42,16 @@ export default function LecturePage({ params }: Props) {
     'AI Tutor'
   );
 
-  const bottomRef                         = useRef<HTMLDivElement>(null);
-  const prevAiCountRef                    = useRef(0);
-  const [recSecs,     setRecSecs]     = useState(0);
-  const [showSidebar, setShowSidebar] = useState(true);
-  const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
+  const bottomRef       = useRef<HTMLDivElement>(null);
+  const chatMessagesRef = useRef<HTMLDivElement>(null);
+  const [recSecs,       setRecSecs]       = useState(0);
+  const [showSidebar,   setShowSidebar]   = useState(true);
+  const [speakingMsgId, setSpeakingMsgId] = useState<string | null>(null);
+
+  // Clear speakingMsgId when TTS finishes
+  useEffect(() => {
+    if (!chat.isSpeaking) setSpeakingMsgId(null);
+  }, [chat.isSpeaking]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -58,16 +63,10 @@ export default function LecturePage({ params }: Props) {
     return () => clearInterval(id);
   }, [chat.isRecording]);
 
-  // Refresh sidebar after each new completed AI answer
-  useEffect(() => {
-    const aiCount = chat.messages.filter(
-      m => m.role === 'ai' && m.id !== 'welcome' && !m.isStreaming
-    ).length;
-    if (aiCount > prevAiCountRef.current) {
-      prevAiCountRef.current = aiCount;
-      setSidebarRefreshKey(k => k + 1);
-    }
-  }, [chat.messages]);
+  // When user clicks a session in the sidebar, switch to it
+  const handleSelectSession = useCallback((sessionId: number) => {
+    chat.selectSession(sessionId);
+  }, [chat.selectSession]);
 
   if (loading) {
     return (
@@ -195,77 +194,53 @@ export default function LecturePage({ params }: Props) {
           )}
         </div>
 
-        {/* ── RIGHT: Inline Chat ───────────────────── */}
+        {/* ── RIGHT: Chat + Sidebar — one unified panel ── */}
         <div
-          className="flex-1 min-w-0 bg-white rounded-xl border border-[var(--border)] shadow-md flex flex-col overflow-hidden relative"
+          className="flex flex-1 min-w-0 bg-white rounded-xl border border-[var(--border)] shadow-md overflow-hidden"
           style={{ height: 'calc(100vh - 100px)' }}
         >
+          {/* Chat panel */}
+          <div className="flex-1 min-w-0 flex flex-col overflow-hidden relative">
           {/* Chat header */}
-          <div className="flex items-center gap-2.5 px-4 py-3 border-b border-[var(--border)] shrink-0">
-            <div className="w-9 h-9 rounded-xl overflow-hidden shrink-0">
-              <Image src="/agent-avatar.png" alt="AI Tutor" width={36} height={36} className="object-cover w-full h-full" />
+          <div className="flex items-center gap-3 px-5 py-3.5 border-b border-[var(--border)] shrink-0">
+            <div className="w-11 h-11 rounded-xl overflow-hidden shrink-0">
+              <Image src="/agent-avatar.png" alt="AI Tutor" width={44} height={44} className="object-cover w-full h-full" />
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-[15px] font-bold text-[var(--text)]">{chat.agentName}</p>
-              <p className="text-[12px] text-[var(--muted)] truncate">
-                {chat.isNewSession ? 'New session — full history preserved' : `Scoped to: ${lecture.title}`}
+              <p className="text-[17px] font-bold text-[var(--text)]">{chat.agentName}</p>
+              <p className="text-[13px] text-[var(--muted)] truncate">
+                Scoped to: {lecture.title}
               </p>
             </div>
-
 
             {/* Auto-speak toggle */}
             <button
               onClick={chat.toggleAutoSpeak}
               title={chat.autoSpeak ? 'Auto-speak on — click to turn off' : 'Auto-speak off — click to turn on'}
               className={cn(
-                'w-8 h-8 rounded-xl flex items-center justify-center transition-colors',
+                'w-9 h-9 rounded-xl flex items-center justify-center transition-colors',
                 chat.autoSpeak
-                  ? 'bg-[var(--accent)] text-white'
-                  : 'bg-[var(--surface)] text-[var(--muted)] hover:bg-purple-50 hover:text-[var(--accent)]'
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-[var(--surface)] text-[var(--muted)] hover:bg-indigo-50 hover:text-indigo-600'
               )}
             >
-              <i className={`fas ${chat.autoSpeak ? 'fa-volume-high' : 'fa-volume-xmark'} text-[11px]`} />
+              <i className={`fas ${chat.autoSpeak ? 'fa-volume-high' : 'fa-volume-xmark'} text-[13px]`} />
             </button>
-
-            {/* Mode toggle */}
-            <div className="flex bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-0.5 gap-0.5">
-              {(['text', 'voice'] as const).map(m => {
-                const voiceDisabled = m === 'voice' && !chat.isSpeechSupported;
-                return (
-                  <button
-                    key={m}
-                    onClick={() => !voiceDisabled && chat.setMode(m)}
-                    disabled={voiceDisabled}
-                    title={voiceDisabled ? 'Voice requires Chrome or Edge' : undefined}
-                    className={cn(
-                      'px-3 py-1 rounded-xl text-[13px] font-semibold transition-all flex items-center gap-1.5',
-                      chat.mode === m ? 'bg-[var(--accent)] text-white' : 'text-[var(--muted)]',
-                      voiceDisabled && 'opacity-40 cursor-not-allowed'
-                    )}
-                  >
-                    <i className={m === 'text' ? 'fas fa-keyboard text-[10px]' : 'fas fa-microphone text-[10px]'} />
-                    {m.charAt(0).toUpperCase() + m.slice(1)}
-                  </button>
-                );
-              })}
-            </div>
-
           </div>
-
 
           {/* Speaking indicator */}
           {chat.isSpeaking && (
-            <div className="flex items-center gap-2 bg-blue-50 border-b border-blue-100 px-4 py-2 shrink-0">
-              <div className="flex items-end gap-[3px] h-4">
+            <div className="flex items-center gap-2 bg-indigo-50 border-b border-indigo-100 px-5 py-2.5 shrink-0">
+              <div className="flex items-end gap-[3px] h-5">
                 {[1,2,3,4].map(i => (
-                  <div key={i} className="w-[3px] bg-[var(--accent)] rounded-full animate-bounce"
+                  <div key={i} className="w-[3px] bg-indigo-600 rounded-full animate-bounce"
                     style={{ height: `${8 + i * 3}px`, animationDelay: `${i * 0.1}s` }} />
                 ))}
               </div>
-              <span className="text-[13px] font-semibold text-[var(--accent)] flex-1">AI Tutor is speaking…</span>
+              <span className="text-[14px] font-semibold text-indigo-700 flex-1">AI Tutor is speaking…</span>
               <button onClick={chat.stopSpeaking}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-100 hover:bg-blue-200 text-[var(--accent)] text-[12px] font-semibold transition-colors">
-                <i className="fas fa-stop text-[9px]" /> Stop
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-100 hover:bg-indigo-200 text-indigo-700 text-[13px] font-semibold transition-colors">
+                <i className="fas fa-stop text-[10px]" /> Stop
               </button>
             </div>
           )}
@@ -284,27 +259,31 @@ export default function LecturePage({ params }: Props) {
           ) : (
             <>
               {/* Messages */}
-              <div className="flex-1 overflow-y-auto px-4 py-3.5 flex flex-col gap-3">
+              <div ref={chatMessagesRef} className="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-4">
                 <div className="flex items-center justify-center">
-                  <span className="bg-[var(--surface)] text-[var(--muted)] text-[12px] px-3 py-1.5 rounded-xl flex items-center gap-1.5">
-                    <i className="fas fa-circle-check text-[var(--accent)] text-[10px]" />
-                    Agent ready — <strong className="text-[var(--accent)]">scoped to this lecture only</strong>
+                  <span className="bg-indigo-50 border border-indigo-100 text-indigo-700 text-[13px] font-medium px-4 py-2 rounded-xl flex items-center gap-2">
+                    <i className="fas fa-circle-check text-indigo-500 text-[11px]" />
+                    Agent ready — <strong>scoped to this lecture only</strong>
                   </span>
                 </div>
 
-                {chat.isLoadingHistory ? (
-                  <div className="flex items-center justify-center py-4">
-                    <div className="w-5 h-5 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
-                    <span className="ml-2 text-[13px] text-[var(--muted)]">Loading history…</span>
+                {chat.isLoadingSession ? (
+                  <div className="flex items-center justify-center py-6">
+                    <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                    <span className="ml-2.5 text-[14px] text-[var(--muted)]">Loading history…</span>
                   </div>
                 ) : (
                   chat.messages.map(msg => (
-                    <MessageBubble
-                      key={msg.id}
-                      message={msg}
-                      onSpeak={msg.role === 'ai' ? chat.speak : undefined}
-                      isSpeaking={chat.isSpeaking}
-                    />
+                    <div key={msg.id} data-msg-id={msg.id}>
+                      <MessageBubble
+                        message={msg}
+                        onSpeak={msg.role === 'ai' ? (text) => {
+                          setSpeakingMsgId(msg.id);
+                          chat.speak(text);
+                        } : undefined}
+                        isSpeaking={speakingMsgId === msg.id && chat.isSpeaking}
+                      />
+                    </div>
                   ))
                 )}
 
@@ -316,6 +295,8 @@ export default function LecturePage({ params }: Props) {
 
               <ChatInput
                 onSend={chat.sendMessage}
+                value={chat.inputText}
+                onChange={chat.setInputText}
                 isRecording={chat.isRecording}
                 onToggleRecord={chat.toggleRecording}
                 recSeconds={recSecs}
@@ -324,18 +305,23 @@ export default function LecturePage({ params }: Props) {
               />
             </>
           )}
-        </div>
+          </div>{/* end chat panel */}
 
-        {/* ── RIGHT: Chat History Sidebar ─────────── */}
-        {showSidebar ? (
-          <ChatSidebar
-            lectureId={lectureId}
-            onNewChat={chat.startNewSession}
-            isNewSession={chat.isNewSession}
-            refreshKey={sidebarRefreshKey}
-            onClose={() => setShowSidebar(false)}
-          />
-        ) : (
+          {/* Sidebar — integrated into the same card, separated by a border */}
+          {showSidebar && (
+            <ChatSidebar
+              lectureId={lectureId}
+              activeSessionId={chat.currentSessionId}
+              refreshKey={chat.sessionsRefreshKey}
+              onNewChat={chat.createNewSession}
+              onSelectSession={handleSelectSession}
+              onClose={() => setShowSidebar(false)}
+            />
+          )}
+        </div>{/* end unified panel */}
+
+        {/* Toggle button when sidebar is collapsed — sits outside the panel */}
+        {!showSidebar && (
           <button
             onClick={() => setShowSidebar(true)}
             title="Open chat history"

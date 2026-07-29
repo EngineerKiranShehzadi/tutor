@@ -5,14 +5,14 @@
 :root {
   --red:     #ff0000;
   --red2:    #cc0000;
-  --accent:  #065fd4;
+  --accent:  #4f46e5;
   --bg:      #f9f9f9;
-  --surface: #f2f2f2;
-  --border:  #e5e5e5;
+  --surface: #f4f4f8;
+  --border:  #e2e2ec;
   --text:    #0f0f0f;
   --muted:   #606060;
   --muted2:  #aaaaaa;
-  --purple:  #7c3aed;
+  --purple:  #4f46e5;
 }
 
 /* Auth pages — keep light-theme vars but switch accent/primary to blue */
@@ -29,10 +29,16 @@ body {
   color: var(--text);
 }
 
-/* Scrollbar */
+/* Scrollbar — global (thin, subtle) */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+/* Chat sidebar scrollbar — wider and more visible */
+.chat-sidebar-scroll::-webkit-scrollbar { width: 6px; }
+.chat-sidebar-scroll::-webkit-scrollbar-track { background: #f1f0f7; border-radius: 6px; }
+.chat-sidebar-scroll::-webkit-scrollbar-thumb { background: #c4b5fd; border-radius: 6px; }
+.chat-sidebar-scroll::-webkit-scrollbar-thumb:hover { background: #7c3aed; }
 
 /* Waveform animation */
 @keyframes wave {
@@ -60,3 +66,10 @@ body {
   50%      { opacity: 0.4; }
 }
 .pulse-dot { animation: pulse-dot 1s infinite; }
+
+/* Toast fade-in */
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in { animation: fade-in-up 0.25s ease-out both; }

@@ -1,11 +1,10 @@
 'use client';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import { Logo } from '@/components/ui/Logo';
 import { useRouter, usePathname } from 'next/navigation';
-import { useQuery } from '@apollo/client';
 import { useAuth } from '@/hooks/useAuth';
 import { cn } from '@/lib/cn';
-import { GET_LECTURE_AGENT_DETAILS } from '@/graphql/admin.queries';
 
 const NAV = [
   { href: '/admin/dashboard',     icon: 'fas fa-chart-pie',       label: 'Overview'           },
@@ -22,15 +21,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const { user, isLoading, logout } = useAuth();
   const router   = useRouter();
   const pathname = usePathname();
-  const [notifOpen,   setNotifOpen]   = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
-
-  const { data: agentData } = useQuery(GET_LECTURE_AGENT_DETAILS, {
-    fetchPolicy: 'network-only',
-    skip: isLoading || !user,
-  });
-  const failedAgents = (agentData?.lectureAgentDetails ?? []).filter((a: { status: string }) => a.status === 'FAILED');
-  const notifCount = failedAgents.length;
 
   useEffect(() => {
     if (isLoading) return;
@@ -39,7 +30,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   }, [user, isLoading, router]);
 
   // Close menus on route change
-  useEffect(() => { setNotifOpen(false); setUserMenuOpen(false); }, [pathname]);
+  useEffect(() => { setUserMenuOpen(false); }, [pathname]);
 
   if (isLoading || !user || user.role !== 'ADMIN') {
     return (
@@ -55,12 +46,11 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   return (
     <div className="min-h-screen flex bg-slate-50">
       {/* ── Sidebar ─────────────────────────────────── */}
-      <aside className="w-[240px] shrink-0 bg-slate-950 flex flex-col h-screen sticky top-0">
+      <aside className="w-[260px] shrink-0 bg-slate-950 flex flex-col h-screen sticky top-0">
         {/* Brand */}
         <div className="px-5 pt-6 pb-5 border-b border-slate-800">
           <Link href="/admin/dashboard" className="flex flex-col gap-1 group">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/logo.png" alt="AskAI Tutor" className="w-full object-contain" />
+            <Logo variant="dark" className="h-9 w-auto" />
             <p className="text-[13px] text-slate-500">Admin Console</p>
           </Link>
         </div>
@@ -101,7 +91,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
             <span className="text-[15px] font-semibold text-slate-300">System Online</span>
           </div>
-          <p className="text-[12px] text-slate-500">All services operational</p>
+          <p className="text-[13px] text-slate-500">All services operational</p>
         </div>
 
         {/* User menu trigger */}
@@ -194,67 +184,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
       {/* ── Main ────────────────────────────────────── */}
       <div className="flex-1 flex flex-col min-h-screen">
-        {/* Top bar */}
-        <header className="h-14 bg-white border-b border-slate-200 flex items-center px-6 shrink-0 sticky top-0 z-10">
-          <div className="flex items-center gap-2 text-[14px]">
-            <span className="text-slate-400">Admin</span>
-            <i className="fas fa-chevron-right text-[10px] text-slate-300" />
-            <span className="font-semibold text-slate-700 capitalize">
-              {pathname.split('/').filter(Boolean).pop()?.replace('-', ' ') ?? 'Dashboard'}
-            </span>
-          </div>
-          <div className="ml-auto flex items-center gap-3">
-            {/* Notification bell */}
-            <div className="relative">
-              <button
-                onClick={() => setNotifOpen(o => !o)}
-                className="relative w-9 h-9 rounded-xl bg-slate-100 hover:bg-slate-200 flex items-center justify-center transition-colors"
-              >
-                <i className="fas fa-bell text-slate-500 text-[14px]" />
-                {notifCount > 0 && (
-                  <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[9px] font-bold rounded-full flex items-center justify-center">
-                    {notifCount}
-                  </span>
-                )}
-              </button>
-              {notifOpen && (
-                <div className="absolute right-0 top-11 w-72 bg-white rounded-2xl border border-slate-200 shadow-xl z-50 overflow-hidden">
-                  <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
-                    <span className="text-[13px] font-bold text-slate-800">Notifications</span>
-                    <button onClick={() => setNotifOpen(false)} className="text-slate-400 hover:text-slate-600 text-[12px]"><i className="fas fa-xmark" /></button>
-                  </div>
-                  <div className="max-h-64 overflow-y-auto divide-y divide-slate-50">
-                    {notifCount === 0 ? (
-                      <div className="px-4 py-6 text-center text-[13px] text-slate-400">
-                        <i className="fas fa-check-circle text-emerald-400 text-xl mb-2 block" />
-                        All systems operational
-                      </div>
-                    ) : (
-                      failedAgents.map((a: { id: number; title: string }) => (
-                        <Link key={a.id} href={`/admin/lectures/${a.id}`} onClick={() => setNotifOpen(false)}
-                          className="flex items-start gap-3 px-4 py-3 hover:bg-slate-50 transition-colors">
-                          <div className="w-7 h-7 rounded-lg bg-red-100 flex items-center justify-center shrink-0 mt-0.5">
-                            <i className="fas fa-circle-exclamation text-red-500 text-[11px]" />
-                          </div>
-                          <div>
-                            <p className="text-[13px] font-semibold text-slate-800">Embedding Failed</p>
-                            <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">{a.title}</p>
-                          </div>
-                        </Link>
-                      ))
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-            <span className="text-[13px] text-slate-400 bg-slate-100 px-2.5 py-1 rounded-full font-medium">
-              <i className="fas fa-shield-halved mr-1 text-indigo-500" />
-              Admin
-            </span>
-          </div>
-        </header>
-
-        <main className="flex-1 p-7 overflow-auto [&>div]:mx-auto">
+        <main className="flex-1 p-8 overflow-auto">
           {children}
         </main>
       </div>

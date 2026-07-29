@@ -68,6 +68,8 @@ export interface Lecture {
   youtube_url: string;
   youtube_video_id: string | null;
   status: LectureStatus;
+  progress_current: number;
+  progress_total: number;
   created_at: Date;
   updated_at: Date;
 }

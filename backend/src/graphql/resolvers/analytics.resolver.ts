@@ -11,6 +11,7 @@ import {
   getLectureAgentDetails,
   getStudentJourney,
   getContentGaps,
+  getMyStats,
 } from '../../services/analytics.service';
 import { logger } from '../../utils/logger';
 
@@ -25,6 +26,13 @@ function requireAdmin(ctx: GraphQLContext) {
 
 export const analyticsResolvers = {
   Query: {
+    myStats: (_: unknown, __: unknown, ctx: GraphQLContext) => {
+      const user = (ctx.req as AuthenticatedRequest).user;
+      if (!user) throw new GraphQLError('Unauthorized', { extensions: { code: 'UNAUTHENTICATED' } });
+      logger.info(`[GRAPHQL] myStats query by "${user.email}"`);
+      return getMyStats(user.id);
+    },
+
     analyticsSummary: (_: unknown, __: unknown, ctx: GraphQLContext) => {
       requireAdmin(ctx);
       const user = (ctx.req as AuthenticatedRequest).user;

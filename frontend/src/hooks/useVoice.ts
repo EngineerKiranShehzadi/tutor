@@ -6,29 +6,45 @@ export type VoiceStatus = 'idle' | 'listening' | 'speaking';
 // Strip HTML tags before speaking
 const stripHtml = (html: string) => html.replace(/<[^>]*>/g, '');
 
-// Pick the best available male UK English TTS voice
+// Pick the best available MALE TTS voice — tutor style, clear for Pakistani students
+const MALE_VOICE_NAMES = [
+  'Microsoft Prabhat Online (Natural) - English (India)',    // en-IN-PrabhatNeural — ideal
+  'Microsoft Prabhat - English (India)',                      // older Windows, same voice
+  'Microsoft Ravi - English (India)',                         // older male Indian English
+  'Microsoft Guy Online (Natural) - English (United States)', // clear US male neural
+  'Microsoft Ryan Online (Natural) - English (United Kingdom)', // clear UK male neural
+  'Microsoft Davis Online (Natural) - English (United States)',
+  'Microsoft David Online (Natural) - English (United States)',
+  'Microsoft Mark Online (Natural) - English (United States)',
+  'Microsoft Thomas - English (United Kingdom)',
+  'Google UK English Male',
+  'Google US English',
+];
+
+const MALE_KEYWORDS = ['male', 'man', 'guy', 'david', 'mark', 'thomas', 'ryan',
+                       'prabhat', 'ravi', 'davis', 'fred', 'alex', 'daniel'];
+
 const getBestVoice = (): SpeechSynthesisVoice | null => {
   const voices = window.speechSynthesis.getVoices();
-  // Priority: male UK English → any UK English → any English
-  const preferred = [
-    'Google UK English Female',
-    'Microsoft Libby Online (Natural) - English (United Kingdom)',
-    'Microsoft Hazel - English (Great Britain)',
-    'Microsoft Sonia Online (Natural) - English (United Kingdom)',
-    'Serena',              // macOS UK female
-    'Karen',               // macOS Australian female (clear accent)
-    'Google US English',   // fallback
-  ];
-  for (const name of preferred) {
-    const v = voices.find((v) => v.name === name);
+
+  // 1. Exact name match from priority list
+  for (const name of MALE_VOICE_NAMES) {
+    const v = voices.find(v => v.name === name);
     if (v) return v;
   }
-  // Fallback: any en-GB voice, then any en voice
-  return (
-    voices.find((v) => v.lang === 'en-GB') ??
-    voices.find((v) => v.lang.startsWith('en')) ??
-    voices[0] ?? null
-  );
+
+  // 2. Any en-IN male voice by keyword heuristic
+  const enIN = voices.filter(v => v.lang === 'en-IN');
+  const maleEnIN = enIN.find(v => MALE_KEYWORDS.some(k => v.name.toLowerCase().includes(k)));
+  if (maleEnIN) return maleEnIN;
+
+  // 3. Any en-GB/en-US male voice by keyword heuristic
+  const enOther = voices.filter(v => v.lang === 'en-GB' || v.lang === 'en-US');
+  const maleEn = enOther.find(v => MALE_KEYWORDS.some(k => v.name.toLowerCase().includes(k)));
+  if (maleEn) return maleEn;
+
+  // 4. Any English voice as last resort
+  return voices.find(v => v.lang.startsWith('en')) ?? voices[0] ?? null;
 };
 
 interface Chunk { text: string; pause: number }
@@ -51,22 +67,23 @@ const toChunks = (text: string): Chunk[] => {
 };
 
 interface UseVoiceProps {
-  onTranscript: (text: string) => void;
+  // Called when recognition stops — populates the input field, does NOT submit
+  onTranscriptReady: (text: string) => void;
   enabled: boolean;
 }
 
-export const useVoice = ({ onTranscript, enabled }: UseVoiceProps) => {
+export const useVoice = ({ onTranscriptReady, enabled }: UseVoiceProps) => {
   const [status,      setStatus]      = useState<VoiceStatus>('idle');
   const [interimText, setInterimText] = useState('');
   const [isSupported, setIsSupported] = useState({ stt: false, tts: false });
 
-  const recognitionRef    = useRef<any>(null);
-  const silenceTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const finalRef          = useRef('');
-  const onTranscriptRef   = useRef(onTranscript);
-  const statusRef         = useRef<VoiceStatus>('idle');
+  const recognitionRef       = useRef<any>(null);
+  const silenceTimerRef      = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const finalRef             = useRef('');
+  const onTranscriptReadyRef = useRef(onTranscriptReady);
+  const statusRef            = useRef<VoiceStatus>('idle');
 
-  useEffect(() => { onTranscriptRef.current = onTranscript; }, [onTranscript]);
+  useEffect(() => { onTranscriptReadyRef.current = onTranscriptReady; }, [onTranscriptReady]);
   useEffect(() => { statusRef.current = status; }, [status]);
 
   useEffect(() => {
@@ -116,11 +133,12 @@ export const useVoice = ({ onTranscript, enabled }: UseVoiceProps) => {
       if (final) finalRef.current += final;
       setInterimText(finalRef.current + interim);
 
-      // Auto-submit after 1.5 s of silence
+      // After 1.5 s of silence: stop recording and put transcript into input field.
+      // The user must press Enter or click Send to submit — no auto-submit.
       clearSilence();
       silenceTimerRef.current = setTimeout(() => {
         const text = finalRef.current.trim();
-        if (text) { stopListening(); onTranscriptRef.current(text); }
+        if (text) { stopListening(); onTranscriptReadyRef.current(text); }
       }, 1500);
     };
 
@@ -145,8 +163,8 @@ export const useVoice = ({ onTranscript, enabled }: UseVoiceProps) => {
         if (idx >= chunks.length) { setStatus('idle'); return; }
         const { text, pause } = chunks[idx];
         const utter   = new SpeechSynthesisUtterance(text);
-        utter.lang    = 'en-GB';
-        utter.rate    = 0.82;
+        utter.lang    = 'en-IN';
+        utter.rate    = 0.85;
         utter.pitch   = 1.0;
         utter.volume  = 1.0;
         if (voice) utter.voice = voice;

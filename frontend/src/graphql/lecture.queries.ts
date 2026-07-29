@@ -24,6 +24,8 @@ export const GET_LECTURE = gql`
       youtubeUrl
       youtubeVideoId
       status
+      progressCurrent
+      progressTotal
       createdAt
       updatedAt
     }

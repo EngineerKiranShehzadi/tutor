@@ -7,12 +7,14 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { ApolloError } from '@apollo/client';
 import { AuthCard } from '@/components/auth/AuthCard';
+import { Logo } from '@/components/ui/Logo';
 import { GoogleButton } from '@/components/auth/GoogleButton';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { useSignup } from '@/hooks/useSignup';
 import { useResendSignupOtp } from '@/hooks/useResendSignupOtp';
 import { useVerifySignupOtp } from '@/hooks/useVerifySignupOtp';
+import { useAuth } from '@/hooks/useAuth';
 
 type Step = 'form' | 'otp';
 
@@ -40,10 +42,18 @@ const extractMessage = (err: unknown): string => {
 
 export default function SignupPage() {
   const router = useRouter();
+  const { user, isLoading } = useAuth();
   const [step, setStep] = useState<Step>('form');
   const [pendingEmail, setPendingEmail] = useState('');
   const [signupMessage, setSignupMessage] = useState('');
   const [serverError, setServerError] = useState('');
+
+  // Redirect already-logged-in users away from this page
+  useEffect(() => {
+    if (!isLoading && user) {
+      router.replace(user.role === 'ADMIN' ? '/admin/dashboard' : '/courses');
+    }
+  }, [user, isLoading, router]);
 
   const [digits, setDigits] = useState<string[]>(['', '', '', '', '']);
   const [otpError, setOtpError] = useState('');
@@ -204,8 +214,7 @@ export default function SignupPage() {
     <AuthCard>
       {/* Mobile logo */}
       <div className="mb-8 md:hidden">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/logo.png" alt="AskAI Tutor" className="w-full object-contain" />
+        <Logo variant="light" className="h-10 w-auto" />
       </div>
 
       {/* Heading */}

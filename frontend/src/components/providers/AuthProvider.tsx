@@ -27,9 +27,14 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         setUser(data.data);
         console.log(`[AUTH] ✅ Session restored: ${data.data.email} (${data.data.role})`);
       })
-      .catch(() => {
-        localStorage.removeItem('accessToken');
-        console.warn('[AUTH] ⚠️ Token invalid or expired, cleared');
+      .catch((err) => {
+        const status = err?.response?.status;
+        if (status === 401 || status === 403) {
+          localStorage.removeItem('accessToken');
+          console.warn('[AUTH] ⚠️ Token invalid or expired, cleared');
+        } else {
+          console.warn('[AUTH] ⚠️ Could not reach server, keeping token for retry');
+        }
       })
       .finally(() => setLoading(false));
   }, []);

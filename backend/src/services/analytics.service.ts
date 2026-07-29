@@ -306,18 +306,149 @@ export const getContentGaps = async () => {
     const coverageScore = total > 0 ? Math.round((covered.length / total) * 100) : 100;
     const status = coverageScore >= 70 ? 'GOOD' : coverageScore >= 40 ? 'MODERATE' : 'POOR';
 
+    // Per-question coverage: a question is "answered from lecture" if ANY of its keywords
+    // appear in the chunk vocabulary, otherwise it was unanswerable from lecture content
+    let answeredFromLecture = 0;
+    let notInLecture = 0;
+    for (const q of questions) {
+      const qKeywords = tokenize(q);
+      const hasMatch = [...qKeywords].some(kw => chunkVocab.has(kw));
+      if (hasMatch) answeredFromLecture++;
+      else notInLecture++;
+    }
+
     results.push({
       lectureId,
-      lectureTitle:   title,
-      questionsAsked: questions.length,
+      lectureTitle:        title,
+      questionsAsked:      questions.length,
       chunkCount,
       coverageScore,
-      gapTopics:     gaps.slice(0, 20),
-      coveredTopics: covered.slice(0, 20),
+      gapTopics:           gaps.slice(0, 20),
+      coveredTopics:       covered.slice(0, 20),
       status,
+      answeredFromLecture,
+      notInLecture,
     });
   }
 
   // Sort by worst coverage first so admin sees biggest gaps at top
   return results.sort((a, b) => a.coverageScore - b.coverageScore);
+};
+
+export const getMyStats = async (studentId: string) => {
+  const [
+    totalQs, totalSessions, lecturesEngaged, totalAvailableLectures,
+    lastActiveRes, memberSinceRes, weekQs, lastWeekQs, topicRes,
+    streakRes, dailyRes, lectureBreakdownRes, peakHourRes,
+  ] = await Promise.all([
+    query<{ count: string }>(
+      `SELECT COUNT(*) FROM student_questions WHERE student_id = $1`, [studentId]
+    ),
+    query<{ count: string }>(
+      `SELECT COUNT(*) FROM chat_sessions WHERE student_id = $1`, [studentId]
+    ),
+    query<{ count: string }>(
+      `SELECT COUNT(DISTINCT lecture_id) FROM student_questions WHERE student_id = $1`, [studentId]
+    ),
+    query<{ count: string }>(
+      `SELECT COUNT(*) FROM lectures`
+    ),
+    query<{ last_active: Date | null }>(
+      `SELECT GREATEST(
+         (SELECT MAX(created_at) FROM student_questions WHERE student_id = $1),
+         (SELECT MAX(created_at) FROM chat_history    WHERE student_id = $1)
+       ) AS last_active`, [studentId]
+    ),
+    query<{ created_at: Date }>(
+      `SELECT created_at FROM users WHERE id = $1`, [studentId]
+    ),
+    query<{ count: string }>(
+      `SELECT COUNT(*) FROM student_questions WHERE student_id = $1 AND created_at >= NOW() - INTERVAL '7 days'`, [studentId]
+    ),
+    query<{ count: string }>(
+      `SELECT COUNT(*) FROM student_questions WHERE student_id = $1 AND created_at >= NOW() - INTERVAL '14 days' AND created_at < NOW() - INTERVAL '7 days'`, [studentId]
+    ),
+    query<{ title: string; cnt: string }>(
+      `SELECT l.title, COUNT(sq.id)::text AS cnt
+       FROM student_questions sq
+       JOIN lectures l ON l.id = sq.lecture_id
+       WHERE sq.student_id = $1
+       GROUP BY l.title ORDER BY cnt DESC LIMIT 1`, [studentId]
+    ),
+    query<{ day: string }>(
+      `SELECT DISTINCT DATE(created_at) AS day
+       FROM student_questions WHERE student_id = $1
+       ORDER BY day DESC`, [studentId]
+    ),
+    query<{ day: string; count: string }>(
+      `SELECT DATE(created_at)::text AS day, COUNT(*)::text AS count
+       FROM student_questions
+       WHERE student_id = $1 AND created_at >= NOW() - INTERVAL '7 days'
+       GROUP BY day ORDER BY day ASC`, [studentId]
+    ),
+    query<{ lecture_id: number; title: string; cnt: string }>(
+      `SELECT l.id AS lecture_id, l.title, COUNT(sq.id)::text AS cnt
+       FROM student_questions sq
+       JOIN lectures l ON l.id = sq.lecture_id
+       WHERE sq.student_id = $1
+       GROUP BY l.id, l.title ORDER BY cnt DESC LIMIT 6`, [studentId]
+    ),
+    query<{ hour: string; count: string }>(
+      `SELECT EXTRACT(HOUR FROM created_at)::text AS hour, COUNT(*)::text AS count
+       FROM student_questions WHERE student_id = $1
+       GROUP BY hour ORDER BY count DESC LIMIT 1`, [studentId]
+    ),
+  ]);
+
+  // Compute streak — compare ISO date strings in UTC to avoid timezone mismatch
+  // DB returns DATE(created_at) as "YYYY-MM-DD" in UTC; we compare using UTC dates too.
+  const dayStrings = streakRes.rows.map(r => String(r.day).slice(0, 10));
+  let streak = 0;
+  const nowMs = Date.now();
+  const MS_DAY = 86400000;
+  for (let i = 0; i < dayStrings.length; i++) {
+    const expectedStr = new Date(nowMs - i * MS_DAY).toISOString().split('T')[0];
+    if (dayStrings[i] === expectedStr) streak++;
+    else break;
+  }
+
+  // Build 7-day activity array using UTC dates (consistent with DB DATE() output)
+  const dailyMap = new Map(dailyRes.rows.map(r => [r.day, parseInt(r.count, 10)]));
+  const weeklyActivity = Array.from({ length: 7 }, (_, i) => {
+    const dateStr = new Date(nowMs - (6 - i) * MS_DAY).toISOString().split('T')[0];
+    const d = new Date(dateStr + 'T12:00:00Z'); // noon UTC → stable weekday name
+    return {
+      day:   d.toLocaleDateString('en-US', { weekday: 'short' }),
+      date:  dateStr,
+      count: dailyMap.get(dateStr) ?? 0,
+    };
+  });
+
+  const weekCount = parseInt(weekQs.rows[0]?.count ?? '0', 10);
+  let activityBadge = 'Newcomer';
+  if (weekCount >= 20) activityBadge = 'Power Learner';
+  else if (weekCount >= 10) activityBadge = 'Active Learner';
+  else if (weekCount >= 3)  activityBadge = 'Regular';
+  else if (weekCount >= 1)  activityBadge = 'Getting Started';
+
+  return {
+    totalQuestions:          parseInt(totalQs.rows[0]?.count ?? '0', 10),
+    totalSessions:           parseInt(totalSessions.rows[0]?.count ?? '0', 10),
+    lecturesEngaged:         parseInt(lecturesEngaged.rows[0]?.count ?? '0', 10),
+    totalAvailableLectures:  parseInt(totalAvailableLectures.rows[0]?.count ?? '0', 10),
+    lastActive:              lastActiveRes.rows[0]?.last_active?.toISOString() ?? null,
+    memberSince:             memberSinceRes.rows[0]?.created_at?.toISOString() ?? null,
+    learningStreak:          streak,
+    mostAskedTopic:          topicRes.rows[0]?.title ?? null,
+    activityBadge,
+    thisWeekQuestions:       weekCount,
+    lastWeekQuestions:       parseInt(lastWeekQs.rows[0]?.count ?? '0', 10),
+    weeklyActivity,
+    lectureBreakdown:        lectureBreakdownRes.rows.map(r => ({
+      lectureId:    r.lecture_id,
+      lectureTitle: r.title,
+      count:        parseInt(r.cnt, 10),
+    })),
+    peakHour: peakHourRes.rows[0] ? parseInt(peakHourRes.rows[0].hour, 10) : null,
+  };
 };

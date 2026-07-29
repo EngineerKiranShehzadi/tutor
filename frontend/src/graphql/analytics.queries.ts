@@ -85,6 +85,8 @@ export const GET_CONTENT_GAPS = gql`
       gapTopics
       coveredTopics
       status
+      answeredFromLecture
+      notInLecture
     }
   }
 `;
@@ -98,6 +100,28 @@ export const GET_REGISTERED_STUDENTS = gql`
       createdAt
       questionCount
       status
+    }
+  }
+`;
+
+
+export const MY_STATS_QUERY = gql`
+  query MyStats {
+    myStats {
+      totalQuestions
+      totalSessions
+      lecturesEngaged
+      totalAvailableLectures
+      lastActive
+      memberSince
+      learningStreak
+      mostAskedTopic
+      activityBadge
+      thisWeekQuestions
+      lastWeekQuestions
+      weeklyActivity { day date count }
+      lectureBreakdown { lectureId lectureTitle count }
+      peakHour
     }
   }
 `;

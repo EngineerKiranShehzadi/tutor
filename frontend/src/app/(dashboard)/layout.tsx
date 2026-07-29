@@ -1,12 +1,16 @@
 'use client';
 import { useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { Navbar } from '@/components/layout/Navbar';
 
+// Pages that manage their own layout (sidebar) — no top Navbar
+const NO_NAVBAR_PATHS = ['/profile'];
+
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth();
-  const router = useRouter();
+  const router   = useRouter();
+  const pathname = usePathname();
 
   useEffect(() => {
     if (isLoading) return;
@@ -27,9 +31,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     );
   }
 
+  const hideNavbar = NO_NAVBAR_PATHS.some(p => pathname === p || pathname.startsWith(p + '/'));
+
   return (
     <div className="min-h-screen bg-[var(--bg)]">
-      <Navbar />
+      {!hideNavbar && <Navbar />}
       {children}
     </div>
   );

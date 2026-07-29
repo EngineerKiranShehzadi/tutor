@@ -25,14 +25,16 @@ export const typeDefs = `#graphql
 
   # ── Lecture ───────────────────────────────────────────
   type Lecture {
-    id:             String!
-    title:          String!
-    description:    String
-    youtubeUrl:     String!
-    youtubeVideoId: String
-    status:         String!
-    createdAt:      String!
-    updatedAt:      String!
+    id:              String!
+    title:           String!
+    description:     String
+    youtubeUrl:      String!
+    youtubeVideoId:  String
+    status:          String!
+    progressCurrent: Int!
+    progressTotal:   Int!
+    createdAt:       String!
+    updatedAt:       String!
   }
 
   input CreateLectureInput {
@@ -51,6 +53,16 @@ export const typeDefs = `#graphql
   input AskLectureAgentInput {
     lectureId: Int!
     question:  String!
+    sessionId: Int!
+  }
+
+  type ChatSession {
+    id:            Int!
+    title:         String!
+    messageCount:  Int!
+    firstQuestion: String
+    createdAt:     String!
+    updatedAt:     String!
   }
 
   type ChunkSource {
@@ -73,11 +85,12 @@ export const typeDefs = `#graphql
   }
 
   type ChatHistoryEntry {
-    id:        Int!
-    question:  String!
-    answer:    String!
-    sources:   [ChunkSource!]!
-    createdAt: String!
+    id:           Int!
+    question:     String!
+    answer:       String!
+    sources:      [ChunkSource!]!
+    createdAt:    String!
+    displayLabel: String
   }
 
   # ── Analytics ─────────────────────────────────────────
@@ -182,20 +195,60 @@ export const typeDefs = `#graphql
 
   # ── Content Gap ────────────────────────────────────────
   type LectureGapAnalysis {
-    lectureId:      Int!
-    lectureTitle:   String!
-    questionsAsked: Int!
-    chunkCount:     Int!
-    coverageScore:  Float!
-    gapTopics:      [String!]!
-    coveredTopics:  [String!]!
-    status:         String!
+    lectureId:           Int!
+    lectureTitle:        String!
+    questionsAsked:      Int!
+    chunkCount:          Int!
+    coverageScore:       Float!
+    gapTopics:           [String!]!
+    coveredTopics:       [String!]!
+    status:              String!
+    answeredFromLecture: Int!
+    notInLecture:        Int!
+  }
+
+  type DayActivity {
+    day:   String!
+    date:  String!
+    count: Int!
+  }
+
+  type LectureActivity {
+    lectureId:    Int!
+    lectureTitle: String!
+    count:        Int!
+  }
+
+  type RecentStudentQuestion {
+    question:     String!
+    lectureTitle: String!
+    createdAt:    String!
+  }
+
+  type StudentStats {
+    totalQuestions:         Int!
+    totalSessions:          Int!
+    lecturesEngaged:        Int!
+    totalAvailableLectures: Int!
+    lastActive:             String
+    memberSince:            String
+    learningStreak:         Int!
+    mostAskedTopic:         String
+    activityBadge:          String!
+    thisWeekQuestions:      Int!
+    lastWeekQuestions:      Int!
+    weeklyActivity:         [DayActivity!]!
+    lectureBreakdown:       [LectureActivity!]!
+    peakHour:               Int
   }
 
   # ── Queries ───────────────────────────────────────────
   type Query {
+    myStats: StudentStats!
     lectures:                        [Lecture!]!
     lecture(id: String!):            Lecture!
+    chatSessions(lectureId: Int!):                                            [ChatSession!]!
+    sessionHistory(sessionId: Int!):                                          [ChatHistoryEntry!]!
     chatHistory(lectureId: Int!):                                            [ChatHistoryEntry!]!
     paginatedChatHistory(lectureId: Int!, limit: Int!, offset: Int!):        ChatHistoryPage!
     searchChatHistory(lectureId: Int!, query: String!):                      [ChatHistoryEntry!]!
@@ -225,6 +278,9 @@ export const typeDefs = `#graphql
     deleteLecture(id: String!):                                   Boolean!
     askLectureAgent(input: AskLectureAgentInput!):                ChatAnswerResponse!
     clearChat(lectureId: Int!):                                   SuccessResponse!
+    createChatSession(lectureId: Int!):                           ChatSession!
+    deleteChatSession(id: Int!):                                  Boolean!
+    renameChatSession(id: Int!, title: String!):                  Boolean!
     deleteChatEntry(id: Int!):                                    Boolean!
     renameChatEntry(id: Int!, label: String!):                    Boolean!
     deleteUser(id: String!):                                      Boolean!
