@@ -25,11 +25,11 @@ export function ObservabilityTabs() {
             role="tab"
             aria-selected={active}
             className={cn(
-              'flex items-center gap-2 px-4 py-3 text-[13px] font-semibold border-b-2 whitespace-nowrap transition-colors',
+              'flex items-center gap-2 px-4 py-3 text-[18px] font-semibold border-b-2 whitespace-nowrap transition-colors',
               active ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-200'
             )}
           >
-            <i className={cn(tab.icon, 'text-[12px]')} />
+            <i className={cn(tab.icon, 'text-[17px]')} />
             {tab.label}
           </Link>
         );
