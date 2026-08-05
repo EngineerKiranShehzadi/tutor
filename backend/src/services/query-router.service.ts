@@ -122,9 +122,18 @@ const classifyWithGemini = async (question: string, timeoutMs: number): Promise<
     });
 
     const result = await withGeminiDiagnostic(
-      { operationType: 'ROUTE_CLASSIFICATION', model: 'gemini-2.5-flash' },
+      {
+        spanName: 'gemini_router_call',
+        operationType: 'ROUTE_CLASSIFICATION',
+        model: 'gemini-2.5-flash',
+        invocationParams: { temperature: 0, maxOutputTokens: 64, timeoutMs },
+      },
       () => model.generateContent(`Student message:\n${question}`, { timeout: timeoutMs }),
-      r => ({ input: r.response.usageMetadata?.promptTokenCount, output: r.response.usageMetadata?.candidatesTokenCount })
+      r => ({
+        input: r.response.usageMetadata?.promptTokenCount,
+        output: r.response.usageMetadata?.candidatesTokenCount,
+        finishReason: r.response.candidates?.[0]?.finishReason,
+      })
     );
     return parseRouteResponse(result.response.text());
   } catch (err) {

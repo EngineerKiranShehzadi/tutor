@@ -91,9 +91,5 @@ export const datasetApi = {
   },
 };
 
-export const observabilityApi = {
-  listRagTraces: (limit = 50) =>
-    api.get(`/observability/rag-traces?limit=${limit}`),
-  getRagTraceSpans: (traceId: string) =>
-    api.get(`/observability/rag-traces/${traceId}`),
-};
+// Observability API calls live in ./observability-api.ts (kept separate —
+// see that file — so this one doesn't grow into an unmaintainable catch-all).

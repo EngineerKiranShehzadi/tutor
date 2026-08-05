@@ -26,7 +26,6 @@ import {
   AskLectureAgentDeps,
 } from '../services/chat.service';
 import { checkLiveness, checkReadiness } from '../observability/health.service';
-import { exportTraceToPhoenix } from '../observability/phoenix';
 import { withGeminiDiagnostic } from '../observability/gemini-diagnostics';
 import type { FinishedTrace } from '../observability/types';
 
@@ -38,6 +37,15 @@ if (!env.GEMINI_API_KEY) {
 interface CaseResult { pass: boolean; skip?: boolean; detail?: string; }
 interface Case { label: string; run: () => Promise<CaseResult>; }
 const cases: Case[] = [];
+
+// Invokes the locally-installed ts-node binary directly rather than via
+// `npx` (used by cases 8 and 9 below) — `npx` re-enters the full npm CLI
+// (including its background update-notifier network check), which
+// occasionally receives a non-JSON response in this environment and
+// crashes the child with an unhandled rejection unrelated to anything
+// under test. The local binary is a plain node process with no such side
+// channel.
+const TS_NODE_BIN = path.join(__dirname, '..', '..', 'node_modules', '.bin', 'ts-node');
 
 const fakeChunk = (id: number, lectureId: number, overrides: Partial<QnaChunk> = {}): QnaChunk => ({
   id, lecture_id: lectureId, topic: 'Test', question: 'Q', answer: 'A',
@@ -96,7 +104,7 @@ async function runTracingChecks(): Promise<Record<string, CaseResult>> {
     {
       const { trace } = await withTrace('OBSTEST DISTINCTIVE_QUESTION_TOKEN_XY9 fact question', factDeps, ctx);
       const names = spanNames(trace);
-      const expected = ['load-session-history', 'classify-query-route', 'exact-memory-lookup', 'vector-search', 'rerank-candidates', 'generate-grounded-answer', 'save-chat-entry'];
+      const expected = ['load-session-history', 'classify-query-route', 'exact-memory-lookup', 'vector-search', 'rerank-candidates', 'generate-grounded-answer', 'save-chat-entry', 'write-answer-memory'];
       results['1'] = { pass: trace.rootName === 'ask-lecture-agent' && typeof trace.traceId === 'string' && trace.traceId.length > 0 && trace.status === 'SUCCESS', detail: `root="${trace.rootName}" status=${trace.status}` };
       results['2'] = { pass: JSON.stringify(names) === JSON.stringify(expected), detail: `spans=${JSON.stringify(names)}` };
     }
@@ -236,11 +244,31 @@ async function runTracingChecks(): Promise<Record<string, CaseResult>> {
 cases.push({
   label: '8. Tracing disabled results in no Phoenix export attempt',
   run: async () => {
-    // Default env: OBSERVABILITY_ENABLED is unset -> false.
-    const start = Date.now();
-    await exportTraceToPhoenix({ traceId: 't1', rootName: 'ask-lecture-agent', startedAt: Date.now(), durationMs: 5, status: 'SUCCESS', attributes: {}, spans: [] });
-    const elapsedMs = Date.now() - start;
-    return { pass: !env.OBSERVABILITY.ENABLED && elapsedMs < 50, detail: `OBSERVABILITY.ENABLED=${env.OBSERVABILITY.ENABLED}, elapsedMs=${elapsedMs}` };
+    // Must not depend on this developer's .env (which may set
+    // OBSERVABILITY_ENABLED=true for local Phoenix testing). Force the
+    // disabled state explicitly in an isolated child process — same
+    // pattern as case 9 below — so this assertion is deterministic
+    // regardless of the current process's already-loaded env/module cache.
+    try {
+      const out = execSync(
+        `OBSERVABILITY_ENABLED=false PHOENIX_ENABLED=false "${TS_NODE_BIN}" --transpile-only -e "
+          const { env } = require('./src/config/env');
+          const { exportTraceToPhoenix } = require('./src/observability/phoenix');
+          const start = Date.now();
+          exportTraceToPhoenix({ traceId: 't1', rootSpanId: 'r1', rootName: 'ask-lecture-agent', startedAt: Date.now(), durationMs: 5, status: 'SUCCESS', attributes: {}, spans: [] }).then(() => {
+            const elapsedMs = Date.now() - start;
+            console.log('RESULT:' + JSON.stringify({ enabled: env.OBSERVABILITY.ENABLED, elapsedMs }));
+          });
+        "`,
+        { cwd: path.join(__dirname, '..', '..'), timeout: 20000, encoding: 'utf8' }
+      );
+      const match = out.match(/RESULT:(\{.*\})/);
+      if (!match) return { pass: false, detail: `no RESULT line in output: ${out.trim().slice(-200)}` };
+      const { enabled, elapsedMs } = JSON.parse(match[1]);
+      return { pass: enabled === false && elapsedMs < 50, detail: `OBSERVABILITY.ENABLED=${enabled}, elapsedMs=${elapsedMs}` };
+    } catch (err) {
+      return { pass: false, detail: `child process failed: ${(err as Error).message.slice(0, 200)}` };
+    }
   },
 });
 
@@ -249,7 +277,7 @@ cases.push({
   run: async () => {
     try {
       const out = execSync(
-        `OBSERVABILITY_ENABLED=true PHOENIX_ENABLED=true PHOENIX_ENDPOINT= npx ts-node --transpile-only -e "
+        `OBSERVABILITY_ENABLED=true PHOENIX_ENABLED=true PHOENIX_ENDPOINT= "${TS_NODE_BIN}" --transpile-only -e "
           require('./src/observability/phoenix').exportTraceToPhoenix({
             traceId: 't2', rootName: 'ask-lecture-agent', startedAt: Date.now(), durationMs: 1, status: 'SUCCESS', attributes: {}, spans: []
           }).then(() => console.log('SAFE_COMPLETION')).catch(e => console.log('THREW:' + e.message));
@@ -271,7 +299,7 @@ cases.push({
     process.stdout.write = ((chunk: string) => { loggedLine += chunk; return true; }) as typeof process.stdout.write;
     try {
       await withGeminiDiagnostic(
-        { operationType: 'QUERY_REWRITE', model: 'gemini-2.5-flash' },
+        { spanName: 'gemini_rewriter_call', operationType: 'QUERY_REWRITE', model: 'gemini-2.5-flash' },
         async () => ({ response: { usageMetadata: { promptTokenCount: 12, candidatesTokenCount: 34 } } })
       );
     } finally {

@@ -2,7 +2,7 @@ import { query } from '../config/database';
 import { QnaChunk } from '../types';
 import { logger } from '../utils/logger';
 
-const SIMILARITY_THRESHOLD = 0.55;
+export const SIMILARITY_THRESHOLD = 0.55;
 
 // Searches only the specified lecture's chunks using pgvector cosine similarity
 export const searchChunks = async (

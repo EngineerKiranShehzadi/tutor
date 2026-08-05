@@ -77,19 +77,29 @@ export const env = {
     // PHOENIX_ENABLED is also true.
     ENABLED: optional('OBSERVABILITY_ENABLED', 'false') === 'true',
     SAMPLE_RATE: parseFloat(optional('OBSERVABILITY_SAMPLE_RATE', '1')),
-    // Opt-in, development-only content capture (truncated question/answer
-    // previews on spans). Forced off in production regardless of this flag.
+    // Opt-in content capture (truncated question/answer/chunk previews on
+    // spans and in admin trace detail). Independent of NODE_ENV — operators
+    // decide per-environment; see MAX_CONTENT_LENGTH for the truncation cap.
     CAPTURE_CONTENT: optional('OBSERVABILITY_CAPTURE_CONTENT', 'false') === 'true',
+    MAX_CONTENT_LENGTH: parseInt(optional('OBSERVABILITY_MAX_CONTENT_LENGTH', '20000'), 10),
     RETENTION_DAYS: parseInt(optional('OBSERVABILITY_RETENTION_DAYS', '30'), 10),
 
     PHOENIX_ENABLED:  optional('PHOENIX_ENABLED', 'false') === 'true',
-    PHOENIX_ENDPOINT: optional('PHOENIX_ENDPOINT', ''),
+    // OTLP trace-ingestion endpoint (export path). PHOENIX_OTLP_ENDPOINT is
+    // the preferred name; PHOENIX_ENDPOINT is kept as a back-compat alias
+    // for existing .env files/deployments that already set it.
+    PHOENIX_ENDPOINT: optional('PHOENIX_OTLP_ENDPOINT', optional('PHOENIX_ENDPOINT', '')),
     // Root URL of the Phoenix server itself (no /v1/traces suffix) — used
-    // by phoenix-query.service.ts to read traces back for the admin UI.
-    // Separate from PHOENIX_ENDPOINT because that one is the OTLP ingest
-    // path, not the server root.
+    // by the observability query layer to read traces back for the admin
+    // UI. Separate from PHOENIX_ENDPOINT/PHOENIX_OTLP_ENDPOINT above,
+    // which are the OTLP ingest path, not the server root.
     PHOENIX_BASE_URL:    optional('PHOENIX_BASE_URL', 'http://localhost:6006'),
     PHOENIX_PROJECT_NAME: optional('PHOENIX_PROJECT_NAME', 'askaitutor-rag'),
+    // Optional bearer auth for both the OTLP exporter and the read-back
+    // client. Never sent to the frontend — see observability.routes.ts.
+    PHOENIX_API_KEY: optional('PHOENIX_API_KEY', ''),
+    PHOENIX_QUERY_TIMEOUT_MS: parseInt(optional('PHOENIX_QUERY_TIMEOUT_MS', '10000'), 10),
+    PHOENIX_OVERVIEW_CACHE_TTL_MS: parseInt(optional('PHOENIX_OVERVIEW_CACHE_TTL_MS', '15000'), 10),
 
     ALERTS_ENABLED: optional('OBSERVABILITY_ALERTS_ENABLED', 'true') === 'true',
     ALERT_ERROR_RATE_PERCENT:         parseFloat(optional('ALERT_ERROR_RATE_PERCENT', '10')),

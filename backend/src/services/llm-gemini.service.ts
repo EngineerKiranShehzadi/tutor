@@ -153,9 +153,22 @@ ${question}`;
 
   try {
     const result = await withGeminiDiagnostic(
-      { operationType: 'GROUNDED_ANSWER', model: modelName, answerPromptVersion: ANSWER_PROMPT_VERSION, validContextSupplied: chunks.length > 0 },
+      {
+        spanName: 'gemini_answer_call',
+        operationType: 'GROUNDED_ANSWER',
+        model: modelName,
+        answerPromptVersion: ANSWER_PROMPT_VERSION,
+        validContextSupplied: chunks.length > 0,
+        attempt,
+        invocationParams: { temperature: 0.3, maxOutputTokens: 8192 },
+        promptPreview: prompt,
+      },
       () => model.generateContent(prompt),
-      r => ({ input: r.response.usageMetadata?.promptTokenCount, output: r.response.usageMetadata?.candidatesTokenCount })
+      r => ({
+        input: r.response.usageMetadata?.promptTokenCount,
+        output: r.response.usageMetadata?.candidatesTokenCount,
+        finishReason: r.response.candidates?.[0]?.finishReason,
+      })
     );
     const finishReason = result.response.candidates?.[0]?.finishReason;
 

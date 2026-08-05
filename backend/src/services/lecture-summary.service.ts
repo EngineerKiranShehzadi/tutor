@@ -70,9 +70,19 @@ const summarizeBatchWithGemini = async (
     const prompt = `Lecture: "${lectureTitle}"\n\nContent:\n${content}`;
 
     const result = await withGeminiDiagnostic(
-      { operationType: 'PARTIAL_SUMMARY', model: 'gemini-2.5-flash', validContextSupplied: chunks.length > 0 },
+      {
+        spanName: 'gemini_summary_batch_call',
+        operationType: 'PARTIAL_SUMMARY',
+        model: 'gemini-2.5-flash',
+        validContextSupplied: chunks.length > 0,
+        invocationParams: { temperature: 0.3, maxOutputTokens: 1024, timeoutMs },
+      },
       () => model.generateContent(prompt, { timeout: timeoutMs }),
-      r => ({ input: r.response.usageMetadata?.promptTokenCount, output: r.response.usageMetadata?.candidatesTokenCount })
+      r => ({
+        input: r.response.usageMetadata?.promptTokenCount,
+        output: r.response.usageMetadata?.candidatesTokenCount,
+        finishReason: r.response.candidates?.[0]?.finishReason,
+      })
     );
     const text = result.response.text()?.trim();
     return text || null;
@@ -102,9 +112,19 @@ const combineSummariesWithGemini = async (
     const prompt = `Lecture: "${lectureTitle}"\n\n${sections}`;
 
     const result = await withGeminiDiagnostic(
-      { operationType: 'FINAL_SUMMARY', model: 'gemini-2.5-flash', validContextSupplied: partials.length > 0 },
+      {
+        spanName: 'gemini_summary_combine_call',
+        operationType: 'FINAL_SUMMARY',
+        model: 'gemini-2.5-flash',
+        validContextSupplied: partials.length > 0,
+        invocationParams: { temperature: 0.3, maxOutputTokens: 1536, timeoutMs },
+      },
       () => model.generateContent(prompt, { timeout: timeoutMs }),
-      r => ({ input: r.response.usageMetadata?.promptTokenCount, output: r.response.usageMetadata?.candidatesTokenCount })
+      r => ({
+        input: r.response.usageMetadata?.promptTokenCount,
+        output: r.response.usageMetadata?.candidatesTokenCount,
+        finishReason: r.response.candidates?.[0]?.finishReason,
+      })
     );
     const text = result.response.text()?.trim();
     return text || null;

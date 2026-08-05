@@ -43,7 +43,7 @@ export const connectDB = async (): Promise<void> => {
     } catch (err) {
       if (attempt === MAX_RETRIES) throw err;
       const delay = BASE_DELAY * attempt;
-      const agg = err as { errors?: Error[] };
+      const agg = err as { errors?: (Error & { code?: string })[] };
       const detail = agg.errors?.map((e) => e.message || e.code).join(', ');
       const msg = detail || (err instanceof Error ? (err.message || err.toString()) : String(err));
       logger.warn(`[DB] Connection attempt ${attempt} failed — retrying in ${delay}ms… ${msg}`);

@@ -52,7 +52,7 @@ export const rerankChunks = async (
   return reranked;
 };
 
-const DEFAULT_MIN_RERANK_SCORE = 0.5;
+export const DEFAULT_MIN_RERANK_SCORE = 0.5;
 
 function normalizeAnswer(answer: string): string {
   return answer.trim().toLowerCase().replace(/\s+/g, ' ');

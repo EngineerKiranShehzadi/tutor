@@ -5,10 +5,14 @@ import { ChatHistoryEntry, QnaChunk } from '../types';
 import { getLectureById } from './lecture.service';
 import { logger } from '../utils/logger';
 import { EMBEDDING_MODEL_VERSION } from './embedding.service';
-import { RERANKER_MODEL_VERSION } from './rerank.service';
+import { RERANKER_MODEL_VERSION, DEFAULT_MIN_RERANK_SCORE } from './rerank.service';
+import { SIMILARITY_THRESHOLD } from './vector-search.service';
 import { ANSWER_PROMPT_VERSION } from './llm-gemini.service';
 import { RequestTrace, recordTrace } from '../observability/tracer';
+import { ATTR } from '../observability/otel-semconv';
+import { isContentCaptureEnabled, truncateContent } from '../observability/sanitize';
 import type { FinishedTrace, NotFoundReason, SafeMetadata } from '../observability/types';
+import { OBSERVABILITY_SCHEMA_VERSION } from '../observability/types';
 import type { ConversationTurn } from './llm-gemini.service';
 import type { DedupeResult } from './rerank.service';
 import type { RetrievalQueryResult } from './query-rewriter.service';
@@ -217,10 +221,21 @@ export const askLectureAgent = async (
     requestId: trace.traceId,
     lectureId,
     sessionId,
+    studentId,
+    // Declares which version of the custom-attribute contract this trace's
+    // exporter guarantees (see OBSERVABILITY_SCHEMA_VERSION's doc comment).
+    // Traces recorded before this attribute existed carry no such marker —
+    // overview aggregation treats that absence as unknown coverage, never
+    // as proof of any particular guarantee. Do not derive schema
+    // compatibility from deploy/export time alone; this explicit marker is
+    // the only authoritative signal.
+    observabilitySchemaVersion: OBSERVABILITY_SCHEMA_VERSION,
     embeddingModelVersion: EMBEDDING_MODEL_VERSION,
     rerankerModelVersion: RERANKER_MODEL_VERSION,
     answerPromptVersion: ANSWER_PROMPT_VERSION,
     semanticMemoryEnabled: env.RAG_MEMORY.SEMANTIC_ENABLED,
+    environment: env.NODE_ENV,
+    ...(isContentCaptureEnabled() ? { [ATTR.INPUT_VALUE]: truncateContent(question, 500).value } : {}),
   });
   // Tracks which stage is in flight so an unexpected thrown error can be
   // mapped to a safe not-found/failure reason code in the outer catch.
@@ -240,6 +255,16 @@ export const askLectureAgent = async (
     }
   };
 
+  // Registers `trace` as "the active trace" for this entire call chain
+  // (including every nested service function called below, no matter how
+  // many modules deep) — see RequestTrace.runAsActive()/getActiveTrace() in
+  // tracer.ts. This is what lets withGeminiDiagnostic() attach real nested
+  // LLM spans (gemini_router_call, gemini_answer_call, ...) under whichever
+  // trace.span() is currently executing, without threading `trace` through
+  // every function signature in the pipeline.
+  return trace.runAsActive(() => runAskLectureAgent());
+
+  async function runAskLectureAgent(): Promise<{ answer: string; sources: QnaChunk[] }> {
   try {
     // 1. Confirm lecture is READY
     const lecture = await getLectureById(lectureId);
@@ -393,6 +418,9 @@ export const askLectureAgent = async (
         r => ({
           memoryResult: r.lookupFailed ? 'LOOKUP_FAILED' : r.hit ? (r.hit.matchType === 'EXACT' ? 'EXACT_HIT' : 'SEMANTIC_HIT') : 'MISS',
           semanticAttempted: env.RAG_MEMORY.SEMANTIC_ENABLED,
+          matchType: r.hit?.matchType ?? null,
+          matchedMemoryId: r.hit?.memoryId ?? null,
+          similarity: r.hit?.similarity ?? null,
         })
       );
       memoryLectureContentHash = memoryResult.lectureContentHash;
@@ -400,7 +428,11 @@ export const askLectureAgent = async (
 
       if (memoryResult.hit) {
         const recordMemoryHit = deps.recordMemoryHit ?? (await import('./rag-answer-memory.service')).recordMemoryHit;
-        await recordMemoryHit(memoryResult.hit.memoryId);
+        await trace.span(
+          'record-memory-hit',
+          () => recordMemoryHit(memoryResult.hit!.memoryId),
+          () => ({ memoryId: memoryResult.hit!.memoryId })
+        );
         await trace.span('save-chat-entry', async () => {
           await saveChatEntry({
             studentId, lectureId, question,
@@ -444,12 +476,15 @@ export const askLectureAgent = async (
       'vector-search',
       () => searchChunks(questionEmbedding, lectureId, CANDIDATE_LIMIT),
       c => ({
+        [ATTR.RETRIEVAL_DOCUMENTS]: JSON.stringify(c.map((chunk, i) => ({ id: chunk.id, score: chunk.similarity ?? null, rank: i }))),
         lectureId,
         candidateLimit: CANDIDATE_LIMIT,
         candidateCount: c.length,
+        similarityThreshold: SIMILARITY_THRESHOLD,
         topCosineSimilarity: c[0]?.similarity ?? null,
         lowestReturnedSimilarity: c[c.length - 1]?.similarity ?? null,
         zeroCandidateResult: c.length === 0,
+        candidateIds: c.map(chunk => chunk.id).join(','),
       })
     );
     if (candidates.length === 0) {
@@ -484,13 +519,18 @@ export const askLectureAgent = async (
         return selected;
       },
       c => ({
+        [ATTR.RERANKER_MODEL_NAME]: RERANKER_MODEL_VERSION,
+        [ATTR.RERANKER_OUTPUT_DOCUMENTS]: JSON.stringify(c.map((chunk, i) => ({ id: chunk.id, score: chunk.rerankScore ?? null, rank: i }))),
         rerankerModelVersion: RERANKER_MODEL_VERSION,
         rerankerInputCount: candidates.length,
         rerankerOutputCount: c.length,
+        minRerankScore: DEFAULT_MIN_RERANK_SCORE,
         topRerankerScore,
         lowestSelectedRerankerScore: c[c.length - 1]?.rerankScore ?? null,
         chunksRemovedByRelevanceFloor: belowFloorCount,
         chunksRemovedByDedupe: dedupedAwayCount,
+        selectedChunkIds: c.map(chunk => chunk.id).join(','),
+        ...(isContentCaptureEnabled() ? { [ATTR.RERANKER_QUERY]: truncateContent(retrievalQuery, 300).value } : {}),
       })
     );
     if (dedupedAwayCount > 0) {
@@ -526,7 +566,13 @@ export const askLectureAgent = async (
     const answer = await trace.span(
       'generate-grounded-answer',
       () => generateAnswer(question, contextChunks, lecture.title, historyTurns),
-      () => ({ answerPromptVersion: ANSWER_PROMPT_VERSION, contextChunkCount: contextChunks.length })
+      a => ({
+        answerPromptVersion: ANSWER_PROMPT_VERSION,
+        contextChunkCount: contextChunks.length,
+        contextChunkIds: contextChunks.map(c => c.id).join(','),
+        answerCharLength: a.length,
+        ...(isContentCaptureEnabled() ? { [ATTR.OUTPUT_VALUE]: truncateContent(a, 2000).value } : {}),
+      })
     );
 
     // 8. Save and touch session
@@ -546,17 +592,21 @@ export const askLectureAgent = async (
         const memoryService = await import('./rag-answer-memory.service');
         const writeAnswerMemory = deps.writeAnswerMemory ?? memoryService.writeAnswerMemory;
         const lectureContentHash = memoryLectureContentHash ?? await memoryService.computeLectureContentHash(lectureId);
-        await writeAnswerMemory({
-          studentId,
-          lectureId,
-          sourceChatHistoryId: savedEntryId,
-          originalQuestion: question,
-          retrievalQuery,
-          answer,
-          sourceChunkIds: chunkIds,
-          questionEmbedding,
-          lectureContentHash,
-        });
+        await trace.span(
+          'write-answer-memory',
+          () => writeAnswerMemory({
+            studentId,
+            lectureId,
+            sourceChatHistoryId: savedEntryId,
+            originalQuestion: question,
+            retrievalQuery,
+            answer,
+            sourceChunkIds: chunkIds,
+            questionEmbedding,
+            lectureContentHash,
+          }),
+          () => ({ writeAttempted: true, sourceChunkCount: chunkIds.length })
+        );
         if (memoryResultAttr === 'MISS') memoryResultAttr = 'ENTRY_CREATED';
       } catch (err) {
         logger.warn(`[CHAT] ⚠️  Answer-memory write skipped: ${(err as Error).message}`);
@@ -570,6 +620,8 @@ export const askLectureAgent = async (
       memoryResult: memoryResultAttr,
       candidateCount: candidates.length,
       selectedChunkCount: chunks.length,
+      answerCharLength: answer.length,
+      ...(isContentCaptureEnabled() ? { [ATTR.OUTPUT_VALUE]: truncateContent(answer, 2000).value } : {}),
     });
     return { answer, sources: chunks };
   } catch (err) {
@@ -581,6 +633,7 @@ export const askLectureAgent = async (
       : undefined;
     finishTrace('ERROR', { responseStatus: 'ERROR', failedStage: currentStage, ...(notFoundReason ? { notFoundReason } : {}) });
     throw err;
+  }
   }
 };
 

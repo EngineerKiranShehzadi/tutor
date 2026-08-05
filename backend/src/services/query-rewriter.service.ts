@@ -107,9 +107,18 @@ const callGeminiRewriter = async (
     const prompt = `Conversation history:\n${historyBlock}\n\nLatest question:\n${question}`;
 
     const result = await withGeminiDiagnostic(
-      { operationType: 'QUERY_REWRITE', model: 'gemini-2.5-flash' },
+      {
+        spanName: 'gemini_rewriter_call',
+        operationType: 'QUERY_REWRITE',
+        model: 'gemini-2.5-flash',
+        invocationParams: { temperature: 0, maxOutputTokens: 256, timeoutMs },
+      },
       () => model.generateContent(prompt, { timeout: timeoutMs }),
-      r => ({ input: r.response.usageMetadata?.promptTokenCount, output: r.response.usageMetadata?.candidatesTokenCount })
+      r => ({
+        input: r.response.usageMetadata?.promptTokenCount,
+        output: r.response.usageMetadata?.candidatesTokenCount,
+        finishReason: r.response.candidates?.[0]?.finishReason,
+      })
     );
     return parseRewriteResponse(result.response.text());
   } catch (err) {
