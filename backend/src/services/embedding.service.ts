@@ -1,6 +1,13 @@
 import { logger } from '../utils/logger';
 
-const LOCAL_EMBED_URL = process.env.EMBEDDING_SERVER_URL ?? 'http://localhost:5001/embed';
+export const LOCAL_EMBED_URL = process.env.EMBEDDING_SERVER_URL ?? 'http://localhost:5001/embed';
+
+// Identifies which embedding model/dimensionality produced a stored vector.
+// The local embedding server exposes no model-metadata endpoint, so this is
+// a manually-maintained constant — bump it (and re-embed everything that
+// depends on it, including rag_answer_memory rows) whenever the server's
+// model or output dimensionality changes.
+export const EMBEDDING_MODEL_VERSION = 'bge-large-en-v1.5:1024';
 
 // Calls the local Python embedding server (BAAI/bge-large-en-v1.5, 1024 dims).
 // isQuery must be true for student questions — BGE prepends a retrieval

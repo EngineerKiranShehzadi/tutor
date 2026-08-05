@@ -86,6 +86,7 @@ export interface QnaChunk {
   end_time: string | null;
   keywords: string | null;
   similarity?: number;
+  rerankScore?: number;
 }
 
 // ── Chat History ───────────────────────────────────────────────

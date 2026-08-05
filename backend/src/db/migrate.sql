@@ -39,6 +39,9 @@ CREATE TABLE IF NOT EXISTS lectures (
   created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+-- Embedding progress bar (used by lecture.service.ts / GraphQL progressCurrent/progressTotal)
+ALTER TABLE lectures ADD COLUMN IF NOT EXISTS progress_current INT NOT NULL DEFAULT 0;
+ALTER TABLE lectures ADD COLUMN IF NOT EXISTS progress_total INT NOT NULL DEFAULT 0;
 
 -- ─────────────────────────────────────────────
 -- 4. lecture_qna_chunks  (core RAG table)

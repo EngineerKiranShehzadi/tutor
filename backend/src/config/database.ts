@@ -2,9 +2,14 @@ import { Pool } from 'pg';
 import { env } from './env';
 import { logger } from '../utils/logger';
 
+const isLocalUrl = (url: string): boolean => /localhost|127\.0\.0\.1/.test(url);
+
 const pool = new Pool(
   env.DB.URL
-    ? { connectionString: env.DB.URL, ssl: { rejectUnauthorized: false } }
+    ? {
+        connectionString: env.DB.URL,
+        ssl: isLocalUrl(env.DB.URL) ? false : { rejectUnauthorized: false },
+      }
     : {
         host:     env.DB.HOST,
         port:     env.DB.PORT,

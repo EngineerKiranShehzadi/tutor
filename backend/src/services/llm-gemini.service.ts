@@ -3,6 +3,7 @@ import { env } from '../config/env';
 import { AppError } from '../middleware/errorHandler';
 import { QnaChunk } from '../types';
 import { logger } from '../utils/logger';
+import { withGeminiDiagnostic } from '../observability/gemini-diagnostics';
 
 let client: GoogleGenerativeAI | null = null;
 
@@ -11,7 +12,7 @@ export interface ConversationTurn {
   answer:   string;
 }
 
-function getClient(): GoogleGenerativeAI {
+export function getClient(): GoogleGenerativeAI {
   if (!env.GEMINI_API_KEY) {
     throw new AppError('GEMINI_API_KEY is not configured. Please add it to your .env file.', 500);
   }
@@ -53,6 +54,12 @@ Rules:
 7. Keep answers concise and educational.
 8. If the student asks a follow-up (e.g. "can you explain more?"), use the conversation history to understand what they are referring to.`;
 
+// Identifies the grounding prompt/rules a stored answer was generated
+// under. Bump this whenever SYSTEM_PROMPT changes in a way that could
+// materially change answer content or grounding behavior — it invalidates
+// cached rag_answer_memory entries generated under the old prompt.
+export const ANSWER_PROMPT_VERSION = 'v1';
+
 const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
 
 const LLM_FALLBACK_SYSTEM_PROMPT = `You are an AI tutor assistant. The student asked a question that was not found in the current lecture's content.
@@ -69,7 +76,8 @@ export const generateAnswerFromLLM = async (
   attempt = 1
 ): Promise<string> => {
   const genAI = getClient();
-  const modelName = attempt <= 2 ? 'gemini-2.5-flash' : 'gemini-1.5-flash';
+  // gemini-1.5-flash is fully retired (404) — fall back to gemini-flash-latest.
+  const modelName = attempt <= 2 ? 'gemini-2.5-flash' : 'gemini-flash-latest';
   const model = genAI.getGenerativeModel({
     model: modelName,
     generationConfig: {
@@ -117,8 +125,10 @@ export const generateAnswer = async (
   attempt = 1
 ): Promise<string> => {
   const genAI = getClient();
-  // Fall back to stable 1.5-flash after 2 failed attempts on 2.5-flash
-  const modelName = attempt <= 2 ? 'gemini-2.5-flash' : 'gemini-1.5-flash';
+  // Fall back to gemini-flash-latest after 2 failed attempts on 2.5-flash.
+  // Was previously 'gemini-1.5-flash', which is now fully retired (404) —
+  // that fallback target no longer existed regardless of quota.
+  const modelName = attempt <= 2 ? 'gemini-2.5-flash' : 'gemini-flash-latest';
   const model = genAI.getGenerativeModel({
     model: modelName,
     generationConfig: {
@@ -142,7 +152,11 @@ ${question}`;
   logger.info(`[LLM] 🤖 Sending prompt to Gemini (${chunks.length} chunks, question="${question.slice(0, 60)}...")`);
 
   try {
-    const result = await model.generateContent(prompt);
+    const result = await withGeminiDiagnostic(
+      { operationType: 'GROUNDED_ANSWER', model: modelName, answerPromptVersion: ANSWER_PROMPT_VERSION, validContextSupplied: chunks.length > 0 },
+      () => model.generateContent(prompt),
+      r => ({ input: r.response.usageMetadata?.promptTokenCount, output: r.response.usageMetadata?.candidatesTokenCount })
+    );
     const finishReason = result.response.candidates?.[0]?.finishReason;
 
     if (finishReason === 'MAX_TOKENS') {
@@ -163,7 +177,7 @@ ${question}`;
 
     if ((isRateLimit || isOverloaded) && attempt <= 3) {
       const wait = Math.pow(2, attempt) * 3000; // 6s, 12s, 24s
-      const fallbackNote = attempt >= 2 ? ' (switching to gemini-1.5-flash)' : '';
+      const fallbackNote = attempt >= 2 ? ' (switching to gemini-flash-latest)' : '';
       logger.warn(`[LLM] Transient error on attempt ${attempt}/3${fallbackNote} — retrying in ${wait / 1000}s...`);
       await sleep(wait);
       return generateAnswer(question, chunks, lectureTitle, history, attempt + 1);
