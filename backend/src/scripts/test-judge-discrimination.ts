@@ -8,22 +8,19 @@
  *
  * Usage: npm run test:judge-discrimination
  */
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import { env } from '../config/env';
+import { generateContent } from '../services/gemini-provider.service';
+
+const JUDGE_MODEL = 'gemini-flash-lite-latest';
 
 if (!env.GEMINI_API_KEY) {
   console.error('GEMINI_API_KEY is not configured.');
   process.exit(1);
 }
-const judgeClient = new GoogleGenerativeAI(env.GEMINI_API_KEY);
-const judgeModel = judgeClient.getGenerativeModel({
-  model: 'gemini-flash-lite-latest',
-  generationConfig: { temperature: 0 },
-});
 
 async function askJudge(prompt: string): Promise<{ verdict: string; raw: string }> {
-  const result = await judgeModel.generateContent(prompt);
-  const raw = result.response.text().trim();
+  const result = await generateContent({ model: JUDGE_MODEL, prompt, temperature: 0 });
+  const raw = result.text.trim();
   return { verdict: raw.toUpperCase().startsWith('PASS') ? 'PASS' : 'FAIL', raw };
 }
 

@@ -12,13 +12,13 @@
  *
  * Usage: npm run eval:reorder-comparison [lectureId]
  */
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import { env } from '../config/env';
 import { query } from '../config/database';
 import { generateEmbedding } from '../services/embedding.service';
 import { searchChunks } from '../services/vector-search.service';
 import { rerankChunks, reorderForContext } from '../services/rerank.service';
 import { generateAnswer } from '../services/llm-gemini.service';
+import { generateContent } from '../services/gemini-provider.service';
 import { getLectureById } from '../services/lecture.service';
 import { QnaChunk } from '../types';
 import { logger } from '../utils/logger';
@@ -31,21 +31,17 @@ if (!env.GEMINI_API_KEY) {
   console.error('GEMINI_API_KEY is not configured.');
   process.exit(1);
 }
-const judgeClient = new GoogleGenerativeAI(env.GEMINI_API_KEY);
 // gemini-2.5-flash's free-tier daily quota (20 req/day) was exhausted by
 // generateAnswer() calls alone, and gemini-1.5-flash is fully retired (404).
 // Judge on gemini-flash-lite-latest — a separate quota bucket with capacity.
-const judgeModel = judgeClient.getGenerativeModel({
-  model: 'gemini-flash-lite-latest',
-  generationConfig: { temperature: 0 },
-});
+const JUDGE_MODEL = 'gemini-flash-lite-latest';
 
 const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
 
 async function askJudge(prompt: string, attempt = 1): Promise<boolean> {
   try {
-    const result = await judgeModel.generateContent(prompt);
-    return result.response.text().trim().toUpperCase().startsWith('PASS');
+    const result = await generateContent({ model: JUDGE_MODEL, prompt, temperature: 0 });
+    return result.text.trim().toUpperCase().startsWith('PASS');
   } catch (err: unknown) {
     const msg = String((err as Error).message ?? '');
     const isRateLimit = msg.includes('429') || msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('resource_exhausted');

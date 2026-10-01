@@ -75,9 +75,15 @@ export const ATTR = {
 export const STAGE_SPAN_KIND: Record<string, OpenInferenceSpanKind> = {
   'ask-lecture-agent': OpenInferenceSpanKind.CHAIN,
   'validate-request': OpenInferenceSpanKind.CHAIN,
+  'input-guardrail': OpenInferenceSpanKind.CHAIN,
   'load-session-history': OpenInferenceSpanKind.CHAIN,
   'classify-query-route': OpenInferenceSpanKind.CHAIN,
   'rewrite-contextual-query': OpenInferenceSpanKind.CHAIN,
+  'decompose-query': OpenInferenceSpanKind.CHAIN,
+  'decomposed-retrieval': OpenInferenceSpanKind.RETRIEVER,
+  'subquery-retrieval': OpenInferenceSpanKind.RETRIEVER,
+  'adaptive-retrieval': OpenInferenceSpanKind.CHAIN,
+  'adaptive-retrieval-iteration': OpenInferenceSpanKind.CHAIN,
   'exact-memory-lookup': OpenInferenceSpanKind.RETRIEVER,
   'generate-query-embedding': OpenInferenceSpanKind.EMBEDDING,
   'vector-search': OpenInferenceSpanKind.RETRIEVER,
@@ -85,6 +91,8 @@ export const STAGE_SPAN_KIND: Record<string, OpenInferenceSpanKind> = {
   'fetch-all-lecture-chunks': OpenInferenceSpanKind.RETRIEVER,
   'summarize-lecture-content': OpenInferenceSpanKind.CHAIN,
   'generate-grounded-answer': OpenInferenceSpanKind.CHAIN,
+  'output-guardrail': OpenInferenceSpanKind.CHAIN,
+  'generate-greeting-response': OpenInferenceSpanKind.CHAIN,
   'save-chat-entry': OpenInferenceSpanKind.CHAIN,
   'write-answer-memory': OpenInferenceSpanKind.CHAIN,
   'record-memory-hit': OpenInferenceSpanKind.CHAIN,
@@ -95,6 +103,17 @@ export const STAGE_SPAN_KIND: Record<string, OpenInferenceSpanKind> = {
   gemini_answer_call: OpenInferenceSpanKind.LLM,
   gemini_summary_batch_call: OpenInferenceSpanKind.LLM,
   gemini_summary_combine_call: OpenInferenceSpanKind.LLM,
+
+  // Provider-neutral LLM call spans (src/llm/llm-observability.service.ts) —
+  // named after the operation rather than a provider, since the underlying
+  // provider is now a runtime config choice, not a fixed identity.
+  greeting_response_call: OpenInferenceSpanKind.LLM,
+  prompt_injection_classifier_call: OpenInferenceSpanKind.LLM,
+  subquery_decomposition_call: OpenInferenceSpanKind.LLM,
+  adaptive_retrieval_planner_call: OpenInferenceSpanKind.LLM,
+  answer_groundedness_verifier_call: OpenInferenceSpanKind.LLM,
+  answer_revision_call: OpenInferenceSpanKind.LLM,
+  response_format_repair_call: OpenInferenceSpanKind.LLM,
 };
 
 export function spanKindFor(name: string): OpenInferenceSpanKind {

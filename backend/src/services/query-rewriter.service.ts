@@ -1,7 +1,9 @@
-import { SchemaType, type ResponseSchema } from '@google/generative-ai';
-import { getClient, type ConversationTurn } from './llm-gemini.service';
+import { env } from '../config/env';
+import { resolveLlmProvider } from '../llm/llm-provider.resolver';
+import { withLlmDiagnostic, extractLlmUsage } from '../llm/llm-observability.service';
+import type { LlmSchema } from '../llm/llm.types';
+import { type ConversationTurn } from './llm-gemini.service';
 import { logger } from '../utils/logger';
-import { withGeminiDiagnostic } from '../observability/gemini-diagnostics';
 
 // Only rewrite when the latest question actually depends on prior context —
 // avoids an extra Gemini round-trip on every single message.
@@ -48,11 +50,11 @@ Rules:
 - If the latest question is already self-contained, return it unchanged.
 - Return only the required structured JSON.`;
 
-const REWRITE_RESPONSE_SCHEMA: ResponseSchema = {
-  type: SchemaType.OBJECT,
+const REWRITE_RESPONSE_SCHEMA: LlmSchema = {
+  type: 'OBJECT',
   properties: {
-    rewrittenQuery: { type: SchemaType.STRING },
-    wasRewritten:   { type: SchemaType.BOOLEAN },
+    rewrittenQuery: { type: 'STRING' },
+    wasRewritten:   { type: 'BOOLEAN' },
   },
   required: ['rewrittenQuery', 'wasRewritten'],
 };
@@ -82,45 +84,40 @@ export const parseRewriteResponse = (raw: string): string | null => {
   return rewritten.length > 0 ? rewritten : null;
 };
 
-const callGeminiRewriter = async (
+const callLlmRewriter = async (
   question: string,
   history: ConversationTurn[],
   timeoutMs: number
 ): Promise<string | null> => {
   try {
-    const genAI = getClient();
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-2.5-flash',
-      systemInstruction: REWRITER_SYSTEM_PROMPT,
-      generationConfig: {
-        temperature: 0,
-        maxOutputTokens: 256,
-        responseMimeType: 'application/json',
-        responseSchema: REWRITE_RESPONSE_SCHEMA,
-      },
-    });
-
     const historyBlock = history
       .map(t => `Student: ${t.question}\nAssistant: ${t.answer}`)
       .join('\n');
 
     const prompt = `Conversation history:\n${historyBlock}\n\nLatest question:\n${question}`;
 
-    const result = await withGeminiDiagnostic(
+    const provider = resolveLlmProvider(env.LLM.QUERY_REWRITE.PROVIDER);
+    const model = env.LLM.QUERY_REWRITE.MODEL;
+    const result = await withLlmDiagnostic(
       {
         spanName: 'gemini_rewriter_call',
         operationType: 'QUERY_REWRITE',
-        model: 'gemini-2.5-flash',
+        provider: provider.name,
+        model,
         invocationParams: { temperature: 0, maxOutputTokens: 256, timeoutMs },
       },
-      () => model.generateContent(prompt, { timeout: timeoutMs }),
-      r => ({
-        input: r.response.usageMetadata?.promptTokenCount,
-        output: r.response.usageMetadata?.candidatesTokenCount,
-        finishReason: r.response.candidates?.[0]?.finishReason,
-      })
+      () => provider.generate({
+        model,
+        userPrompt: prompt,
+        systemPrompt: REWRITER_SYSTEM_PROMPT,
+        temperature: 0,
+        maxOutputTokens: 256,
+        responseSchema: REWRITE_RESPONSE_SCHEMA,
+        timeoutMs,
+      }),
+      extractLlmUsage
     );
-    return parseRewriteResponse(result.response.text());
+    return parseRewriteResponse(result.raw);
   } catch (err) {
     logger.warn(`[QUERY-REWRITE] ⚠️  Rewrite call failed, falling back to original question: ${(err as Error).message}`);
     return null;
@@ -145,12 +142,12 @@ export const resolveRetrievalQuery = async (
   history: ConversationTurn[],
   opts: {
     timeoutMs?: number;
-    // Test-only seam: overrides the Gemini call itself so unit tests never
+    // Test-only seam: overrides the LLM call itself so unit tests never
     // hit the network/quota. Production always falls through to the real
-    // callGeminiRewriter. Live semantic-quality tests (does it *correctly*
+    // callLlmRewriter. Live semantic-quality tests (does it *correctly*
     // resolve "it" to the right referent?) live in a separate :live suite
     // that intentionally omits this override.
-    geminiCaller?: typeof callGeminiRewriter;
+    geminiCaller?: typeof callLlmRewriter;
   } = {}
 ): Promise<RetrievalQueryResult> => {
   try {
@@ -164,7 +161,7 @@ export const resolveRetrievalQuery = async (
       return { query: question, wasRewritten: false, attempted: false };
     }
 
-    const geminiCaller = opts.geminiCaller ?? callGeminiRewriter;
+    const geminiCaller = opts.geminiCaller ?? callLlmRewriter;
     const rewritten = await geminiCaller(question, recentHistory, opts.timeoutMs ?? DEFAULT_REWRITE_TIMEOUT_MS);
     if (!rewritten) {
       return { query: question, wasRewritten: false, attempted: true };

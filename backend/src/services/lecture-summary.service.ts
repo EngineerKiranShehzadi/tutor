@@ -1,22 +1,30 @@
 import { query } from '../config/database';
 import { QnaChunk } from '../types';
-import { getClient } from './llm-gemini.service';
+import { env } from '../config/env';
+import { resolveLlmProvider } from '../llm/llm-provider.resolver';
+import { withLlmDiagnostic, extractLlmUsage } from '../llm/llm-observability.service';
 import { logger } from '../utils/logger';
-import { withGeminiDiagnostic } from '../observability/gemini-diagnostics';
 
 export const LECTURE_SUMMARY_UNAVAILABLE_MESSAGE =
   'I could not generate a summary for this lecture right now.';
 
-// Fetches every chunk for the lecture in stored/insertion order (chunks are
-// inserted row-by-row in dataset order during processing — see
+// Fetches one row per source Q&A for the lecture, in stored/insertion order
+// (chunks are inserted row-by-row in dataset order during processing — see
 // chunk.service.ts — which mirrors the lecture's logical/topic order).
 // Deliberately bypasses vector search: a summary must represent the whole
 // lecture, not just the chunks most similar to the word "summary".
+//
+// chunk_index = 0 only: a long answer can be split into several embedded
+// chunks (chunk.service.ts), all sharing the same full question/answer
+// text. This function reads question/answer directly rather than
+// chunk_text, so without this filter a split row's full Q&A would appear
+// in the summary input once per piece — inflating the summary's input
+// size and repeating the same content back to Gemini for no benefit.
 export const getAllLectureChunks = async (lectureId: number): Promise<QnaChunk[]> => {
   const { rows } = await query<QnaChunk>(
     `SELECT id, lecture_id, topic, question, answer, chunk_text, start_time, end_time, keywords
      FROM lecture_qna_chunks
-     WHERE lecture_id = $1
+     WHERE lecture_id = $1 AND chunk_index = 0
      ORDER BY id ASC`,
     [lectureId]
   );
@@ -60,31 +68,31 @@ const summarizeBatchWithGemini = async (
   timeoutMs: number
 ): Promise<string | null> => {
   try {
-    const genAI = getClient();
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-2.5-flash',
-      systemInstruction: SUMMARY_SYSTEM_PROMPT,
-      generationConfig: { temperature: 0.3, maxOutputTokens: 1024 },
-    });
     const content = chunks.map(c => `Topic: ${c.topic ?? 'General'}\nQ: ${c.question}\nA: ${c.answer}`).join('\n\n');
     const prompt = `Lecture: "${lectureTitle}"\n\nContent:\n${content}`;
 
-    const result = await withGeminiDiagnostic(
+    const provider = resolveLlmProvider(env.LLM.LECTURE_SUMMARY.PROVIDER);
+    const model = env.LLM.LECTURE_SUMMARY.MODEL;
+    const result = await withLlmDiagnostic(
       {
         spanName: 'gemini_summary_batch_call',
         operationType: 'PARTIAL_SUMMARY',
-        model: 'gemini-2.5-flash',
+        provider: provider.name,
+        model,
         validContextSupplied: chunks.length > 0,
         invocationParams: { temperature: 0.3, maxOutputTokens: 1024, timeoutMs },
       },
-      () => model.generateContent(prompt, { timeout: timeoutMs }),
-      r => ({
-        input: r.response.usageMetadata?.promptTokenCount,
-        output: r.response.usageMetadata?.candidatesTokenCount,
-        finishReason: r.response.candidates?.[0]?.finishReason,
-      })
+      () => provider.generate({
+        model,
+        userPrompt: prompt,
+        systemPrompt: SUMMARY_SYSTEM_PROMPT,
+        temperature: 0.3,
+        maxOutputTokens: 1024,
+        timeoutMs,
+      }),
+      extractLlmUsage
     );
-    const text = result.response.text()?.trim();
+    const text = result.raw?.trim();
     return text || null;
   } catch (err) {
     logger.warn(`[LECTURE-SUMMARY] ⚠️  Batch summarization failed: ${(err as Error).message}`);
@@ -102,31 +110,31 @@ const combineSummariesWithGemini = async (
   timeoutMs: number
 ): Promise<string | null> => {
   try {
-    const genAI = getClient();
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-2.5-flash',
-      systemInstruction: COMBINE_SYSTEM_PROMPT,
-      generationConfig: { temperature: 0.3, maxOutputTokens: 1536 },
-    });
     const sections = partials.map((p, i) => `Section ${i + 1} summary:\n${p}`).join('\n\n');
     const prompt = `Lecture: "${lectureTitle}"\n\n${sections}`;
 
-    const result = await withGeminiDiagnostic(
+    const provider = resolveLlmProvider(env.LLM.LECTURE_SUMMARY.PROVIDER);
+    const model = env.LLM.LECTURE_SUMMARY.MODEL;
+    const result = await withLlmDiagnostic(
       {
         spanName: 'gemini_summary_combine_call',
         operationType: 'FINAL_SUMMARY',
-        model: 'gemini-2.5-flash',
+        provider: provider.name,
+        model,
         validContextSupplied: partials.length > 0,
         invocationParams: { temperature: 0.3, maxOutputTokens: 1536, timeoutMs },
       },
-      () => model.generateContent(prompt, { timeout: timeoutMs }),
-      r => ({
-        input: r.response.usageMetadata?.promptTokenCount,
-        output: r.response.usageMetadata?.candidatesTokenCount,
-        finishReason: r.response.candidates?.[0]?.finishReason,
-      })
+      () => provider.generate({
+        model,
+        userPrompt: prompt,
+        systemPrompt: COMBINE_SYSTEM_PROMPT,
+        temperature: 0.3,
+        maxOutputTokens: 1536,
+        timeoutMs,
+      }),
+      extractLlmUsage
     );
-    const text = result.response.text()?.trim();
+    const text = result.raw?.trim();
     return text || null;
   } catch (err) {
     logger.warn(`[LECTURE-SUMMARY] ⚠️  Combining partial summaries failed: ${(err as Error).message}`);

@@ -15,7 +15,7 @@ export const searchChunks = async (
   const { rows } = await query<QnaChunk & { similarity: number }>(
     `SELECT
        id, lecture_id, topic, question, answer,
-       chunk_text, start_time, end_time, keywords,
+       chunk_text, chunk_index, start_time, end_time, keywords,
        1 - (local_embedding <=> $1::vector) AS similarity
      FROM lecture_qna_chunks
      WHERE lecture_id = $2

@@ -10,12 +10,12 @@
  *
  * Usage: npm run eval:dedup-highwaste [lectureId]
  */
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import { env } from '../config/env';
 import { query } from '../config/database';
 import { generateEmbedding } from '../services/embedding.service';
 import { searchChunks } from '../services/vector-search.service';
 import { rerankChunks, dedupeAndSelect, reorderForContext } from '../services/rerank.service';
+import { generateContent } from '../services/gemini-provider.service';
 import { getLectureById } from '../services/lecture.service';
 import { QnaChunk } from '../types';
 import { logger } from '../utils/logger';
@@ -25,20 +25,12 @@ const MIN_WASTED_SLOTS = 3;        // filter: only the worst-affected questions
 const MAX_EVAL_QUESTIONS = 8;      // cap on how many filtered questions get generate+judge
 const CANDIDATE_POOL_SIZE = 15;
 const GENERATION_MODEL = 'gemini-3.1-flash-lite'; // single model, both conditions
+const JUDGE_MODEL = 'gemini-flash-lite-latest';
 
 if (!env.GEMINI_API_KEY) {
   console.error('GEMINI_API_KEY is not configured.');
   process.exit(1);
 }
-const genClient = new GoogleGenerativeAI(env.GEMINI_API_KEY);
-const genModel = genClient.getGenerativeModel({
-  model: GENERATION_MODEL,
-  generationConfig: { temperature: 0.3, maxOutputTokens: 8192 },
-});
-const judgeModel = genClient.getGenerativeModel({
-  model: 'gemini-flash-lite-latest',
-  generationConfig: { temperature: 0 },
-});
 
 const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
 
@@ -74,8 +66,8 @@ function buildContext(chunks: QnaChunk[]): string {
 async function generateAnswerFixedModel(question: string, chunks: QnaChunk[]): Promise<string> {
   const prompt = `${SYSTEM_PROMPT}\n\nLecture Q&A Context:\n${buildContext(chunks)}\n\nCurrent Student Question:\n${question}`;
   return callWithRetry(async () => {
-    const result = await genModel.generateContent(prompt);
-    const answer = result.response.text();
+    const result = await generateContent({ model: GENERATION_MODEL, prompt, temperature: 0.3, maxOutputTokens: 8192 });
+    const answer = result.text;
     if (!answer?.trim()) throw new Error('Empty response');
     return answer;
   }, 'GEN');
@@ -83,8 +75,8 @@ async function generateAnswerFixedModel(question: string, chunks: QnaChunk[]): P
 
 async function askJudge(prompt: string): Promise<boolean> {
   return callWithRetry(async () => {
-    const result = await judgeModel.generateContent(prompt);
-    return result.response.text().trim().toUpperCase().startsWith('PASS');
+    const result = await generateContent({ model: JUDGE_MODEL, prompt, temperature: 0 });
+    return result.text.trim().toUpperCase().startsWith('PASS');
   }, 'JUDGE');
 }
 

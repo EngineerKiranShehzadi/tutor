@@ -11,7 +11,11 @@ function GoogleCallbackInner() {
     const error = params.get('error');
     if (token) {
       localStorage.setItem('accessToken', token);
-      router.replace('/courses');
+      // Full page load, not router.replace: AuthProvider only reads the token
+      // (and calls /me) once on mount, and it already mounted on this page
+      // with no token. A client-side navigation would leave user=null and
+      // bounce back to /login.
+      window.location.replace('/courses');
     } else {
       router.replace(`/login?error=${error ?? 'oauth_failed'}`);
     }

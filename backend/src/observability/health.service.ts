@@ -109,13 +109,11 @@ async function checkGemini(): Promise<ComponentHealth> {
     return { status: 'degraded', latencyMs: 0 };
   }
   try {
-    const { getClient } = await import('../services/llm-gemini.service');
-    const genAI = getClient();
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    const { countTokens } = await import('../services/gemini-provider.service');
     const start = process.hrtime.bigint();
     // countTokens is a lightweight, no-generation call — validates auth and
     // connectivity without producing any model output.
-    await model.countTokens('ping');
+    await countTokens('gemini-2.5-flash', 'ping');
     const latencyMs = Number(process.hrtime.bigint() - start) / 1e6;
     return { status: 'healthy', latencyMs: Math.round(latencyMs) };
   } catch (err) {

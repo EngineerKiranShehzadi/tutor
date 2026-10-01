@@ -3,6 +3,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { useMutation, useLazyQuery } from '@apollo/client';
 import { ChatMessage, ChunkSource } from '@/types';
 import { v4 as uuidv4 } from 'uuid';
+import { streamAsk, StreamUnavailableError } from '@/lib/chat-stream';
 import { useVoice } from './useVoice';
 import {
   ASK_LECTURE_AGENT_MUTATION,
@@ -69,6 +70,8 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
   const autoSpeakRef       = useRef(autoSpeak);
   const voiceSpeakRef      = useRef<(text: string) => void>(() => {});
   const streamTimerRef     = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Aborts an in-flight live stream when the user switches/creates a session
+  const streamAbortRef      = useRef<AbortController | null>(null);
   // Ref so sendMessage always reads the latest session ID without becoming a dep
   const currentSessionRef  = useRef<number | null>(null);
 
@@ -137,6 +140,9 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
       clearInterval(streamTimerRef.current);
       streamTimerRef.current = null;
     }
+    streamAbortRef.current?.abort();
+    streamAbortRef.current = null;
+    setTyping(false);
     setLocalMessages([]);
     currentSessionRef.current = sessionId;
     setCurrentSessionId(sessionId);
@@ -154,6 +160,9 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
       clearInterval(streamTimerRef.current);
       streamTimerRef.current = null;
     }
+    streamAbortRef.current?.abort();
+    streamAbortRef.current = null;
+    setTyping(false);
     setLocalMessages([]);
     setSessionMessages([]);
     try {
@@ -169,7 +178,52 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
     }
   }, [lectureId, createSessionMut]);
 
+  // Typewriter animation for answers that arrive whole (greetings, summaries,
+  // cached answers, guardrail fallbacks, or the GraphQL fallback path).
+  const animateAnswer = useCallback((rawAnswer: string, sources: ChunkSource[]) => {
+    const citation = sources.length > 0 && sources[0].startTime
+      ? `Lecture content · ${sources[0].startTime}`
+      : 'Lecture content';
+
+    const words = rawAnswer.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
+    const msgId = uuidv4();
+
+    setLocalMessages(prev => [...prev, {
+      id: msgId, role: 'ai', type: 'text',
+      content: '', citation, sources, timestamp: new Date(),
+      isStreaming: true,
+    }]);
+    setTyping(false);
+
+    if (autoSpeakRef.current) {
+      voiceSpeakRef.current(rawAnswer);
+    }
+
+    let idx = 0;
+    streamTimerRef.current = setInterval(() => {
+      idx++;
+      const partial = words.slice(0, idx).join(' ');
+      setLocalMessages(prev =>
+        prev.map(m => m.id === msgId ? { ...m, content: partial } : m)
+      );
+      if (idx >= words.length) {
+        clearInterval(streamTimerRef.current!);
+        streamTimerRef.current = null;
+        setLocalMessages(prev =>
+          prev.map(m => m.id === msgId ? { ...m, content: rawAnswer, isStreaming: false } : m)
+        );
+        // Refresh sidebar so session title + updated_at update
+        setSessionsRefreshKey(k => k + 1);
+        console.log(`[CHAT] ✅ Stream complete (${rawAnswer.length} chars)`);
+      }
+    }, 35);
+  }, []);
+
   // ── Send a message in the current session ─────────────────
+  // Primary path: live SSE stream — the draft answer appears as the model
+  // writes it, then the server's final (guardrail-checked) answer replaces
+  // it. If the stream endpoint is unreachable before any response, falls
+  // back to the regular GraphQL mutation (with the typewriter animation).
   const sendMessage = useCallback(
     async (content: string) => {
       const sessionId = currentSessionRef.current;
@@ -179,6 +233,9 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
         clearInterval(streamTimerRef.current);
         streamTimerRef.current = null;
       }
+      streamAbortRef.current?.abort();
+      const controller = new AbortController();
+      streamAbortRef.current = controller;
 
       const userMsg: ChatMessage = {
         id: uuidv4(), role: 'user', type: 'text', content, timestamp: new Date(),
@@ -187,60 +244,90 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
       setTyping(true);
       console.log(`[CHAT] 📤 Session #${sessionId}: "${content.slice(0, 60)}..."`);
 
+      let liveMsgId: string | null = null;
+      let liveText = '';
+      const updateLive = (patch: Partial<ChatMessage>) => {
+        if (!liveMsgId) return;
+        const id = liveMsgId;
+        setLocalMessages(prev => prev.map(m => m.id === id ? { ...m, ...patch } : m));
+      };
+
       try {
-        const { data } = await askLectureAgent({
-          variables: { input: { lectureId, question: content, sessionId } },
-        });
+        const result = await streamAsk(
+          { lectureId, sessionId, question: content },
+          {
+            onDelta: text => {
+              liveText += text;
+              if (!liveMsgId) {
+                const id = uuidv4();
+                liveMsgId = id;
+                setTyping(false);
+                setLocalMessages(prev => [...prev, {
+                  id, role: 'ai', type: 'text', content: liveText,
+                  timestamp: new Date(), isStreaming: true,
+                }]);
+              } else {
+                updateLive({ content: liveText });
+              }
+            },
+            onReset: () => { liveText = ''; updateLive({ content: '' }); },
+          },
+          controller.signal
+        );
+        if (controller.signal.aborted) return;
 
-        const response  = data?.askLectureAgent;
-        const rawAnswer = response?.answer ?? FALLBACK_REPLY;
-        const sources: ChunkSource[] = response?.sources ?? [];
-        const citation = sources.length > 0 && sources[0].startTime
-          ? `Lecture content · ${sources[0].startTime}`
-          : 'Lecture content';
+        const sources = result.sources;
+        if (liveMsgId) {
+          // Server's final answer is authoritative — it may differ from the
+          // streamed draft if the output guardrail revised or replaced it.
+          updateLive({
+            content: result.answer,
+            sources,
+            citation: sources.length > 0 && sources[0].startTime
+              ? `Lecture content · ${sources[0].startTime}`
+              : 'Lecture content',
+            isStreaming: false,
+          });
+          if (autoSpeakRef.current) voiceSpeakRef.current(result.answer);
+          setSessionsRefreshKey(k => k + 1);
+          console.log(`[CHAT] ✅ Live stream complete (${result.answer.length} chars)`);
+        } else {
+          // Nothing streamed (greeting, summary, cached answer, not-found…)
+          animateAnswer(result.answer, sources);
+        }
+        return;
+      } catch (err) {
+        if (controller.signal.aborted || (err as Error).name === 'AbortError') return;
 
-        const words = rawAnswer.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
-        const msgId = uuidv4();
-
-        setLocalMessages(prev => [...prev, {
-          id: msgId, role: 'ai', type: 'text',
-          content: '', citation, sources, timestamp: new Date(),
-          isStreaming: true,
-        }]);
-        setTyping(false);
-
-        if (autoSpeakRef.current) {
-          voiceSpeakRef.current(rawAnswer);
+        // Stream never started → the server did not answer, so the GraphQL
+        // path is a safe fallback (it also handles access-token refresh).
+        if (err instanceof StreamUnavailableError && !liveMsgId) {
+          console.warn('[CHAT] ⚠️ Stream unavailable, falling back to GraphQL:', (err as Error).message);
+          try {
+            const { data } = await askLectureAgent({
+              variables: { input: { lectureId, question: content, sessionId } },
+            });
+            const response = data?.askLectureAgent;
+            animateAnswer(response?.answer ?? FALLBACK_REPLY, response?.sources ?? []);
+            return;
+          } catch (gqlErr) {
+            console.error('[CHAT] ❌ Error:', gqlErr);
+          }
+        } else {
+          console.error('[CHAT] ❌ Stream error:', err);
         }
 
-        let idx = 0;
-        streamTimerRef.current = setInterval(() => {
-          idx++;
-          const partial = words.slice(0, idx).join(' ');
-          setLocalMessages(prev =>
-            prev.map(m => m.id === msgId ? { ...m, content: partial } : m)
-          );
-          if (idx >= words.length) {
-            clearInterval(streamTimerRef.current!);
-            streamTimerRef.current = null;
-            setLocalMessages(prev =>
-              prev.map(m => m.id === msgId ? { ...m, content: rawAnswer, isStreaming: false } : m)
-            );
-            // Refresh sidebar so session title + updated_at update
-            setSessionsRefreshKey(k => k + 1);
-            console.log(`[CHAT] ✅ Stream complete (${rawAnswer.length} chars)`);
-          }
-        }, 35);
-
-      } catch (err) {
-        console.error('[CHAT] ❌ Error:', err);
-        setLocalMessages(prev => [...prev, {
-          id: uuidv4(), role: 'ai', type: 'text', content: FALLBACK_REPLY, timestamp: new Date(),
-        }]);
+        if (liveMsgId) {
+          updateLive({ content: FALLBACK_REPLY, isStreaming: false });
+        } else {
+          setLocalMessages(prev => [...prev, {
+            id: uuidv4(), role: 'ai', type: 'text', content: FALLBACK_REPLY, timestamp: new Date(),
+          }]);
+        }
         setTyping(false);
       }
     },
-    [lectureId, askLectureAgent]
+    [lectureId, askLectureAgent, animateAnswer]
   );
 
   // ── Voice ────────────────────────────────────────────────
@@ -250,7 +337,10 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
   voiceSpeakRef.current = voice.speak;
 
   useEffect(() => {
-    return () => { if (streamTimerRef.current) clearInterval(streamTimerRef.current); };
+    return () => {
+      if (streamTimerRef.current) clearInterval(streamTimerRef.current);
+      streamAbortRef.current?.abort();
+    };
   }, []);
 
   const toggleAutoSpeak = useCallback(() => {

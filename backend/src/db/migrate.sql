@@ -43,6 +43,14 @@ CREATE TABLE IF NOT EXISTS lectures (
 ALTER TABLE lectures ADD COLUMN IF NOT EXISTS progress_current INT NOT NULL DEFAULT 0;
 ALTER TABLE lectures ADD COLUMN IF NOT EXISTS progress_total INT NOT NULL DEFAULT 0;
 
+-- Pointer to the raw uploaded dataset file archived in S3 (see
+-- services/s3-storage.service.ts) — the original .xlsx exactly as uploaded,
+-- independent of what chunk.service.ts does with it. NULL until a dataset
+-- has been uploaded at least once.
+ALTER TABLE lectures ADD COLUMN IF NOT EXISTS dataset_s3_bucket TEXT;
+ALTER TABLE lectures ADD COLUMN IF NOT EXISTS dataset_s3_key TEXT;
+ALTER TABLE lectures ADD COLUMN IF NOT EXISTS dataset_original_filename TEXT;
+
 -- ─────────────────────────────────────────────
 -- 4. lecture_qna_chunks  (core RAG table)
 --    embedding vector(768) = Gemini text-embedding-004
@@ -73,6 +81,16 @@ ALTER TABLE lecture_qna_chunks ALTER COLUMN local_embedding TYPE vector(1024) US
 
 CREATE INDEX IF NOT EXISTS idx_chunks_lecture_id
   ON lecture_qna_chunks(lecture_id);
+
+-- chunk_index: 0 for a row that fit as a single chunk; 0..N-1 when a long
+-- `answer` was split into multiple embedded pieces by chunk.service.ts
+-- (LangChain RecursiveCharacterTextSplitter). question/answer/topic stay
+-- the full original text on every piece — only chunk_text differs — so
+-- consumers that want "one row per source Q&A" (e.g. lecture summary) must
+-- filter chunk_index = 0, and dedupe logic must key on (answer, chunk_index)
+-- rather than answer alone or sibling pieces of the same long answer will
+-- be collapsed into one.
+ALTER TABLE lecture_qna_chunks ADD COLUMN IF NOT EXISTS chunk_index INT NOT NULL DEFAULT 0;
 
 -- ─────────────────────────────────────────────
 -- 5. chat_history

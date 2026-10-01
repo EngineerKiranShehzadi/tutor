@@ -13,7 +13,19 @@ import { ATTR } from '../observability/otel-semconv';
 import { isContentCaptureEnabled, truncateContent } from '../observability/sanitize';
 import type { FinishedTrace, NotFoundReason, SafeMetadata } from '../observability/types';
 import { OBSERVABILITY_SCHEMA_VERSION } from '../observability/types';
-import type { ConversationTurn } from './llm-gemini.service';
+import { runInputGuardrails, REJECTION_MESSAGE_BY_REASON } from '../rag/guardrails/input/input-guardrail.service';
+import type { InputGuardrailResult } from '../rag/guardrails/input/input-guardrail.service';
+import { decomposeQuery } from '../rag/query-processing/decomposition/subquery-decomposition.service';
+import type { SubqueryDecompositionResult } from '../rag/query-processing/decomposition/subquery-decomposition.types';
+import { retrieveForDecomposedQuery } from '../rag/query-processing/retrieval/decomposed-retrieval.service';
+import { runAdaptiveRetrieval } from '../rag/query-processing/adaptive-retrieval/adaptive-retrieval.service';
+import type { AdaptiveRetrievalParams } from '../rag/query-processing/adaptive-retrieval/adaptive-retrieval.service';
+import type { AdaptiveRetrievalResult } from '../rag/query-processing/adaptive-retrieval/adaptive-retrieval.types';
+import type { SubqueryRetrievalDeps } from '../rag/query-processing/retrieval/decomposed-retrieval.service';
+import { runOutputGuardrail } from '../rag/guardrails/output/output-guardrail.service';
+import type { OutputGuardrailParams } from '../rag/guardrails/output/output-guardrail.service';
+import type { OutputGuardrailResult } from '../rag/guardrails/output/answer-verification.types';
+import type { ConversationTurn, AnswerStreamHandlers } from './llm-gemini.service';
 import type { DedupeResult } from './rerank.service';
 import type { RetrievalQueryResult } from './query-rewriter.service';
 import type { RouteClassification } from './query-router.service';
@@ -30,14 +42,19 @@ export const LECTURE_NOT_FOUND_MESSAGE = 'I could not find this information in t
 // when a caller doesn't override them, so normal request handling still
 // lazy-loads exactly as before).
 export interface AskLectureAgentDeps {
+  runInputGuardrails?:     (question: string) => Promise<InputGuardrailResult>;
   generateEmbedding?:      (text: string, isQuery?: boolean) => Promise<number[]>;
   searchChunks?:           (embedding: number[], lectureId: number, limit: number) => Promise<QnaChunk[]>;
   rerankChunks?:           (question: string, candidates: QnaChunk[], topN?: number) => Promise<QnaChunk[]>;
   dedupeAndSelect?:        (rankedChunks: QnaChunk[], desiredCount?: number, minRerankScore?: number) => DedupeResult;
   reorderForContext?:      (chunks: QnaChunk[]) => QnaChunk[];
-  generateAnswer?:         (question: string, chunks: QnaChunk[], lectureTitle: string, history?: ConversationTurn[]) => Promise<string>;
+  generateAnswer?:         (question: string, chunks: QnaChunk[], lectureTitle: string, history?: ConversationTurn[], uncoveredAspects?: string[], attempt?: number, stream?: AnswerStreamHandlers) => Promise<string>;
   resolveRetrievalQuery?:  (question: string, history: ConversationTurn[]) => Promise<RetrievalQueryResult>;
   classifyRoute?:          (question: string) => Promise<RouteClassification>;
+  generateGreeting?:       (message: string, lectureTitle: string, history?: ConversationTurn[]) => Promise<string>;
+  decomposeQuery?:         (effectiveQuery: string) => Promise<SubqueryDecompositionResult>;
+  runAdaptiveRetrieval?:   (params: AdaptiveRetrievalParams, deps: SubqueryRetrievalDeps) => Promise<AdaptiveRetrievalResult>;
+  runOutputGuardrail?:     (params: OutputGuardrailParams) => Promise<OutputGuardrailResult>;
   getAllLectureChunks?:    (lectureId: number) => Promise<QnaChunk[]>;
   generateLectureSummary?: (chunks: QnaChunk[], lectureTitle: string, deps?: SummarizeDeps) => Promise<string | null>;
   lookupAnswerMemory?:     (params: MemoryLookupParams) => Promise<MemoryLookupResult>;
@@ -210,10 +227,20 @@ export const askLectureAgent = async (
     lectureId: number;
     question:  string;
     sessionId: number;
+    // Optional live streaming of the grounded-answer draft (SSE endpoint).
+    // Only the main generation step streams; greetings, summaries, memory
+    // hits and guardrail fallbacks return their text via the final result.
+    // The returned answer stays authoritative — the output guardrail may
+    // revise or replace the streamed draft, so consumers must reconcile.
+    stream?: AnswerStreamHandlers;
   },
   deps: AskLectureAgentDeps = {}
 ): Promise<{ answer: string; sources: QnaChunk[] }> => {
-  const { studentId, lectureId, question, sessionId } = params;
+  const { studentId, lectureId, sessionId } = params;
+  // Reassigned once the input guardrail runs — from that point on, every
+  // downstream stage (routing, retrieval, persistence, generation) sees the
+  // guarded (possibly PII-sanitized) text, never the raw original.
+  let question = params.question;
 
   const trace = new RequestTrace('ask-lecture-agent');
   const onTraceComplete = deps.onTraceComplete ?? recordTrace;
@@ -235,7 +262,10 @@ export const askLectureAgent = async (
     answerPromptVersion: ANSWER_PROMPT_VERSION,
     semanticMemoryEnabled: env.RAG_MEMORY.SEMANTIC_ENABLED,
     environment: env.NODE_ENV,
-    ...(isContentCaptureEnabled() ? { [ATTR.INPUT_VALUE]: truncateContent(question, 500).value } : {}),
+    // Deliberately NOT captured here — the raw question may still contain
+    // PII the input guardrail hasn't sanitized yet. The (possibly
+    // sanitized) INPUT_VALUE is set once the guardrail stage completes,
+    // below.
   });
   // Tracks which stage is in flight so an unexpected thrown error can be
   // mapped to a safe not-found/failure reason code in the outer catch.
@@ -258,10 +288,11 @@ export const askLectureAgent = async (
   // Registers `trace` as "the active trace" for this entire call chain
   // (including every nested service function called below, no matter how
   // many modules deep) — see RequestTrace.runAsActive()/getActiveTrace() in
-  // tracer.ts. This is what lets withGeminiDiagnostic() attach real nested
-  // LLM spans (gemini_router_call, gemini_answer_call, ...) under whichever
-  // trace.span() is currently executing, without threading `trace` through
-  // every function signature in the pipeline.
+  // tracer.ts. This is what lets withLlmDiagnostic() (llm/llm-observability.
+  // service.ts) attach real nested LLM spans (gemini_router_call,
+  // gemini_answer_call, prompt_injection_classifier_call, ...) under
+  // whichever trace.span() is currently executing, without threading
+  // `trace` through every function signature in the pipeline.
   return trace.runAsActive(() => runAskLectureAgent());
 
   async function runAskLectureAgent(): Promise<{ answer: string; sources: QnaChunk[] }> {
@@ -273,6 +304,56 @@ export const askLectureAgent = async (
       finishTrace('ERROR', { responseStatus: 'LECTURE_NOT_READY' });
       throw new AppError('AI tutor is not ready for this lecture yet. Please wait for processing.', 400);
     }
+
+    // 1b. Input Guardrail — runs before query-router.service.ts (see
+    // rag/guardrails/input/input-guardrail.service.ts). ALLOW/SANITIZE
+    // continue with the (possibly sanitized) text as `question` for every
+    // stage below, including persistence; REJECT stops the request here,
+    // before anything is written to the database or sent to any LLM.
+    currentStage = 'input-guardrail';
+    const runGuardrails = deps.runInputGuardrails ?? runInputGuardrails;
+    const guardrailResult = await trace.span(
+      'input-guardrail',
+      () => runGuardrails(question),
+      r => ({
+        'guardrail.action': r.action,
+        'guardrail.reason': r.reason ?? null,
+        'guardrail.pii_detected': Boolean(r.metadata?.piiDetected),
+        // Category labels only (e.g. "EMAIL,PHONE") — never the detected
+        // values themselves. Comma-joined to fit SafeMetadata's flat
+        // string|number|boolean shape, same convention as candidateIds/
+        // selectedChunkIds elsewhere in this file.
+        'guardrail.pii_categories': Array.isArray(r.metadata?.piiCategories) ? r.metadata.piiCategories.join(',') : null,
+        'guardrail.injection_detection_method': (r.metadata?.injectionDetectionMethod as string | undefined) ?? null,
+        'guardrail.injection_decision': (r.metadata?.injectionDecision as string | undefined) ?? null,
+        'guardrail.llm_fallback_used': Boolean(r.metadata?.llmFallbackUsed),
+      }),
+      r => (r.action === 'REJECT' ? 'ERROR' : r.action === 'SANITIZE' ? 'FALLBACK' : 'SUCCESS')
+    );
+    trace.setAttributes({
+      guardrailAction: guardrailResult.action,
+      guardrailReason: guardrailResult.reason ?? null,
+    });
+
+    if (guardrailResult.action === 'REJECT') {
+      logger.warn(`[CHAT] 🛡️  Input guardrail rejected question (reason=${guardrailResult.reason})`);
+      finishTrace('SUCCESS', {
+        responseStatus: 'GUARDRAIL_REJECTED',
+        memoryResult: 'NOT_ATTEMPTED',
+        guardrailReason: guardrailResult.reason,
+      });
+      const message = (guardrailResult.reason && REJECTION_MESSAGE_BY_REASON[guardrailResult.reason])
+        || 'Your message could not be processed. Please rephrase your question.';
+      throw new AppError(message, 400);
+    }
+
+    // Carry the guarded (possibly PII-sanitized) text forward — every stage
+    // from here on, including the DB write immediately below, sees this
+    // value instead of the raw original.
+    question = guardrailResult.sanitizedInput ?? question;
+    trace.setAttributes({
+      ...(isContentCaptureEnabled() ? { [ATTR.INPUT_VALUE]: truncateContent(question, 500).value } : {}),
+    });
 
     // 2. Persist question for admin analytics before AI call
     await query(
@@ -290,6 +371,7 @@ export const askLectureAgent = async (
     const generateAnswer        = deps.generateAnswer        ?? (await import('./llm-gemini.service')).generateAnswer;
     const resolveRetrievalQuery = deps.resolveRetrievalQuery ?? (await import('./query-rewriter.service')).resolveRetrievalQuery;
     const classifyRoute         = deps.classifyRoute         ?? (await import('./query-router.service')).classifyRoute;
+    const generateGreeting      = deps.generateGreeting      ?? (await import('./greeting-response.service')).generateGreetingResponse;
 
     // 4. Load current session's history for follow-up context
     currentStage = 'load-session-history';
@@ -316,7 +398,12 @@ export const askLectureAgent = async (
 
     // ── GREETING — no embedding, vector search, reranking, or lecture load.
     if (route === 'GREETING') {
-      const answer = `Hi! I'm the AI tutor for "${lecture.title}". Ask me anything about this lecture and I'll help explain it.`;
+      currentStage = 'generate-greeting-response';
+      const answer = await trace.span(
+        'generate-greeting-response',
+        () => generateGreeting(question, lecture.title, historyTurns),
+        a => ({ answerLength: a.length })
+      );
       await trace.span('save-chat-entry', async () => {
         await saveChatEntry({ studentId, lectureId, question, answer, sourceChunkIds: [], sessionId });
         await touchSession(studentId, sessionId, question);
@@ -454,108 +541,231 @@ export const askLectureAgent = async (
       precomputedEmbedding = memoryResult.embedding;
     }
 
-    // 5. Embed the retrieval query (reuse the embedding computed during
-    // answer-memory lookup, if any, instead of generating it twice)
-    let questionEmbedding: number[];
-    if (precomputedEmbedding) {
-      questionEmbedding = precomputedEmbedding;
-    } else {
-      logger.info(`[CHAT] 🔍 Embedding: "${retrievalQuery.slice(0, 60)}..."`);
-      currentStage = 'generate-query-embedding';
-      questionEmbedding = await trace.span(
-        'generate-query-embedding',
-        () => generateEmbedding(retrievalQuery, true),
-        vec => ({ embeddingModelVersion: EMBEDDING_MODEL_VERSION, inputCharLength: retrievalQuery.length, vectorDimension: vec.length, retryCount: 0 })
+    // 4d. Selective Subquery Decomposition — operates on the effective
+    // self-contained query (retrievalQuery: the rewritten query for
+    // CONTEXTUAL_FOLLOW_UP, or the original question for FACT_QUESTION).
+    // A cheap deterministic gate decides whether this is even a candidate
+    // before any LLM call happens — see rag/query-processing/decomposition/
+    // compound-query.detector.ts — so an ordinary question pays zero extra
+    // latency. Distinct from and runs after the history rewriter above;
+    // never merged into it.
+    currentStage = 'decompose-query';
+    const decomposeQueryFn = deps.decomposeQuery ?? decomposeQuery;
+    const decomposition = await trace.span(
+      'decompose-query',
+      () => decomposeQueryFn(retrievalQuery),
+      (d: SubqueryDecompositionResult) => ({
+        'query.decomposition.enabled': env.QUERY_DECOMPOSITION.ENABLED,
+        'query.decomposition.mode': d.mode,
+        'query.decomposition.reason': d.reason,
+        'query.decomposition.llm_used': d.llmUsed,
+        'query.decomposition.subquery_count': d.subqueries.length,
+      }),
+      (d: SubqueryDecompositionResult) =>
+        (['CLASSIFIER_TIMEOUT', 'CLASSIFIER_ERROR', 'INVALID_SUBQUERY_LIST'].includes(d.reason) ? 'FALLBACK' : 'SUCCESS')
+    );
+    trace.setAttributes({ decompositionMode: decomposition.mode, decompositionReason: decomposition.reason });
+    if (decomposition.mode === 'DECOMPOSED') {
+      logger.info(`[CHAT] 🔀 Decomposed into ${decomposition.subqueries.length} subquery(ies): ${decomposition.subqueries.map(s => `"${s.slice(0, 50)}"`).join(', ')}`);
+    }
+
+    // 5/6. Retrieval — DIRECT reuses the existing single-query embed ->
+    // vector-search -> rerank -> dedupe pipeline completely unchanged.
+    // DECOMPOSED fans the same building blocks out across every subquery
+    // concurrently and merges with coverage-aware selection — see rag/
+    // query-processing/retrieval/decomposed-retrieval.service.ts. Both
+    // converge on `chunks` (rerank/citation order) before generation.
+    let chunks: QnaChunk[];
+    let finalCandidateCount: number;
+    let uncoveredAspects: string[] = [];
+    // Only ever populated by the DIRECT branch below — a decomposed query
+    // has no single embedding representing the parent query (each subquery
+    // gets its own, see decomposed-retrieval.service.ts). Answer-memory
+    // still needs one for the parent/effective question; it's computed
+    // on-demand at the write-memory step below when this stays null.
+    let questionEmbedding: number[] | null = null;
+
+    if (decomposition.mode === 'DECOMPOSED') {
+      currentStage = 'decomposed-retrieval';
+      const decomposedResult = await retrieveForDecomposedQuery(
+        { lectureId, subqueries: decomposition.subqueries },
+        { generateEmbedding, searchChunks, rerankChunks: rerankChunksFn }
       );
-    }
-
-    // 6. Vector search — lecture-scoped, wider candidate pool for reranking
-    currentStage = 'vector-search';
-    const CANDIDATE_LIMIT = 15;
-    const candidates = await trace.span(
-      'vector-search',
-      () => searchChunks(questionEmbedding, lectureId, CANDIDATE_LIMIT),
-      c => ({
-        [ATTR.RETRIEVAL_DOCUMENTS]: JSON.stringify(c.map((chunk, i) => ({ id: chunk.id, score: chunk.similarity ?? null, rank: i }))),
-        lectureId,
-        candidateLimit: CANDIDATE_LIMIT,
-        candidateCount: c.length,
-        similarityThreshold: SIMILARITY_THRESHOLD,
-        topCosineSimilarity: c[0]?.similarity ?? null,
-        lowestReturnedSimilarity: c[c.length - 1]?.similarity ?? null,
-        zeroCandidateResult: c.length === 0,
-        candidateIds: c.map(chunk => chunk.id).join(','),
-      })
-    );
-    if (candidates.length === 0) {
-      logger.warn(`[CHAT] ⚠️  No relevant chunks found — returning not-found message`);
-      await trace.span('save-chat-entry', async () => {
-        await saveChatEntry({ studentId, lectureId, question, answer: LECTURE_NOT_FOUND_MESSAGE, sourceChunkIds: [], sessionId });
-        await touchSession(studentId, sessionId, question);
-      }, () => ({ sourceChunkCount: 0 }));
-      finishTrace('SUCCESS', { responseStatus: 'NOT_FOUND', notFoundReason: 'NO_VECTOR_CANDIDATES', memoryResult: memoryResultAttr, candidateCount: 0 });
-      return { answer: LECTURE_NOT_FOUND_MESSAGE, sources: [] };
-    }
-
-    logger.info(`[CHAT] ✅ ${candidates.length} candidates (top similarity=${candidates[0].similarity?.toFixed(3)})`);
-
-    // 6b. Rerank — cross-encoder scores the full candidate pool by precise
-    // query-chunk relevance (not just the top 5, so dedup below has real
-    // backfill material from what's already been computed). Dedup and
-    // relevance-floor exclusion are covered by the same span: both are
-    // about how many of the reranked candidates survive to generation.
-    currentStage = 'rerank-candidates';
-    let dedupedAwayCount = 0;
-    let belowFloorCount = 0;
-    let topRerankerScore: number | null = null;
-    const chunks = await trace.span(
-      'rerank-candidates',
-      async () => {
-        const rankedAll = await rerankChunksFn(retrievalQuery, candidates, candidates.length);
-        topRerankerScore = rankedAll[0]?.rerankScore ?? null;
-        const { selected, dedupedAway } = dedupeAndSelect(rankedAll, 5);
-        dedupedAwayCount = dedupedAway.length;
-        belowFloorCount = Math.max(0, rankedAll.length - selected.length - dedupedAway.length);
-        return selected;
-      },
-      c => ({
-        [ATTR.RERANKER_MODEL_NAME]: RERANKER_MODEL_VERSION,
-        [ATTR.RERANKER_OUTPUT_DOCUMENTS]: JSON.stringify(c.map((chunk, i) => ({ id: chunk.id, score: chunk.rerankScore ?? null, rank: i }))),
-        rerankerModelVersion: RERANKER_MODEL_VERSION,
-        rerankerInputCount: candidates.length,
-        rerankerOutputCount: c.length,
-        minRerankScore: DEFAULT_MIN_RERANK_SCORE,
-        topRerankerScore,
-        lowestSelectedRerankerScore: c[c.length - 1]?.rerankScore ?? null,
-        chunksRemovedByRelevanceFloor: belowFloorCount,
-        chunksRemovedByDedupe: dedupedAwayCount,
-        selectedChunkIds: c.map(chunk => chunk.id).join(','),
-        ...(isContentCaptureEnabled() ? { [ATTR.RERANKER_QUERY]: truncateContent(retrievalQuery, 300).value } : {}),
-      })
-    );
-    if (dedupedAwayCount > 0) {
-      logger.info(`[CHAT] 🧹 Deduped ${dedupedAwayCount} duplicate-answer chunk(s) → ${chunks.length} distinct chunks for generation`);
-    } else {
-      logger.info(`[CHAT] ✅ ${chunks.length} distinct chunks for generation (no duplicates)`);
-    }
-
-    // 6d. Everything survived retrieval but the relevance floor removed every
-    // candidate — same not-found outcome as zero candidates, without ever
-    // calling Gemini with an empty context.
-    if (chunks.length === 0) {
-      logger.warn(`[CHAT] ⚠️  All candidates fell below the relevance floor — returning not-found message`);
-      await trace.span('save-chat-entry', async () => {
-        await saveChatEntry({ studentId, lectureId, question, answer: LECTURE_NOT_FOUND_MESSAGE, sourceChunkIds: [], sessionId });
-        await touchSession(studentId, sessionId, question);
-      }, () => ({ sourceChunkCount: 0 }));
-      finishTrace('SUCCESS', {
-        responseStatus: 'NOT_FOUND',
-        notFoundReason: 'ALL_CANDIDATES_BELOW_RERANK_FLOOR',
-        memoryResult: memoryResultAttr,
-        candidateCount: candidates.length,
-        selectedChunkCount: 0,
+      finalCandidateCount = decomposedResult.totalCandidateCount;
+      uncoveredAspects = decomposedResult.uncoveredSubqueryIndexes.map(i => decomposition.subqueries[i]);
+      trace.setAttributes({
+        'query.decomposition.covered_subqueries': decomposedResult.coveredSubqueryIndexes.join(','),
+        'query.decomposition.uncovered_subqueries': decomposedResult.uncoveredSubqueryIndexes.join(','),
       });
-      return { answer: LECTURE_NOT_FOUND_MESSAGE, sources: [] };
+
+      // Only a complete absence of evidence across every subquery is a real
+      // "not found" — partial coverage continues to generation below, which
+      // is told (via uncoveredAspects) which part(s) it must not guess at.
+      if (decomposedResult.selectedChunks.length === 0) {
+        logger.warn(`[CHAT] ⚠️  No subquery produced qualifying evidence — returning not-found message`);
+        await trace.span('save-chat-entry', async () => {
+          await saveChatEntry({ studentId, lectureId, question, answer: LECTURE_NOT_FOUND_MESSAGE, sourceChunkIds: [], sessionId });
+          await touchSession(studentId, sessionId, question);
+        }, () => ({ sourceChunkCount: 0 }));
+        finishTrace('SUCCESS', {
+          responseStatus: 'NOT_FOUND',
+          notFoundReason: 'ALL_CANDIDATES_BELOW_RERANK_FLOOR',
+          memoryResult: memoryResultAttr,
+          candidateCount: finalCandidateCount,
+          selectedChunkCount: 0,
+        });
+        return { answer: LECTURE_NOT_FOUND_MESSAGE, sources: [] };
+      }
+
+      chunks = decomposedResult.selectedChunks;
+      logger.info(`[CHAT] ✅ Decomposed retrieval: ${decomposedResult.coveredSubqueryIndexes.length}/${decomposition.subqueries.length} subquery(ies) covered → ${chunks.length} chunks for generation`);
+
+      // 6c. Iterative Adaptive Retrieval — only runs when decomposition's
+      // own deterministic coverage signal already found a real gap (never
+      // for a fully-covered decomposed query, never for a DIRECT query).
+      // Makes at most ADAPTIVE_RETRIEVAL_MAX_ITERATIONS bounded, targeted
+      // retrieval attempts for the specific uncovered aspect(s) — see
+      // rag/query-processing/adaptive-retrieval/adaptive-retrieval.
+      // service.ts for the full stop-condition list. Never re-runs
+      // decomposition itself and never broadens beyond what it already
+      // identified as missing.
+      if (decomposedResult.uncoveredSubqueryIndexes.length > 0) {
+        currentStage = 'adaptive-retrieval';
+        const runAdaptive = deps.runAdaptiveRetrieval ?? runAdaptiveRetrieval;
+        const adaptiveResult = await runAdaptive(
+          {
+            effectiveQuery: retrievalQuery,
+            lectureId,
+            subqueries: decomposition.subqueries,
+            perSubquery: decomposedResult.perSubquery,
+            coveredSubqueryIndexes: decomposedResult.coveredSubqueryIndexes,
+            uncoveredSubqueryIndexes: decomposedResult.uncoveredSubqueryIndexes,
+          },
+          { generateEmbedding, searchChunks, rerankChunks: rerankChunksFn }
+        );
+        trace.setAttributes({
+          adaptiveRetrievalTriggered: adaptiveResult.triggered,
+          adaptiveRetrievalStopReason: adaptiveResult.stopReason,
+        });
+        if (adaptiveResult.triggered) {
+          chunks = adaptiveResult.selectedChunks;
+          uncoveredAspects = adaptiveResult.uncoveredSubqueryIndexes.map(i => decomposition.subqueries[i]);
+          finalCandidateCount += adaptiveResult.iterations.reduce((sum, it) => sum + it.newChunkCount, 0);
+          if (adaptiveResult.coveredSubqueryIndexes.length > decomposedResult.coveredSubqueryIndexes.length) {
+            logger.info(`[CHAT] 🔁 Adaptive retrieval recovered evidence for ${adaptiveResult.coveredSubqueryIndexes.length - decomposedResult.coveredSubqueryIndexes.length} subquery(ies) (${adaptiveResult.iterations.length} iteration(s), stopReason=${adaptiveResult.stopReason})`);
+          } else {
+            logger.info(`[CHAT] 🔁 Adaptive retrieval made no further progress (stopReason=${adaptiveResult.stopReason})`);
+          }
+        }
+      }
+    } else {
+      // 5. Embed the retrieval query (reuse the embedding computed during
+      // answer-memory lookup, if any, instead of generating it twice)
+      if (precomputedEmbedding) {
+        questionEmbedding = precomputedEmbedding;
+      } else {
+        logger.info(`[CHAT] 🔍 Embedding: "${retrievalQuery.slice(0, 60)}..."`);
+        currentStage = 'generate-query-embedding';
+        questionEmbedding = await trace.span(
+          'generate-query-embedding',
+          () => generateEmbedding(retrievalQuery, true),
+          vec => ({ embeddingModelVersion: EMBEDDING_MODEL_VERSION, inputCharLength: retrievalQuery.length, vectorDimension: vec.length, retryCount: 0 })
+        );
+      }
+
+      // 6. Vector search — lecture-scoped, wider candidate pool for reranking
+      currentStage = 'vector-search';
+      const CANDIDATE_LIMIT = 15;
+      // Just assigned above in both branches — a non-null local so the
+      // closure below (which TS can't narrow a captured outer `let`
+      // through) has a definitely-number[] value to call searchChunks with.
+      const embeddingForSearch: number[] = questionEmbedding!;
+      const candidates = await trace.span(
+        'vector-search',
+        () => searchChunks(embeddingForSearch, lectureId, CANDIDATE_LIMIT),
+        c => ({
+          [ATTR.RETRIEVAL_DOCUMENTS]: JSON.stringify(c.map((chunk, i) => ({ id: chunk.id, score: chunk.similarity ?? null, rank: i }))),
+          lectureId,
+          candidateLimit: CANDIDATE_LIMIT,
+          candidateCount: c.length,
+          similarityThreshold: SIMILARITY_THRESHOLD,
+          topCosineSimilarity: c[0]?.similarity ?? null,
+          lowestReturnedSimilarity: c[c.length - 1]?.similarity ?? null,
+          zeroCandidateResult: c.length === 0,
+          candidateIds: c.map(chunk => chunk.id).join(','),
+        })
+      );
+      finalCandidateCount = candidates.length;
+      if (candidates.length === 0) {
+        logger.warn(`[CHAT] ⚠️  No relevant chunks found — returning not-found message`);
+        await trace.span('save-chat-entry', async () => {
+          await saveChatEntry({ studentId, lectureId, question, answer: LECTURE_NOT_FOUND_MESSAGE, sourceChunkIds: [], sessionId });
+          await touchSession(studentId, sessionId, question);
+        }, () => ({ sourceChunkCount: 0 }));
+        finishTrace('SUCCESS', { responseStatus: 'NOT_FOUND', notFoundReason: 'NO_VECTOR_CANDIDATES', memoryResult: memoryResultAttr, candidateCount: 0 });
+        return { answer: LECTURE_NOT_FOUND_MESSAGE, sources: [] };
+      }
+
+      logger.info(`[CHAT] ✅ ${candidates.length} candidates (top similarity=${candidates[0].similarity?.toFixed(3)})`);
+
+      // 6b. Rerank — cross-encoder scores the full candidate pool by precise
+      // query-chunk relevance (not just the top 5, so dedup below has real
+      // backfill material from what's already been computed). Dedup and
+      // relevance-floor exclusion are covered by the same span: both are
+      // about how many of the reranked candidates survive to generation.
+      currentStage = 'rerank-candidates';
+      let dedupedAwayCount = 0;
+      let belowFloorCount = 0;
+      let topRerankerScore: number | null = null;
+      chunks = await trace.span(
+        'rerank-candidates',
+        async () => {
+          const rankedAll = await rerankChunksFn(retrievalQuery, candidates, candidates.length);
+          topRerankerScore = rankedAll[0]?.rerankScore ?? null;
+          const { selected, dedupedAway } = dedupeAndSelect(rankedAll, 5);
+          dedupedAwayCount = dedupedAway.length;
+          belowFloorCount = Math.max(0, rankedAll.length - selected.length - dedupedAway.length);
+          return selected;
+        },
+        c => ({
+          [ATTR.RERANKER_MODEL_NAME]: RERANKER_MODEL_VERSION,
+          [ATTR.RERANKER_OUTPUT_DOCUMENTS]: JSON.stringify(c.map((chunk, i) => ({ id: chunk.id, score: chunk.rerankScore ?? null, rank: i }))),
+          rerankerModelVersion: RERANKER_MODEL_VERSION,
+          rerankerInputCount: candidates.length,
+          rerankerOutputCount: c.length,
+          minRerankScore: DEFAULT_MIN_RERANK_SCORE,
+          topRerankerScore,
+          lowestSelectedRerankerScore: c[c.length - 1]?.rerankScore ?? null,
+          chunksRemovedByRelevanceFloor: belowFloorCount,
+          chunksRemovedByDedupe: dedupedAwayCount,
+          selectedChunkIds: c.map(chunk => chunk.id).join(','),
+          ...(isContentCaptureEnabled() ? { [ATTR.RERANKER_QUERY]: truncateContent(retrievalQuery, 300).value } : {}),
+        })
+      );
+      if (dedupedAwayCount > 0) {
+        logger.info(`[CHAT] 🧹 Deduped ${dedupedAwayCount} duplicate-answer chunk(s) → ${chunks.length} distinct chunks for generation`);
+      } else {
+        logger.info(`[CHAT] ✅ ${chunks.length} distinct chunks for generation (no duplicates)`);
+      }
+
+      // 6d. Everything survived retrieval but the relevance floor removed every
+      // candidate — same not-found outcome as zero candidates, without ever
+      // calling Gemini with an empty context.
+      if (chunks.length === 0) {
+        logger.warn(`[CHAT] ⚠️  All candidates fell below the relevance floor — returning not-found message`);
+        await trace.span('save-chat-entry', async () => {
+          await saveChatEntry({ studentId, lectureId, question, answer: LECTURE_NOT_FOUND_MESSAGE, sourceChunkIds: [], sessionId });
+          await touchSession(studentId, sessionId, question);
+        }, () => ({ sourceChunkCount: 0 }));
+        finishTrace('SUCCESS', {
+          responseStatus: 'NOT_FOUND',
+          notFoundReason: 'ALL_CANDIDATES_BELOW_RERANK_FLOOR',
+          memoryResult: memoryResultAttr,
+          candidateCount: finalCandidateCount,
+          selectedChunkCount: 0,
+        });
+        return { answer: LECTURE_NOT_FOUND_MESSAGE, sources: [] };
+      }
     }
 
     // 7. Generate answer — reorder for the "lost in the middle" effect: best
@@ -563,17 +773,62 @@ export const askLectureAgent = async (
     // the middle. chunkIds/sources below intentionally keep rerank order.
     const contextChunks = reorderForContext(chunks);
     currentStage = 'generate-grounded-answer';
-    const answer = await trace.span(
+    const draftAnswer = await trace.span(
       'generate-grounded-answer',
-      () => generateAnswer(question, contextChunks, lecture.title, historyTurns),
+      // uncoveredAspects is only ever non-empty for a decomposed query with
+      // partial coverage — see generateAnswer's doc comment in
+      // llm-gemini.service.ts for how it's used (a note, never merged into
+      // the grounded context itself).
+      () => generateAnswer(question, contextChunks, lecture.title, historyTurns, uncoveredAspects, 1, params.stream),
       a => ({
         answerPromptVersion: ANSWER_PROMPT_VERSION,
         contextChunkCount: contextChunks.length,
         contextChunkIds: contextChunks.map(c => c.id).join(','),
         answerCharLength: a.length,
+        uncoveredAspectCount: uncoveredAspects.length,
         ...(isContentCaptureEnabled() ? { [ATTR.OUTPUT_VALUE]: truncateContent(a, 2000).value } : {}),
       })
     );
+
+    // 7b. Output Guardrail — post-generation groundedness verification (see
+    // rag/guardrails/output/output-guardrail.service.ts). Judges the draft
+    // against the exact contextChunks actually supplied to the generator,
+    // never a fresh retrieval pass — Iterative Adaptive Retrieval already
+    // owns pre-generation evidence gaps. Verify -> optional bounded revise
+    // -> re-verify -> the result below is what actually gets persisted;
+    // an unsupported draft never reaches chat_history/answer memory.
+    currentStage = 'output-guardrail';
+    const runGuardrail = deps.runOutputGuardrail ?? runOutputGuardrail;
+    const guardrailOutcome = await runGuardrail({
+      question,
+      // Selective Output Format Validation reads its LIST/TABLE signals
+      // from the same effective, self-contained query already used for
+      // retrieval — see OutputGuardrailParams.effectiveQuery's doc comment.
+      effectiveQuery: retrievalQuery,
+      uncoveredAspects,
+      evidenceTexts: contextChunks.map(c => c.chunk_text),
+      draftAnswer,
+      notFoundMessage: LECTURE_NOT_FOUND_MESSAGE,
+    });
+    trace.setAttributes({
+      answerVerificationEnabled: env.ANSWER_VERIFICATION.ENABLED,
+      answerVerificationDecision: guardrailOutcome.decision,
+      answerVerificationReason: guardrailOutcome.reason,
+      answerVerificationVerified: guardrailOutcome.verified,
+      outputFormatExpected: guardrailOutcome.expectedFormat,
+      outputFormatValid: guardrailOutcome.formatValid,
+      outputFormatRepairAttempted: guardrailOutcome.formatRepairAttempted,
+      outputFormatRepairSucceeded: guardrailOutcome.formatRepairSucceeded,
+      outputPiiDetected: guardrailOutcome.piiDetected,
+      outputPiiCategories: guardrailOutcome.piiCategories.join(','),
+    });
+    if (guardrailOutcome.reason !== 'VERIFIED') {
+      logger.info(`[CHAT] 🛡️  Output guardrail: ${guardrailOutcome.reason} (verified=${guardrailOutcome.verified}, revisionAttempted=${guardrailOutcome.revisionAttempted})`);
+    }
+    if (guardrailOutcome.piiDetected) {
+      logger.info(`[CHAT] 🛡️  Output guardrail: PII sanitized in final answer (${guardrailOutcome.piiCategories.join(', ')})`);
+    }
+    const answer = guardrailOutcome.finalAnswer;
 
     // 8. Save and touch session
     const chunkIds = chunks.map((c: QnaChunk) => c.id);
@@ -585,13 +840,27 @@ export const askLectureAgent = async (
     }, () => ({ sourceChunkCount: chunkIds.length }));
 
     // 9. Answer-memory write — FACT_QUESTION only, after a successful,
-    // grounded, chunk-backed answer is already saved. Best-effort: any
-    // failure here must never change the response already returned below.
-    if (route === 'FACT_QUESTION') {
+    // grounded, chunk-backed answer is already saved, AND only once output
+    // verification actually passed (guardrailOutcome.verified). A
+    // conservative fallback (verification failed/timed out/never got
+    // verified) must never be cached as if it were a good answer — for a
+    // transient verifier failure in particular, caching that fallback
+    // would keep serving "not found" for a question retrieval could
+    // actually answer. Best-effort: any failure here must never change the
+    // response already returned below.
+    if (route === 'FACT_QUESTION' && guardrailOutcome.verified) {
       try {
         const memoryService = await import('./rag-answer-memory.service');
         const writeAnswerMemory = deps.writeAnswerMemory ?? memoryService.writeAnswerMemory;
         const lectureContentHash = memoryLectureContentHash ?? await memoryService.computeLectureContentHash(lectureId);
+        // A decomposed query never computes a single embedding for the
+        // parent/effective question (each subquery gets its own — see
+        // decomposed-retrieval.service.ts, and the "do not distort the
+        // architecture to reuse a parent-query embedding" rule this
+        // implements). Answer-memory still needs one to support the
+        // optional semantic-similarity lookup, so it's computed here, once,
+        // only when actually persisting — never during retrieval itself.
+        const memoryEmbedding = questionEmbedding ?? await generateEmbedding(retrievalQuery, true);
         await trace.span(
           'write-answer-memory',
           () => writeAnswerMemory({
@@ -602,7 +871,7 @@ export const askLectureAgent = async (
             retrievalQuery,
             answer,
             sourceChunkIds: chunkIds,
-            questionEmbedding,
+            questionEmbedding: memoryEmbedding,
             lectureContentHash,
           }),
           () => ({ writeAttempted: true, sourceChunkCount: chunkIds.length })
@@ -618,7 +887,7 @@ export const askLectureAgent = async (
     finishTrace('SUCCESS', {
       responseStatus: 'ANSWERED',
       memoryResult: memoryResultAttr,
-      candidateCount: candidates.length,
+      candidateCount: finalCandidateCount,
       selectedChunkCount: chunks.length,
       answerCharLength: answer.length,
       ...(isContentCaptureEnabled() ? { [ATTR.OUTPUT_VALUE]: truncateContent(answer, 2000).value } : {}),

@@ -70,6 +70,12 @@ export interface Lecture {
   status: LectureStatus;
   progress_current: number;
   progress_total: number;
+  // Pointer to the raw uploaded dataset file archived in S3 (see
+  // services/s3-storage.service.ts) — null until a dataset has been
+  // uploaded at least once.
+  dataset_s3_bucket: string | null;
+  dataset_s3_key: string | null;
+  dataset_original_filename: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -85,6 +91,11 @@ export interface QnaChunk {
   start_time: string | null;
   end_time: string | null;
   keywords: string | null;
+  // Position of this chunk among the pieces a long answer was split into
+  // (0 for a row that fit as a single chunk). Optional because several
+  // read paths — analytics, answer-memory citations — don't select it and
+  // don't need it; retrieval/dedupe paths always populate it.
+  chunk_index?: number;
   similarity?: number;
   rerankScore?: number;
 }

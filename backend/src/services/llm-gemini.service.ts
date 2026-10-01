@@ -1,38 +1,26 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import { env } from '../config/env';
 import { AppError } from '../middleware/errorHandler';
 import { QnaChunk } from '../types';
 import { logger } from '../utils/logger';
-import { withGeminiDiagnostic } from '../observability/gemini-diagnostics';
-
-let client: GoogleGenerativeAI | null = null;
+import { env } from '../config/env';
+import { resolveLlmProvider } from '../llm/llm-provider.resolver';
+import { withLlmDiagnostic, extractLlmUsage } from '../llm/llm-observability.service';
+import { generateContent } from './gemini-provider.service';
 
 export interface ConversationTurn {
   question: string;
   answer:   string;
 }
 
-export function getClient(): GoogleGenerativeAI {
-  if (!env.GEMINI_API_KEY) {
-    throw new AppError('GEMINI_API_KEY is not configured. Please add it to your .env file.', 500);
-  }
-  if (!client) {
-    client = new GoogleGenerativeAI(env.GEMINI_API_KEY);
-  }
-  return client;
-}
-
+// Uses chunk_text as-is rather than rebuilding from question/answer/topic:
+// chunk_text is what was actually embedded, searched, and reranked, so the
+// model sees the same content the retrieval scores were computed on. This
+// matters once an answer can be split into multiple chunks (see
+// chunk.service.ts) — rebuilding from the full `answer` field would stuff
+// the entire original answer into the prompt even when only one piece of it
+// was judged relevant, and would duplicate it outright if two sibling
+// pieces of the same split answer both got selected.
 function buildContext(chunks: QnaChunk[]): string {
-  return chunks
-    .map(c => {
-      const timestamp = c.start_time ? `Timestamp: ${c.start_time} - ${c.end_time ?? ''}` : '';
-      return `[Lecture Content]
-Topic: ${c.topic ?? 'General'}
-Q: ${c.question}
-A: ${c.answer}
-${timestamp}`.trim();
-    })
-    .join('\n\n');
+  return chunks.map(c => `[Lecture Content]\n${c.chunk_text}`).join('\n\n');
 }
 
 function buildHistoryBlock(turns: ConversationTurn[]): string {
@@ -75,16 +63,8 @@ export const generateAnswerFromLLM = async (
   lectureTitle: string,
   attempt = 1
 ): Promise<string> => {
-  const genAI = getClient();
   // gemini-1.5-flash is fully retired (404) — fall back to gemini-flash-latest.
   const modelName = attempt <= 2 ? 'gemini-2.5-flash' : 'gemini-flash-latest';
-  const model = genAI.getGenerativeModel({
-    model: modelName,
-    generationConfig: {
-      temperature: 0.5,
-      maxOutputTokens: 4096,
-    },
-  });
 
   const prompt = `${LLM_FALLBACK_SYSTEM_PROMPT}
 
@@ -95,8 +75,13 @@ Student Question: ${question}`;
   logger.info(`[LLM] 🤖 No lecture chunks — generating from general knowledge: "${question.slice(0, 60)}..."`);
 
   try {
-    const result = await model.generateContent(prompt);
-    const answer = result.response.text();
+    const result = await generateContent({
+      model: modelName,
+      prompt,
+      temperature: 0.5,
+      maxOutputTokens: 4096,
+    });
+    const answer = result.text;
     if (!answer?.trim()) throw new AppError('Empty response from AI model', 500);
     logger.info(`[LLM] ✅ LLM fallback answer generated (${answer.length} chars)`);
     return answer;
@@ -117,28 +102,44 @@ Student Question: ${question}`;
   }
 };
 
+// Optional live-streaming hooks for generateAnswer. onDelta receives each
+// piece of the draft as it's produced; onReset fires when a transient failure
+// forces a retry AFTER some text was already streamed, so the consumer can
+// discard the partial draft instead of showing it twice.
+export interface AnswerStreamHandlers {
+  onDelta: (text: string) => void;
+  onReset?: () => void;
+}
+
 export const generateAnswer = async (
   question: string,
   chunks: QnaChunk[],
   lectureTitle: string,
   history: ConversationTurn[] = [],
-  attempt = 1
+  // Set only for a decomposed query with partial retrieval coverage — the
+  // subquery texts that produced no qualifying evidence (see rag/
+  // query-processing/retrieval/decomposed-retrieval.service.ts). Appended
+  // as an explicit note below, never merged into `context`, so the strict
+  // "use ONLY the provided context" grounding rule above is unchanged —
+  // this only tells the model which part(s) it must NOT try to answer from
+  // outside knowledge, instead of leaving it to guess.
+  uncoveredAspects: string[] = [],
+  attempt = 1,
+  stream?: AnswerStreamHandlers
 ): Promise<string> => {
-  const genAI = getClient();
-  // Fall back to gemini-flash-latest after 2 failed attempts on 2.5-flash.
-  // Was previously 'gemini-1.5-flash', which is now fully retired (404) —
-  // that fallback target no longer existed regardless of quota.
-  const modelName = attempt <= 2 ? 'gemini-2.5-flash' : 'gemini-flash-latest';
-  const model = genAI.getGenerativeModel({
-    model: modelName,
-    generationConfig: {
-      temperature: 0.3,
-      maxOutputTokens: 8192,
-    },
-  });
+  // Falls back to env.LLM.RAG_ANSWER.FALLBACK_MODEL after 2 failed attempts
+  // on the primary model (default gemini-2.5-flash -> gemini-flash-latest,
+  // preserving the exact chain this used before it became configurable —
+  // gemini-1.5-flash is fully retired (404), which is why that fallback
+  // target changed from what it originally was).
+  const modelName = attempt <= 2 ? env.LLM.RAG_ANSWER.MODEL : env.LLM.RAG_ANSWER.FALLBACK_MODEL;
+  const provider = resolveLlmProvider(env.LLM.RAG_ANSWER.PROVIDER);
 
   const context     = buildContext(chunks);
   const historyBlock = buildHistoryBlock(history);
+  const uncoveredBlock = uncoveredAspects.length > 0
+    ? `\n\nNote: the lecture content above does not cover the following part(s) of the question. If your answer would otherwise need them, explicitly say that part was not found in this lecture — do not guess or use outside knowledge for it:\n${uncoveredAspects.map(a => `- ${a}`).join('\n')}`
+    : '';
   const prompt = `${SYSTEM_PROMPT}
 
 Lecture: "${lectureTitle}"
@@ -147,15 +148,19 @@ Lecture Q&A Context:
 ${context}
 ${historyBlock ? `\n${historyBlock}` : ''}
 Current Student Question:
-${question}`;
+${question}${uncoveredBlock}`;
 
   logger.info(`[LLM] 🤖 Sending prompt to Gemini (${chunks.length} chunks, question="${question.slice(0, 60)}...")`);
 
+  let streamedAny = false;
+
   try {
-    const result = await withGeminiDiagnostic(
+    const request = { model: modelName, userPrompt: prompt, temperature: 0.3, maxOutputTokens: 8192 };
+    const result = await withLlmDiagnostic(
       {
         spanName: 'gemini_answer_call',
         operationType: 'GROUNDED_ANSWER',
+        provider: provider.name,
         model: modelName,
         answerPromptVersion: ANSWER_PROMPT_VERSION,
         validContextSupplied: chunks.length > 0,
@@ -163,20 +168,22 @@ ${question}`;
         invocationParams: { temperature: 0.3, maxOutputTokens: 8192 },
         promptPreview: prompt,
       },
-      () => model.generateContent(prompt),
-      r => ({
-        input: r.response.usageMetadata?.promptTokenCount,
-        output: r.response.usageMetadata?.candidatesTokenCount,
-        finishReason: r.response.candidates?.[0]?.finishReason,
-      })
+      // The whole grounding prompt (SYSTEM_PROMPT + lecture context +
+      // history + question) is sent as one user prompt, exactly as before —
+      // no separate systemPrompt field, so this doesn't change what the
+      // model actually sees.
+      () => stream && provider.generateStream
+        ? provider.generateStream(request, piece => { streamedAny = true; stream.onDelta(piece); })
+        : provider.generate(request),
+      extractLlmUsage
     );
-    const finishReason = result.response.candidates?.[0]?.finishReason;
+    const finishReason = result.finishReason;
 
     if (finishReason === 'MAX_TOKENS') {
       logger.warn('[LLM] ⚠️  Response hit MAX_TOKENS — answer may be truncated');
     }
 
-    const answer = result.response.text();
+    const answer = result.raw;
     if (!answer?.trim()) {
       throw new AppError('Empty response from AI model', 500);
     }
@@ -192,8 +199,9 @@ ${question}`;
       const wait = Math.pow(2, attempt) * 3000; // 6s, 12s, 24s
       const fallbackNote = attempt >= 2 ? ' (switching to gemini-flash-latest)' : '';
       logger.warn(`[LLM] Transient error on attempt ${attempt}/3${fallbackNote} — retrying in ${wait / 1000}s...`);
+      if (streamedAny) stream?.onReset?.();
       await sleep(wait);
-      return generateAnswer(question, chunks, lectureTitle, history, attempt + 1);
+      return generateAnswer(question, chunks, lectureTitle, history, uncoveredAspects, attempt + 1, stream);
     }
 
     if (err instanceof AppError) throw err;

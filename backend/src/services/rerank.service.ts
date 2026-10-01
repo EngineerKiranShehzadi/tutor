@@ -70,6 +70,14 @@ export interface DedupeResult {
 // sorted best-first with rerankScore populated (i.e. call rerankChunks with
 // topN >= desiredCount, ideally the full candidate pool, not just 5).
 //
+// The dedupe key includes chunk_index alongside the answer text: a long
+// answer split into multiple chunks (see chunk.service.ts) stores the SAME
+// full `answer` on every piece, so keying on answer text alone would treat
+// sibling pieces of one long answer as duplicates of each other and drop
+// all but one. Including chunk_index keeps genuine duplicates (same answer,
+// same piece index, from different rows) collapsing as before, while
+// letting distinct pieces of the same long answer both survive.
+//
 // A relevance floor prevents backfill from padding weak matches into
 // context just to hit desiredCount — same principle as not padding with
 // duplicates. Since rankedChunks is score-sorted descending, once a chunk
@@ -88,7 +96,7 @@ export const dedupeAndSelect = (
     if (selected.length >= desiredCount) break;
     if ((chunk.rerankScore ?? 0) < minRerankScore) break;
 
-    const key = normalizeAnswer(chunk.answer);
+    const key = `${normalizeAnswer(chunk.answer)}::${chunk.chunk_index ?? 0}`;
     const keptChunkId = seenAnswers.get(key);
     if (keptChunkId !== undefined) {
       dedupedAway.push({ keptChunkId, droppedChunk: chunk });

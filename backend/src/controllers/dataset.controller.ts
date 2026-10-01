@@ -1,7 +1,8 @@
 import { Response, NextFunction } from 'express';
 import { AuthenticatedRequest } from '../types';
-import { getLectureById, updateLectureStatus } from '../services/lecture.service';
+import { getLectureById, updateLectureStatus, updateLectureDatasetLocation } from '../services/lecture.service';
 import { parseExcel, processDataset } from '../services/chunk.service';
+import { uploadRawDataset, isS3Configured } from '../services/s3-storage.service';
 import { sendSuccess, sendError } from '../utils/response';
 import { logger } from '../utils/logger';
 
@@ -37,6 +38,19 @@ export const uploadDataset = async (
     parseExcel(req.file.buffer);
 
     logger.info(`[UPLOAD] Admin "${req.user?.email}" uploading dataset for lecture #${lectureId} "${lecture.title}"`);
+
+    // Archive the raw file exactly as uploaded, before any parsing/chunking
+    // touches it. Awaited (not fire-and-forget): if raw storage fails, the
+    // upload fails — the whole point is to never lose the original source
+    // file, so processing must not silently proceed without it.
+    // Skipped when S3 isn't configured (local/free-tier testing); once a
+    // bucket is set, a failed write still fails the upload.
+    if (isS3Configured()) {
+      const { bucket, key } = await uploadRawDataset(lectureId, req.file.buffer, req.file.originalname);
+      await updateLectureDatasetLocation(lectureId, { bucket, key, originalFilename: req.file.originalname });
+    } else {
+      logger.warn(`[UPLOAD] S3 not configured — skipping raw dataset archive for lecture #${lectureId}`);
+    }
 
     // Update to DATASET_UPLOADED immediately so the response is fast
     await updateLectureStatus(lectureId, 'DATASET_UPLOADED');

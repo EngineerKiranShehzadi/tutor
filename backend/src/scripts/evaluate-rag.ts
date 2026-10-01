@@ -10,13 +10,13 @@
  *
  * Usage: npm run eval:rag [lectureId]
  */
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import { env } from '../config/env';
 import { query } from '../config/database';
 import { generateEmbedding } from '../services/embedding.service';
 import { searchChunks } from '../services/vector-search.service';
 import { rerankChunks } from '../services/rerank.service';
 import { generateAnswer } from '../services/llm-gemini.service';
+import { generateContent } from '../services/gemini-provider.service';
 import { getLectureById } from '../services/lecture.service';
 import { QnaChunk } from '../types';
 import { logger } from '../utils/logger';
@@ -24,23 +24,19 @@ import { logger } from '../utils/logger';
 const NUM_EVAL_QUESTIONS = 20;
 const RERANK_TOP_N = 5;
 const CANDIDATE_POOL_SIZES = [5, 10, 15, 20, 30];
+const JUDGE_MODEL = 'gemini-2.5-flash';
 
 if (!env.GEMINI_API_KEY) {
   console.error('GEMINI_API_KEY is not configured. Please add it to your .env file.');
   process.exit(1);
 }
-const judgeClient = new GoogleGenerativeAI(env.GEMINI_API_KEY);
-const judgeModel = judgeClient.getGenerativeModel({
-  model: 'gemini-2.5-flash',
-  generationConfig: { temperature: 0 },
-});
 
 const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
 
 async function askJudge(prompt: string, attempt = 1): Promise<boolean> {
   try {
-    const result = await judgeModel.generateContent(prompt);
-    return result.response.text().trim().toUpperCase().startsWith('PASS');
+    const result = await generateContent({ model: JUDGE_MODEL, prompt, temperature: 0 });
+    return result.text.trim().toUpperCase().startsWith('PASS');
   } catch (err: unknown) {
     const msg = String((err as Error).message ?? '');
     const isRateLimit = msg.includes('429') || msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('resource_exhausted');

@@ -124,3 +124,19 @@ export const updateLectureProgress = async (
     await query('UPDATE lectures SET progress_current = $1 WHERE id = $2', [current, id]);
   }
 };
+
+// Records where the raw uploaded dataset file was archived in S3 (see
+// services/s3-storage.service.ts) — a re-upload overwrites the pointer to
+// point at the newest raw file; the older S3 object is left in place.
+export const updateLectureDatasetLocation = async (
+  id: number,
+  location: { bucket: string; key: string; originalFilename: string }
+): Promise<void> => {
+  await query(
+    `UPDATE lectures
+     SET dataset_s3_bucket = $1, dataset_s3_key = $2, dataset_original_filename = $3, updated_at = NOW()
+     WHERE id = $4`,
+    [location.bucket, location.key, location.originalFilename, id]
+  );
+  logger.info(`[LECTURE] 📦 Lecture #${id} raw dataset archived at s3://${location.bucket}/${location.key}`);
+};

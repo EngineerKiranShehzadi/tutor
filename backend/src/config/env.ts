@@ -58,6 +58,18 @@ export const env = {
     CALLBACK_URL:  optional('GOOGLE_CALLBACK_URL', 'http://localhost:5000/api/v1/auth/google/callback'),
   },
 
+  // Raw dataset archival only — see services/s3-storage.service.ts. Not
+  // read anywhere else in the app. Left unset by default (unlike
+  // GEMINI_API_KEY, not `required()`) so the app still boots without AWS
+  // configured; the upload endpoint fails fast with a clear error only if
+  // a dataset is actually uploaded before these are set.
+  S3: {
+    BUCKET_NAME:      optional('S3_DATASET_BUCKET', ''),
+    REGION:           optional('S3_REGION', optional('AWS_REGION', '')),
+    ACCESS_KEY_ID:    optional('AWS_ACCESS_KEY_ID', ''),
+    SECRET_ACCESS_KEY: optional('AWS_SECRET_ACCESS_KEY', ''),
+  },
+
   RAG_MEMORY: {
     // Semantic (embedding-similarity) answer-memory reuse stays off until
     // evaluated on real lecture questions — see eval-memory-threshold.ts.
@@ -111,5 +123,180 @@ export const env = {
   HEALTH: {
     CACHE_TTL_MS:          parseInt(optional('HEALTH_CHECK_CACHE_TTL_MS', '60000'), 10),
     GEMINI_CHECK_ENABLED:  optional('HEALTH_GEMINI_CHECK_ENABLED', 'true') === 'true',
+  },
+
+  // ── Provider-neutral LLM configuration ─────────────────────────
+  // Every LLM-dependent service picks its provider+model from here rather
+  // than hardcoding either — see src/llm/llm-provider.resolver.ts. Gemini is
+  // the only provider actually implemented today (src/llm/providers/
+  // gemini-llm.provider.ts); the resolver throws a clear error for any other
+  // PROVIDER value until a matching adapter is added.
+  LLM: {
+    RAG_ANSWER: {
+      PROVIDER:        optional('RAG_LLM_PROVIDER', 'gemini'),
+      MODEL:           optional('RAG_ANSWER_MODEL', 'gemini-2.5-flash'),
+      // Used once retry attempts exceed llm-gemini.service.ts's own
+      // attempt<=2 threshold — preserves today's exact gemini-2.5-flash ->
+      // gemini-flash-latest fallback chain by default.
+      FALLBACK_MODEL:  optional('RAG_ANSWER_FALLBACK_MODEL', 'gemini-flash-latest'),
+    },
+    QUERY_ROUTER: {
+      PROVIDER: optional('QUERY_ROUTER_LLM_PROVIDER', 'gemini'),
+      MODEL:    optional('QUERY_ROUTER_LLM_MODEL', 'gemini-2.5-flash'),
+    },
+    // Natural reply to greetings/small talk (services/greeting-response.
+    // service.ts). Higher temperature than the classifiers so replies vary;
+    // falls back to a fixed message if the call fails.
+    GREETING: {
+      PROVIDER:    optional('GREETING_LLM_PROVIDER', 'gemini'),
+      MODEL:       optional('GREETING_LLM_MODEL', 'gemini-2.5-flash'),
+      TIMEOUT_MS:  parseInt(optional('GREETING_LLM_TIMEOUT_MS', '6000'), 10),
+      TEMPERATURE: parseFloat(optional('GREETING_LLM_TEMPERATURE', '0.7')),
+    },
+    QUERY_REWRITE: {
+      PROVIDER: optional('QUERY_REWRITE_LLM_PROVIDER', 'gemini'),
+      MODEL:    optional('QUERY_REWRITE_LLM_MODEL', 'gemini-2.5-flash'),
+    },
+    LECTURE_SUMMARY: {
+      PROVIDER: optional('LECTURE_SUMMARY_LLM_PROVIDER', 'gemini'),
+      MODEL:    optional('LECTURE_SUMMARY_LLM_MODEL', 'gemini-2.5-flash'),
+    },
+    GUARDRAIL: {
+      // Separate from INPUT_GUARDRAIL_INJECTION_ENABLED below: that flag
+      // controls whether PromptInjectionGuard runs at all; this one controls
+      // whether its Stage B semantic classifier may be used for genuinely
+      // ambiguous input once Stage A's deterministic signals can't decide.
+      ENABLED:     optional('GUARDRAIL_LLM_ENABLED', 'true') === 'true',
+      PROVIDER:    optional('GUARDRAIL_LLM_PROVIDER', 'gemini'),
+      MODEL:       optional('GUARDRAIL_LLM_MODEL', 'gemini-2.5-flash'),
+      TIMEOUT_MS:  parseInt(optional('GUARDRAIL_LLM_TIMEOUT_MS', '4000'), 10),
+      TEMPERATURE: parseFloat(optional('GUARDRAIL_LLM_TEMPERATURE', '0')),
+    },
+    // Used by the single DIRECT/DECOMPOSE structured-output call in
+    // rag/query-processing/decomposition/subquery-decomposition.service.ts —
+    // only reached for candidate compound queries (see compound-query.
+    // detector.ts), never on every question.
+    QUERY_DECOMPOSITION: {
+      PROVIDER:    optional('QUERY_DECOMPOSITION_LLM_PROVIDER', 'gemini'),
+      MODEL:       optional('QUERY_DECOMPOSITION_LLM_MODEL', 'gemini-2.5-flash'),
+      TIMEOUT_MS:  parseInt(optional('QUERY_DECOMPOSITION_LLM_TIMEOUT_MS', '4000'), 10),
+      TEMPERATURE: parseFloat(optional('QUERY_DECOMPOSITION_LLM_TEMPERATURE', '0')),
+    },
+    // Used by the STOP/RETRIEVE planner in rag/query-processing/
+    // adaptive-retrieval/adaptive-retrieval-planner.service.ts — only
+    // reached when Selective Subquery Decomposition already found an
+    // uncovered aspect via its existing deterministic coverage signal,
+    // never on every question and never as a second call for a query
+    // decomposition already resolved.
+    ADAPTIVE_RETRIEVAL: {
+      PROVIDER:    optional('ADAPTIVE_RETRIEVAL_LLM_PROVIDER', 'gemini'),
+      MODEL:       optional('ADAPTIVE_RETRIEVAL_LLM_MODEL', 'gemini-2.5-flash'),
+      TIMEOUT_MS:  parseInt(optional('ADAPTIVE_RETRIEVAL_LLM_TIMEOUT_MS', '4000'), 10),
+      TEMPERATURE: parseFloat(optional('ADAPTIVE_RETRIEVAL_LLM_TEMPERATURE', '0')),
+    },
+    // Used by both the groundedness verifier and the bounded revision
+    // rewrite in rag/guardrails/output/ — deliberately independent of
+    // RAG_ANSWER_MODEL (the generator) so a different/cheaper/stricter
+    // model can judge/correct output without touching generation config.
+    ANSWER_VERIFICATION: {
+      PROVIDER:    optional('ANSWER_VERIFICATION_LLM_PROVIDER', 'gemini'),
+      MODEL:       optional('ANSWER_VERIFICATION_LLM_MODEL', 'gemini-2.5-flash'),
+      TIMEOUT_MS:  parseInt(optional('ANSWER_VERIFICATION_LLM_TIMEOUT_MS', '4000'), 10),
+      TEMPERATURE: parseFloat(optional('ANSWER_VERIFICATION_LLM_TEMPERATURE', '0')),
+    },
+    // Used only when Selective Output Format Validation finds a grounded
+    // answer that doesn't structurally match an explicitly requested
+    // LIST/TABLE — see rag/guardrails/output/format/response-format-repair.
+    // service.ts. Most LIST cases never reach this call at all (a cheap
+    // deterministic repair handles the common case first). Deliberately
+    // independent of RAG_ANSWER_MODEL/ANSWER_VERIFICATION_MODEL — this only
+    // ever reformats, never regenerates or re-judges content.
+    OUTPUT_FORMAT_REPAIR: {
+      PROVIDER:    optional('OUTPUT_FORMAT_REPAIR_LLM_PROVIDER', 'gemini'),
+      MODEL:       optional('OUTPUT_FORMAT_REPAIR_LLM_MODEL', 'gemini-2.5-flash'),
+      TIMEOUT_MS:  parseInt(optional('OUTPUT_FORMAT_REPAIR_LLM_TIMEOUT_MS', '4000'), 10),
+      TEMPERATURE: parseFloat(optional('OUTPUT_FORMAT_REPAIR_LLM_TEMPERATURE', '0')),
+    },
+  },
+
+  // ── Input Guardrail (pre-query) ─────────────────────────────────
+  // Runs before query-router.service.ts — see rag/guardrails/input/
+  // input-guardrail.service.ts. Application-level limits, deliberately
+  // independent of whatever context window the configured model supports.
+  INPUT_GUARDRAIL: {
+    ENABLED:                  optional('INPUT_GUARDRAIL_ENABLED', 'true') === 'true',
+    MAX_CHARS:                parseInt(optional('INPUT_GUARDRAIL_MAX_CHARS', '8000'), 10),
+    MAX_TOKENS:               parseInt(optional('INPUT_GUARDRAIL_MAX_TOKENS', '2000'), 10),
+    PII_ENABLED:              optional('INPUT_GUARDRAIL_PII_ENABLED', 'true') === 'true',
+    INJECTION_ENABLED:        optional('INPUT_GUARDRAIL_INJECTION_ENABLED', 'true') === 'true',
+    MALICIOUS_PAYLOAD_ENABLED: optional('INPUT_GUARDRAIL_MALICIOUS_PAYLOAD_ENABLED', 'true') === 'true',
+  },
+
+  // ── Selective Subquery Decomposition ────────────────────────────
+  // Runs after routing/history-rewriting, on the effective self-contained
+  // query — see rag/query-processing/decomposition/subquery-decomposition.
+  // service.ts. A cheap deterministic gate (compound-query.detector.ts)
+  // decides whether a query is even a candidate before any LLM call is
+  // made, so this never adds latency to an ordinary question.
+  QUERY_DECOMPOSITION: {
+    ENABLED: optional('QUERY_DECOMPOSITION_ENABLED', 'true') === 'true',
+    // Hard cap on fan-out — deliberately small; see subquery-decomposition.
+    // prompt.ts's instruction to use the smallest useful number of
+    // subqueries.
+    MAX_SUBQUERIES: parseInt(optional('QUERY_DECOMPOSITION_MAX_SUBQUERIES', '3'), 10),
+  },
+
+  // ── Iterative Adaptive Retrieval ─────────────────────────────────
+  // Runs only when Selective Subquery Decomposition's existing coverage
+  // signal already found a real evidence gap (one or more uncovered
+  // subqueries) — see rag/query-processing/adaptive-retrieval/
+  // adaptive-retrieval.service.ts. Never invoked for a query that didn't
+  // decompose, and never invoked merely because a direct query's retrieval
+  // was weak (see that service's doc comment for the rationale).
+  ADAPTIVE_RETRIEVAL: {
+    ENABLED: optional('ADAPTIVE_RETRIEVAL_ENABLED', 'true') === 'true',
+    // Each iteration produces at most ONE new targeted retrieval query —
+    // kept small on purpose; a higher value is supported but must be an
+    // explicit operator choice, never the default.
+    MAX_ITERATIONS: parseInt(optional('ADAPTIVE_RETRIEVAL_MAX_ITERATIONS', '1'), 10),
+  },
+
+  // ── Answer Verification (post-generation output guardrail) ───────
+  // Runs after the existing strict grounded generator produces a draft —
+  // see rag/guardrails/output/output-guardrail.service.ts. Judges
+  // groundedness against the exact evidence generation used, not a second
+  // retrieval pass (Iterative Adaptive Retrieval already owns pre-
+  // generation evidence gaps). Only reached for LLM-generated grounded
+  // answers — never for GREETING's canned reply or a deterministic
+  // not-found fallback.
+  ANSWER_VERIFICATION: {
+    ENABLED: optional('ANSWER_VERIFICATION_ENABLED', 'true') === 'true',
+    // At most one bounded revise-then-reverify pass — never an open-ended
+    // generate/verify/revise loop. A higher value is supported but must be
+    // an explicit operator choice, never the default.
+    MAX_REVISIONS: parseInt(optional('ANSWER_VERIFICATION_MAX_REVISIONS', '1'), 10),
+  },
+
+  // ── Selective Output Format Validation (post-generation output guardrail) ──
+  // Runs after groundedness verification/revision, only when the effective
+  // user query explicitly asked for a LIST or TABLE — see rag/guardrails/
+  // output/format/response-format.detector.ts's deterministic signal
+  // groups. Most questions stay NATURAL_TEXT and never reach validation or
+  // repair. Independent of ANSWER_VERIFICATION.ENABLED: format safety is a
+  // separate concern from hallucination detection.
+  OUTPUT_FORMAT_VALIDATION: {
+    ENABLED: optional('OUTPUT_FORMAT_VALIDATION_ENABLED', 'true') === 'true',
+    // One bounded repair attempt only — never an iterative repair loop.
+    REPAIR_ENABLED: optional('OUTPUT_FORMAT_REPAIR_ENABLED', 'true') === 'true',
+  },
+
+  // ── Output PII Leakage Detection (post-generation output guardrail) ──────
+  // Runs after groundedness verification/revision and after any format
+  // repair, on the actual final answer text — see rag/guardrails/output/
+  // pii/output-pii-leakage.guard.ts. Shares detection/sanitization rules
+  // with the input PII guard via rag/guardrails/shared/pii/ — never a
+  // second, drifted implementation.
+  OUTPUT_PII_GUARD: {
+    ENABLED: optional('OUTPUT_PII_GUARD_ENABLED', 'true') === 'true',
   },
 } as const;

@@ -1,8 +1,9 @@
-import { SchemaType, type ResponseSchema } from '@google/generative-ai';
-import { getClient } from './llm-gemini.service';
+import { env } from '../config/env';
+import { resolveLlmProvider } from '../llm/llm-provider.resolver';
+import { withLlmDiagnostic, extractLlmUsage } from '../llm/llm-observability.service';
+import type { LlmSchema } from '../llm/llm.types';
 import { isContextDependent } from './query-rewriter.service';
 import { logger } from '../utils/logger';
-import { withGeminiDiagnostic } from '../observability/gemini-diagnostics';
 
 export type LectureQueryRoute =
   | 'FACT_QUESTION'
@@ -18,17 +19,54 @@ export interface RouteClassification {
   source: 'rule' | 'llm' | 'llm-fallback';
 }
 
-// ── Deterministic rules — obvious cases never touch Gemini ────────────────
+// ── Deterministic rules — obvious cases never touch the LLM ────────────────
 
-const GREETING_PATTERNS = [
-  /^(hi|hello|hey|hiya|yo|greetings)[\s,!.]*$/i,
-  /^good\s+(morning|afternoon|evening)[\s!.]*$/i,
-  /^how\s+are\s+you(\s+doing)?\??$/i,
-  /^what'?s\s+up\??$/i,
+// Small-talk fragments. A message is a GREETING only when it is made up
+// entirely of these (joined by "and"/commas/punctuation) — so "hi how are
+// you" and "hi whats going on?" match, but "hi, what is RAG?" does not.
+const SMALL_TALK_FRAGMENTS = [
+  /(hi+|hello+|hey+|hiya|yo|greetings|howdy|sup)/,
+  /good\s+(morning|afternoon|evening|day)/,
+  /how\s+(are|r)\s+(you|u|ya)(\s+(doing|today|now))?/,
+  /how\s+(is|are)\s+(it\s+going|everything|things|you\s+doing)(\s+today)?/,
+  /how'?s\s+(it\s+going|everything|things|life|your\s+day)/,
+  /how\s+do\s+you\s+do/,
+  /what'?s\s+(up|going\s+on|new|happening)/,
+  /whats\s+(up|going\s+on|new|happening)/,
+  /what\s+is\s+(up|going\s+on)/,
+  /nice\s+to\s+meet\s+you/,
+  /(there|everyone|tutor|buddy|friend)/,
 ];
 
-const isGreeting = (trimmed: string): boolean =>
-  GREETING_PATTERNS.some(re => re.test(trimmed));
+// Polite request wrappers ("tell me", "can you say", "please") only count
+// as filler — a message still needs a real small-talk fragment to be a
+// greeting, so "tell me about RAG" never qualifies.
+const SMALL_TALK_FILLER = /^(and|so|well|then|also|hmm|um|uh|ok|okay|tell|me|please|pls|kindly|can|could|would|you|say|just|actually|about|regarding)$/;
+
+const isGreeting = (trimmed: string): boolean => {
+  const words = trimmed.toLowerCase().replace(/[^a-z0-9'\s]/g, ' ').split(/\s+/).filter(Boolean);
+  if (words.length === 0 || words.length > 14) return false;
+
+  // Greedily consume the message left to right: each step must match a
+  // small-talk fragment (or filler word) at the current position.
+  let rest = words.join(' ');
+  let sawFragment = false;
+  while (rest.length > 0) {
+    const next = rest.split(' ')[0];
+    if (SMALL_TALK_FILLER.test(next)) {
+      rest = rest.slice(next.length).trim();
+      continue;
+    }
+    const hit = SMALL_TALK_FRAGMENTS
+      .map(re => new RegExp(`^${re.source}(?=\\s|$)`).exec(rest))
+      .filter((m): m is RegExpExecArray => m !== null)
+      .sort((a, b) => b[0].length - a[0].length)[0];
+    if (!hit) return false;
+    sawFragment = true;
+    rest = rest.slice(hit[0].length).trim();
+  }
+  return sawFragment;
+};
 
 const isLectureSummaryRequest = (trimmed: string): boolean => {
   const lower = trimmed.toLowerCase();
@@ -77,14 +115,10 @@ Rules:
 - If unsure, choose FACT_QUESTION.
 - Return only the required structured JSON.`;
 
-const ROUTE_RESPONSE_SCHEMA: ResponseSchema = {
-  type: SchemaType.OBJECT,
+const ROUTE_RESPONSE_SCHEMA: LlmSchema = {
+  type: 'OBJECT',
   properties: {
-    route: {
-      type: SchemaType.STRING,
-      format: 'enum',
-      enum: ROUTES,
-    },
+    route: { type: 'STRING', enum: ROUTES },
   },
   required: ['route'],
 };
@@ -107,35 +141,30 @@ export const parseRouteResponse = (raw: string): LectureQueryRoute | null => {
   return route as LectureQueryRoute;
 };
 
-const classifyWithGemini = async (question: string, timeoutMs: number): Promise<LectureQueryRoute | null> => {
+const classifyWithLlm = async (question: string, timeoutMs: number): Promise<LectureQueryRoute | null> => {
   try {
-    const genAI = getClient();
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-2.5-flash',
-      systemInstruction: ROUTER_SYSTEM_PROMPT,
-      generationConfig: {
-        temperature: 0,
-        maxOutputTokens: 64,
-        responseMimeType: 'application/json',
-        responseSchema: ROUTE_RESPONSE_SCHEMA,
-      },
-    });
-
-    const result = await withGeminiDiagnostic(
+    const provider = resolveLlmProvider(env.LLM.QUERY_ROUTER.PROVIDER);
+    const model = env.LLM.QUERY_ROUTER.MODEL;
+    const result = await withLlmDiagnostic(
       {
         spanName: 'gemini_router_call',
         operationType: 'ROUTE_CLASSIFICATION',
-        model: 'gemini-2.5-flash',
+        provider: provider.name,
+        model,
         invocationParams: { temperature: 0, maxOutputTokens: 64, timeoutMs },
       },
-      () => model.generateContent(`Student message:\n${question}`, { timeout: timeoutMs }),
-      r => ({
-        input: r.response.usageMetadata?.promptTokenCount,
-        output: r.response.usageMetadata?.candidatesTokenCount,
-        finishReason: r.response.candidates?.[0]?.finishReason,
-      })
+      () => provider.generate({
+        model,
+        userPrompt: `Student message:\n${question}`,
+        systemPrompt: ROUTER_SYSTEM_PROMPT,
+        temperature: 0,
+        maxOutputTokens: 64,
+        responseSchema: ROUTE_RESPONSE_SCHEMA,
+        timeoutMs,
+      }),
+      extractLlmUsage
     );
-    return parseRouteResponse(result.response.text());
+    return parseRouteResponse(result.raw);
   } catch (err) {
     logger.warn(`[QUERY-ROUTER] ⚠️  LLM classification failed, defaulting to FACT_QUESTION: ${(err as Error).message}`);
     return null;
@@ -151,7 +180,7 @@ export const classifyRoute = async (
     timeoutMs?: number;
     // Test-only seam, same rationale as query-rewriter.service.ts's
     // geminiCaller: keeps the deterministic test suite network/quota-free.
-    geminiClassifier?: typeof classifyWithGemini;
+    geminiClassifier?: typeof classifyWithLlm;
   } = {}
 ): Promise<RouteClassification> => {
   try {
@@ -160,7 +189,7 @@ export const classifyRoute = async (
       return { route: ruleMatch, source: 'rule' };
     }
 
-    const classifier = opts.geminiClassifier ?? classifyWithGemini;
+    const classifier = opts.geminiClassifier ?? classifyWithLlm;
     const llmRoute = await classifier(question, opts.timeoutMs ?? DEFAULT_ROUTER_TIMEOUT_MS);
     if (llmRoute) {
       return { route: llmRoute, source: 'llm' };
