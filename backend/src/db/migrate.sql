@@ -184,3 +184,30 @@ WHERE ch.student_id = cs.student_id
   AND ch.lecture_id = cs.lecture_id
   AND ch.session_id IS NULL
   AND cs.title = 'Previous Chats';
+
+-- ─────────────────────────────────────────────
+-- 9. lecture_agent_profiles  (one logical AI tutor agent per lecture)
+--    Mirrors src/db/migrations/005_lecture_agent_profiles.sql so a fresh
+--    `npm run db:setup` creates the table; the two CREATE TABLE statements
+--    must stay identical. lecture_id as PRIMARY KEY enforces exactly one
+--    profile per lecture. No profiles are inserted here.
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS lecture_agent_profiles (
+  lecture_id   INTEGER     PRIMARY KEY REFERENCES lectures(id) ON DELETE CASCADE,
+  agent_name   TEXT        NOT NULL,
+  instructions TEXT        NOT NULL,
+  is_active    BOOLEAN     NOT NULL DEFAULT TRUE,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+  -- '\S' = at least one non-whitespace character, so empty strings and
+  -- whitespace-only values (spaces, tabs, newlines) are all rejected.
+  CONSTRAINT lecture_agent_profiles_agent_name_not_blank
+    CHECK (agent_name ~ '\S'),
+  CONSTRAINT lecture_agent_profiles_instructions_not_blank
+    CHECK (instructions ~ '\S'),
+  -- Bounds the prompt size (and therefore per-request LLM cost) that a
+  -- single profile can add to every answer-generation call.
+  CONSTRAINT lecture_agent_profiles_instructions_max_length
+    CHECK (char_length(instructions) <= 4000)
+);

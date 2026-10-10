@@ -1,5 +1,5 @@
 import { AppError } from '../middleware/errorHandler';
-import { QnaChunk } from '../types';
+import { QnaChunk, LectureAgentProfile } from '../types';
 import { logger } from '../utils/logger';
 import { env } from '../config/env';
 import { resolveLlmProvider } from '../llm/llm-provider.resolver';
@@ -29,7 +29,9 @@ function buildHistoryBlock(turns: ConversationTurn[]): string {
   return `Conversation history (for context only — do not repeat unless directly relevant):\n${lines.join('\n')}\n`;
 }
 
-const SYSTEM_PROMPT = `You are a lecture-specific AI tutor for the course "Master Prompt Engineering with ChatGPT".
+// Exported only so tests can assert the global rules are present and
+// unchanged in the assembled prompt — nothing outside this file builds on it.
+export const SYSTEM_PROMPT = `You are a lecture-specific AI tutor for the course "Master Prompt Engineering with ChatGPT".
 Answer the student's question using ONLY the provided lecture Q&A context.
 
 Rules:
@@ -41,6 +43,32 @@ Rules:
 6. Do NOT include timestamps (e.g. "Timestamp: 7:09 - 8:40") in your answer — they are shown separately in the UI.
 7. Keep answers concise and educational.
 8. If the student asks a follow-up (e.g. "can you explain more?"), use the conversation history to understand what they are referring to.`;
+
+// Fixed text appended after every agent's own instructions. It is part of
+// the code, never of a stored profile, so a profile cannot remove or reword
+// it. It restates only rules SYSTEM_PROMPT already contains (1, 2, 4, 5, 6)
+// and says they win over the agent guidance.
+const AGENT_PRECEDENCE_RULE =
+  'The lecture-specific guidance above only narrows scope and presentation for this lecture. ' +
+  'It never overrides the rules above: answer using only the provided lecture context, ' +
+  'respond with "I could not find this information in this lecture." when the context does not contain the answer, ' +
+  'add no outside knowledge, add no source labels or timestamps to the answer text, and follow all safety rules. ' +
+  'If the guidance conflicts with any of those rules, the rules above take precedence.';
+
+// Builds the agent-specific block that generateAnswer inserts between the
+// global SYSTEM_PROMPT and the lecture title. Pure — no I/O. Returns '' when
+// no profile is supplied so the prompt stays exactly what it was before
+// agent profiles existed (no default agent is ever invented).
+export const buildAgentInstructionBlock = (profile?: LectureAgentProfile | null): string => {
+  if (!profile) return '';
+  return [
+    `Lecture agent: ${profile.agent_name}`,
+    'Lecture-specific guidance for this agent:',
+    profile.instructions.trim(),
+    '',
+    AGENT_PRECEDENCE_RULE,
+  ].join('\n');
+};
 
 // Identifies the grounding prompt/rules a stored answer was generated
 // under. Bump this whenever SYSTEM_PROMPT changes in a way that could
@@ -125,7 +153,13 @@ export const generateAnswer = async (
   // outside knowledge, instead of leaving it to guess.
   uncoveredAspects: string[] = [],
   attempt = 1,
-  stream?: AnswerStreamHandlers
+  stream?: AnswerStreamHandlers,
+  // The lecture's agent profile, already resolved by the caller (this
+  // function never loads or selects one). When present, its instructions
+  // are added as a block between the global rules and the lecture title —
+  // see buildAgentInstructionBlock. When absent/null the prompt is exactly
+  // what it was before agent profiles existed.
+  agentProfile?: LectureAgentProfile | null
 ): Promise<string> => {
   // Falls back to env.LLM.RAG_ANSWER.FALLBACK_MODEL after 2 failed attempts
   // on the primary model (default gemini-2.5-flash -> gemini-flash-latest,
@@ -140,8 +174,9 @@ export const generateAnswer = async (
   const uncoveredBlock = uncoveredAspects.length > 0
     ? `\n\nNote: the lecture content above does not cover the following part(s) of the question. If your answer would otherwise need them, explicitly say that part was not found in this lecture — do not guess or use outside knowledge for it:\n${uncoveredAspects.map(a => `- ${a}`).join('\n')}`
     : '';
+  const agentBlock = buildAgentInstructionBlock(agentProfile);
   const prompt = `${SYSTEM_PROMPT}
-
+${agentBlock ? `\n${agentBlock}\n` : ''}
 Lecture: "${lectureTitle}"
 
 Lecture Q&A Context:
@@ -201,7 +236,7 @@ ${question}${uncoveredBlock}`;
       logger.warn(`[LLM] Transient error on attempt ${attempt}/3${fallbackNote} — retrying in ${wait / 1000}s...`);
       if (streamedAny) stream?.onReset?.();
       await sleep(wait);
-      return generateAnswer(question, chunks, lectureTitle, history, uncoveredAspects, attempt + 1, stream);
+      return generateAnswer(question, chunks, lectureTitle, history, uncoveredAspects, attempt + 1, stream, agentProfile);
     }
 
     if (err instanceof AppError) throw err;

@@ -4,6 +4,7 @@ import { useMutation, useLazyQuery } from '@apollo/client';
 import { ChatMessage, ChunkSource } from '@/types';
 import { v4 as uuidv4 } from 'uuid';
 import { streamAsk, StreamUnavailableError } from '@/lib/chat-stream';
+import { ChatSessionGuard } from '@/lib/chat-session-guard';
 import { useVoice } from './useVoice';
 import {
   ASK_LECTURE_AGENT_MUTATION,
@@ -72,8 +73,10 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
   const streamTimerRef     = useRef<ReturnType<typeof setInterval> | null>(null);
   // Aborts an in-flight live stream when the user switches/creates a session
   const streamAbortRef      = useRef<AbortController | null>(null);
-  // Ref so sendMessage always reads the latest session ID without becoming a dep
-  const currentSessionRef  = useRef<number | null>(null);
+  // Single source of truth for "which session may be used now". A session
+  // belongs to one lecture; the guard drops it the moment the lecture changes
+  // and refuses stale async results (see lib/chat-session-guard.ts).
+  const sessionGuardRef    = useRef<ChatSessionGuard>(new ChatSessionGuard());
 
   const [fetchSessions]        = useLazyQuery(CHAT_SESSIONS_QUERY,         { fetchPolicy: 'network-only' });
   const [fetchSessionHistory]  = useLazyQuery(SESSION_HISTORY_QUERY,       { fetchPolicy: 'network-only' });
@@ -91,33 +94,52 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
   // ── Load messages for a session into state ────────────────
   const loadSessionMessages = useCallback(async (sessionId: number) => {
     const { data } = await fetchSessionHistory({ variables: { sessionId } });
+    // A response for a session that stopped being the active one (the
+    // student switched lecture/session meanwhile) must not replace the
+    // messages now on screen.
+    if (sessionGuardRef.current.activeSessionId() !== sessionId) return;
     const entries: HistoryEntry[] = data?.sessionHistory ?? [];
     setSessionMessages(entries.flatMap(entryToMessages));
   }, [fetchSessionHistory]);
 
-  // ── On mount: load most recent session or auto-create one ─
+  // ── On mount / lecture change: load most recent session or auto-create one ─
   useEffect(() => {
+    const guard = sessionGuardRef.current;
+    // A chat session belongs to exactly one lecture. The moment the lecture
+    // changes, drop the previous lecture's session and anything in flight for
+    // it — before the new lecture's sessions have loaded — so nothing can be
+    // submitted against (or restored from) the old lecture.
+    const token = guard.begin(lectureId);
+    if (streamTimerRef.current) {
+      clearInterval(streamTimerRef.current);
+      streamTimerRef.current = null;
+    }
+    streamAbortRef.current?.abort();
+    streamAbortRef.current = null;
+    setTyping(false);
+    setCurrentSessionId(null);
+    setSessionMessages([]);
+    setLocalMessages([]);
+
     if (!lectureId || isNaN(lectureId)) return;
-    let cancelled = false;
 
     const init = async () => {
       setIsLoadingSession(true);
       try {
         const { data } = await fetchSessions({ variables: { lectureId } });
-        if (cancelled) return;
+        if (!guard.isCurrent(token)) return;
 
         const sessions: ChatSession[] = data?.chatSessions ?? [];
         if (sessions.length > 0) {
           const latest = sessions[0];
-          currentSessionRef.current = latest.id;
+          if (!guard.activate(token, latest.id)) return;
           setCurrentSessionId(latest.id);
           await loadSessionMessages(latest.id);
         } else {
           const { data: cd } = await createSessionMut({ variables: { lectureId } });
-          if (cancelled) return;
+          if (!guard.isCurrent(token)) return;
           const ns = cd?.createChatSession as ChatSession | undefined;
-          if (ns) {
-            currentSessionRef.current = ns.id;
+          if (ns && guard.activate(token, ns.id)) {
             setCurrentSessionId(ns.id);
             setSessionMessages([]);
           }
@@ -125,17 +147,16 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
       } catch (err) {
         console.error('[CHAT] Init error:', err);
       } finally {
-        if (!cancelled) setIsLoadingSession(false);
+        if (guard.isCurrent(token)) setIsLoadingSession(false);
       }
     };
 
     init();
-    return () => { cancelled = true; };
   }, [lectureId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Select an existing session ────────────────────────────
   const selectSession = useCallback(async (sessionId: number) => {
-    if (sessionId === currentSessionRef.current) return;
+    if (sessionId === sessionGuardRef.current.activeSessionId()) return;
     if (streamTimerRef.current) {
       clearInterval(streamTimerRef.current);
       streamTimerRef.current = null;
@@ -144,7 +165,7 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
     streamAbortRef.current = null;
     setTyping(false);
     setLocalMessages([]);
-    currentSessionRef.current = sessionId;
+    sessionGuardRef.current.activate(sessionGuardRef.current.currentToken(), sessionId);
     setCurrentSessionId(sessionId);
     setIsLoadingSession(true);
     try {
@@ -165,11 +186,13 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
     setTyping(false);
     setLocalMessages([]);
     setSessionMessages([]);
+    // Token taken before the await: if the lecture changes while the new
+    // session is being created, it must not become the active session.
+    const token = sessionGuardRef.current.currentToken();
     try {
       const { data } = await createSessionMut({ variables: { lectureId } });
       const ns = data?.createChatSession as ChatSession | undefined;
-      if (ns) {
-        currentSessionRef.current = ns.id;
+      if (ns && sessionGuardRef.current.activate(token, ns.id)) {
         setCurrentSessionId(ns.id);
         setSessionsRefreshKey(k => k + 1);
       }
@@ -226,8 +249,13 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
   // back to the regular GraphQL mutation (with the typewriter animation).
   const sendMessage = useCallback(
     async (content: string) => {
-      const sessionId = currentSessionRef.current;
+      // Only a session activated for THIS lecture is ever returned (null while
+      // a lecture switch is still loading), so a stale id is never submitted.
+      const sessionId = sessionGuardRef.current.sessionFor(lectureId);
       if (!content.trim() || !sessionId) return;
+      // Identifies the lecture selection this request belongs to; a reply that
+      // arrives after the student switched lecture is discarded below.
+      const requestToken = sessionGuardRef.current.currentToken();
 
       if (streamTimerRef.current) {
         clearInterval(streamTimerRef.current);
@@ -307,6 +335,7 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
             const { data } = await askLectureAgent({
               variables: { input: { lectureId, question: content, sessionId } },
             });
+            if (!sessionGuardRef.current.isCurrent(requestToken)) return;
             const response = data?.askLectureAgent;
             animateAnswer(response?.answer ?? FALLBACK_REPLY, response?.sources ?? []);
             return;

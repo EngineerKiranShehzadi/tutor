@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useQuery, useMutation } from '@apollo/client';
 import { GET_LECTURES, DELETE_LECTURE_MUTATION } from '@/graphql/lecture.queries';
+import { GET_LECTURE_AGENT_DETAILS } from '@/graphql/admin.queries';
 import { DBLecture } from '@/types';
 import { AdminPageHero } from '@/components/admin/AdminPageHero';
 
@@ -27,6 +28,11 @@ export default function AdminLectures() {
   const router = useRouter();
   const { data, loading, refetch } = useQuery(GET_LECTURES, { fetchPolicy: 'network-only' });
   const [deleteLecture, { loading: deleting }] = useMutation(DELETE_LECTURE_MUTATION);
+  // Operational readiness (dataset READY + active agent profile) per lecture.
+  const { data: agentData, loading: agentLoading } = useQuery(GET_LECTURE_AGENT_DETAILS, { fetchPolicy: 'network-only' });
+  const agentById = new Map<number, { chatReady: boolean; agentProfileStatus: string }>(
+    (agentData?.lectureAgentDetails ?? []).map((a: { id: number; chatReady: boolean; agentProfileStatus: string }) => [a.id, a])
+  );
 
   const [search,      setSearch]      = useState('');
   const [deleteId,    setDeleteId]    = useState<string | null>(null);
@@ -34,7 +40,7 @@ export default function AdminLectures() {
 
   const allLectures: DBLecture[] = data?.lectures ?? [];
   const lectures    = allLectures.filter(l => !search || l.title.toLowerCase().includes(search.toLowerCase()));
-  const readyCount  = allLectures.filter(l => l.status === 'READY').length;
+  const readyCount  = allLectures.filter(l => agentById.get(Number(l.id))?.chatReady === true).length;
   const activeCount = allLectures.filter(l => l.status === 'PROCESSING' || l.status === 'EMBEDDING').length;
   const noDataCount = allLectures.filter(l => l.status === 'NO_DATASET').length;
 
@@ -70,7 +76,7 @@ export default function AdminLectures() {
       <div className="grid grid-cols-4 gap-4 mb-6">
         {[
           { key: 'total',      label: 'Total Lectures',  value: loading ? '—' : allLectures.length },
-          { key: 'ready',      label: 'AI Ready',        value: loading ? '—' : readyCount          },
+          { key: 'ready',      label: 'AI Ready',        value: loading || agentLoading ? '—' : readyCount },
           { key: 'processing', label: 'Processing',      value: loading ? '—' : activeCount         },
           { key: 'noDataset',  label: 'No Dataset',      value: loading ? '—' : noDataCount         },
         ].map(stat => {
@@ -155,6 +161,11 @@ export default function AdminLectures() {
           <div className="flex flex-col gap-3">
             {lectures.map((lec, idx) => {
               const s          = STATUS_CONFIG[lec.status] ?? STATUS_CONFIG.NO_DATASET;
+              // Dataset READY but chat can't serve it (no / inactive agent profile).
+              const agentNotReady = lec.status === 'READY' && agentById.get(Number(lec.id))?.chatReady === false;
+              const badge = agentNotReady
+                ? { bg: 'bg-amber-50 border-amber-200', text: 'text-amber-700', dot: 'bg-amber-400', label: 'Agent Not Ready' }
+                : s;
               const confirming = deleteId === lec.id;
               return (
                 <div
@@ -181,9 +192,9 @@ export default function AdminLectures() {
                     </div>
 
                     {/* Status */}
-                    <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-semibold border shrink-0 ${s.bg} ${s.text}`}>
-                      <span className={`w-1.5 h-1.5 rounded-full ${s.dot} ${lec.status === 'PROCESSING' || lec.status === 'EMBEDDING' ? 'animate-pulse' : ''}`} />
-                      {s.label}
+                    <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-semibold border shrink-0 ${badge.bg} ${badge.text}`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${badge.dot} ${lec.status === 'PROCESSING' || lec.status === 'EMBEDDING' ? 'animate-pulse' : ''}`} />
+                      {badge.label}
                     </span>
 
                     {/* Date */}

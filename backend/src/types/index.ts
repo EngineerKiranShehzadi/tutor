@@ -80,6 +80,19 @@ export interface Lecture {
   updated_at: Date;
 }
 
+// ── Lecture Agent Profile ─────────────────────────────────────
+// One row per lecture (lecture_id is the primary key) — see migration
+// src/db/migrations/005_lecture_agent_profiles.sql. Mirrors that table
+// column for column; read through services/lecture-agent-profile.service.ts.
+export interface LectureAgentProfile {
+  lecture_id: number;
+  agent_name: string;
+  instructions: string;
+  is_active: boolean;
+  created_at: Date;
+  updated_at: Date;
+}
+
 // ── QnA Chunk ─────────────────────────────────────────────────
 export interface QnaChunk {
   id: number;

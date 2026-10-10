@@ -6,7 +6,18 @@ export const getAnalyticsSummary = async () => {
     query<{ count: string }>(`SELECT COUNT(*) FROM users WHERE role = 'STUDENT'`),
     query<{ count: string }>(`SELECT COUNT(*) FROM lectures`),
     query<{ count: string }>(`SELECT COUNT(*) FROM student_questions`),
-    query<{ count: string }>(`SELECT COUNT(*) FROM lectures WHERE status = 'READY'`),
+    // Operationally ready agent = exactly the lectures chat will serve:
+    // dataset processed (status READY) AND an active agent profile. EXISTS is
+    // a semi-join, so a lecture can never be counted twice. lecture.status
+    // itself is unchanged and keeps meaning "dataset processed".
+    query<{ count: string }>(
+      `SELECT COUNT(*) FROM lectures l
+       WHERE l.status = 'READY'
+         AND EXISTS (
+           SELECT 1 FROM lecture_agent_profiles p
+           WHERE p.lecture_id = l.id AND p.is_active = TRUE
+         )`
+    ),
   ]);
 
   const summary = {
@@ -96,10 +107,12 @@ export const getLectureAgentDetails = async () => {
   logger.info('[ANALYTICS] getLectureAgentDetails: fetching all agents with chunk counts');
   const { rows } = await query<{
     id: number; title: string; status: string; chunk_count: string; created_at: Date; updated_at: Date;
+    profile_is_active: boolean | null;
   }>(
     `SELECT l.id, l.title, l.status,
             COUNT(c.id) AS chunk_count,
-            l.created_at, l.updated_at
+            l.created_at, l.updated_at,
+            (SELECT p.is_active FROM lecture_agent_profiles p WHERE p.lecture_id = l.id) AS profile_is_active
      FROM lectures l
      LEFT JOIN lecture_qna_chunks c ON c.lecture_id = l.id
      GROUP BY l.id ORDER BY l.created_at DESC`
@@ -111,6 +124,12 @@ export const getLectureAgentDetails = async () => {
     chunkCount: parseInt(r.chunk_count),
     createdAt:  r.created_at.toISOString(),
     updatedAt:  r.updated_at.toISOString(),
+    // MISSING (no profile row) | INACTIVE | ACTIVE — lecture_id is the profile's
+    // primary key, so the scalar subquery above yields at most one row.
+    agentProfileStatus: r.profile_is_active === null ? 'MISSING' : r.profile_is_active ? 'ACTIVE' : 'INACTIVE',
+    // Same condition as the readyAgents metric and as askLectureAgent's gate:
+    // dataset processed AND an active agent profile.
+    chatReady: r.status === 'READY' && r.profile_is_active === true,
   }));
 };
 

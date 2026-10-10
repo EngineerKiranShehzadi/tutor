@@ -36,6 +36,8 @@ export const GET_LECTURE_AGENT_DETAILS = gql`
       chunkCount
       createdAt
       updatedAt
+      agentProfileStatus
+      chatReady
     }
   }
 `;

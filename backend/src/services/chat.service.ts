@@ -1,7 +1,7 @@
 import { query } from '../config/database';
 import { env } from '../config/env';
 import { AppError } from '../middleware/errorHandler';
-import { ChatHistoryEntry, QnaChunk } from '../types';
+import { ChatHistoryEntry, QnaChunk, LectureAgentProfile } from '../types';
 import { getLectureById } from './lecture.service';
 import { logger } from '../utils/logger';
 import { EMBEDDING_MODEL_VERSION } from './embedding.service';
@@ -31,6 +31,7 @@ import type { RetrievalQueryResult } from './query-rewriter.service';
 import type { RouteClassification } from './query-router.service';
 import type { SummarizeDeps } from './lecture-summary.service';
 import type { MemoryLookupResult, WriteMemoryParams, LookupParams as MemoryLookupParams } from './rag-answer-memory.service';
+import type { AgentProfileLookup } from './lecture-agent-profile.service';
 
 // Exact-match fallback used by both "not found" paths below (zero vector
 // candidates, and candidates that all fail the reranker relevance floor) so
@@ -48,7 +49,10 @@ export interface AskLectureAgentDeps {
   rerankChunks?:           (question: string, candidates: QnaChunk[], topN?: number) => Promise<QnaChunk[]>;
   dedupeAndSelect?:        (rankedChunks: QnaChunk[], desiredCount?: number, minRerankScore?: number) => DedupeResult;
   reorderForContext?:      (chunks: QnaChunk[]) => QnaChunk[];
-  generateAnswer?:         (question: string, chunks: QnaChunk[], lectureTitle: string, history?: ConversationTurn[], uncoveredAspects?: string[], attempt?: number, stream?: AnswerStreamHandlers) => Promise<string>;
+  generateAnswer?:         (question: string, chunks: QnaChunk[], lectureTitle: string, history?: ConversationTurn[], uncoveredAspects?: string[], attempt?: number, stream?: AnswerStreamHandlers, agentProfile?: LectureAgentProfile | null) => Promise<string>;
+  // Resolves the lecture's agent profile by lecture_id only (see
+  // lecture-agent-profile.service.ts). Defaults to the real service.
+  getAgentProfile?:        (lectureId: number) => Promise<AgentProfileLookup>;
   resolveRetrievalQuery?:  (question: string, history: ConversationTurn[]) => Promise<RetrievalQueryResult>;
   classifyRoute?:          (question: string) => Promise<RouteClassification>;
   generateGreeting?:       (message: string, lectureTitle: string, history?: ConversationTurn[]) => Promise<string>;
@@ -305,6 +309,58 @@ export const askLectureAgent = async (
       throw new AppError('AI tutor is not ready for this lecture yet. Please wait for processing.', 400);
     }
 
+    // 1a. Lecture agent profile — deterministic, selected by the validated
+    // lectureId only (never by title, lecture number, or an LLM). Runs right
+    // after the READY check and before the input guardrail so a lecture with
+    // a missing or disabled agent is rejected before ANY other chat path
+    // (greeting, summary, memory, retrieval, generation) can execute, and
+    // before anything is written. There is deliberately no fallback to a
+    // generic tutor: NOT_FOUND and INACTIVE are explicit errors, and a
+    // database failure propagates (it is never reported as NOT_FOUND).
+    currentStage = 'load-agent-profile';
+    const getAgentProfile = deps.getAgentProfile ?? (await import('./lecture-agent-profile.service')).getAgentProfileByLectureId;
+    const agentLookup = await getAgentProfile(lectureId);
+    if (agentLookup.status !== 'FOUND') {
+      logger.warn(`[CHAT] ⚠️  Lecture #${lectureId} has no usable agent profile (status=${agentLookup.status})`);
+      finishTrace('ERROR', { responseStatus: 'ERROR', failedStage: currentStage });
+      throw new AppError(
+        agentLookup.status === 'INACTIVE'
+          ? 'The AI tutor for this lecture is currently unavailable. Please try again later or contact your course administrator.'
+          : 'The AI tutor for this lecture has not been configured yet. Please contact your course administrator.',
+        503
+      );
+    }
+    const agentProfile: LectureAgentProfile = agentLookup.profile;
+    if (agentProfile.lecture_id !== lectureId) {
+      // Defence in depth: a profile for another lecture must never be used.
+      throw new Error(`[AGENT-PROFILE] profile for lecture #${agentProfile.lecture_id} returned for lecture #${lectureId}`);
+    }
+    // Computed exactly once; the SAME value is passed to the answer-memory
+    // exact lookup, its semantic lookup, and the memory write below, so an
+    // agent-generated answer is never stored or matched under the generic
+    // version (see getEffectiveAnswerPromptVersion).
+    const answerPromptVersion = (await import('./rag-answer-memory.service')).getEffectiveAnswerPromptVersion(agentProfile);
+
+    // 1a-2. Chat session validation — the supplied sessionId must exist, belong
+    // to THIS student, and have been created for THIS lecture. Runs before
+    // the input guardrail (which may call an LLM) and before anything reads
+    // history or writes a row, so a mismatched session can never pull
+    // another lecture's conversation into this lecture's agent prompt, and a
+    // student can never write into someone else's session. One generic
+    // not-found error covers all three failure modes, so the response does
+    // not reveal whether a session id exists or who owns it. A database
+    // failure here propagates (it is never treated as a valid session).
+    currentStage = 'validate-chat-session';
+    const { rows: sessionRows } = await query<{ ok: number }>(
+      `SELECT 1 AS ok FROM chat_sessions WHERE id = $1 AND student_id = $2 AND lecture_id = $3`,
+      [sessionId, studentId, lectureId]
+    );
+    if (sessionRows.length === 0) {
+      logger.warn(`[CHAT] ⚠️  Rejected session #${sessionId}: not found for student/lecture #${lectureId}`);
+      finishTrace('ERROR', { responseStatus: 'ERROR', failedStage: currentStage });
+      throw new AppError('Chat session not found for this lecture. Please refresh the page and try again.', 404);
+    }
+
     // 1b. Input Guardrail — runs before query-router.service.ts (see
     // rag/guardrails/input/input-guardrail.service.ts). ALLOW/SANITIZE
     // continue with the (possibly sanitized) text as `question` for every
@@ -501,7 +557,7 @@ export const askLectureAgent = async (
       const lookupAnswerMemory = deps.lookupAnswerMemory ?? (await import('./rag-answer-memory.service')).lookupAnswerMemory;
       const memoryResult = await trace.span(
         'exact-memory-lookup', // also covers the optional semantic sub-lookup when enabled
-        () => lookupAnswerMemory({ studentId, lectureId, question, generateEmbedding }),
+        () => lookupAnswerMemory({ studentId, lectureId, question, generateEmbedding, answerPromptVersion }),
         r => ({
           memoryResult: r.lookupFailed ? 'LOOKUP_FAILED' : r.hit ? (r.hit.matchType === 'EXACT' ? 'EXACT_HIT' : 'SEMANTIC_HIT') : 'MISS',
           semanticAttempted: env.RAG_MEMORY.SEMANTIC_ENABLED,
@@ -779,7 +835,7 @@ export const askLectureAgent = async (
       // partial coverage — see generateAnswer's doc comment in
       // llm-gemini.service.ts for how it's used (a note, never merged into
       // the grounded context itself).
-      () => generateAnswer(question, contextChunks, lecture.title, historyTurns, uncoveredAspects, 1, params.stream),
+      () => generateAnswer(question, contextChunks, lecture.title, historyTurns, uncoveredAspects, 1, params.stream, agentProfile),
       a => ({
         answerPromptVersion: ANSWER_PROMPT_VERSION,
         contextChunkCount: contextChunks.length,
@@ -873,6 +929,7 @@ export const askLectureAgent = async (
             sourceChunkIds: chunkIds,
             questionEmbedding: memoryEmbedding,
             lectureContentHash,
+            answerPromptVersion,
           }),
           () => ({ writeAttempted: true, sourceChunkCount: chunkIds.length })
         );

@@ -1,9 +1,61 @@
+import { createHash } from 'crypto';
 import { query } from '../config/database';
 import { env } from '../config/env';
-import { QnaChunk } from '../types';
+import { QnaChunk, LectureAgentProfile } from '../types';
 import { logger } from '../utils/logger';
 import { EMBEDDING_MODEL_VERSION } from './embedding.service';
 import { ANSWER_PROMPT_VERSION } from './llm-gemini.service';
+
+// ── Effective answer prompt version ─────────────────────────────────────
+// The answer_prompt_version column (TEXT, part of the UNIQUE key and both
+// lookup indexes) records which prompt a cached answer was generated under.
+// A generic answer keeps the plain base version ("v1"). An answer generated
+// with a lecture agent's instructions gets "<base>+agent:<sha256>", where the
+// hash covers exactly what the agent contributes to the prompt (its name and
+// its trimmed instructions — the same values buildAgentInstructionBlock in
+// llm-gemini.service.ts uses). Consequences, all by plain equality on the
+// existing column:
+//  - editing an agent's name/instructions changes the version, so previous
+//    cache rows simply stop matching (no deletion, no manual bump);
+//  - an agent version can never equal a generic one (it always carries the
+//    "+agent:" suffix), so old generic answers are never served as agent
+//    answers or vice versa;
+//  - bumping ANSWER_PROMPT_VERSION invalidates both kinds.
+// Not part of lecture_content_hash on purpose: that hash keeps meaning
+// "the lecture's content" (see computeLectureContentHash).
+//
+// If the fixed agent prompt text itself (the precedence rule or block layout
+// in llm-gemini.service.ts) ever changes, bump ANSWER_PROMPT_VERSION — same
+// rule as for SYSTEM_PROMPT.
+const AGENT_FINGERPRINT_FORMAT = 1;
+
+export const computeAgentConfigFingerprint = (
+  profile: Pick<LectureAgentProfile, 'agent_name' | 'instructions'>
+): string => {
+  // JSON.stringify of an object with a fixed key order: every string value
+  // is quoted and escaped, so field boundaries are unambiguous — unlike plain
+  // concatenation, ("ab","c") and ("a","bc") can never produce the same input.
+  const canonical = JSON.stringify({
+    format: AGENT_FINGERPRINT_FORMAT,
+    agent_name: profile.agent_name,
+    instructions: profile.instructions.trim(),
+  });
+  return createHash('sha256').update(canonical, 'utf8').digest('hex');
+};
+
+// `baseVersion` defaults to the global ANSWER_PROMPT_VERSION; it is a
+// parameter only so tests can show the effective version tracks it.
+export const getEffectiveAnswerPromptVersion = (
+  profile?: Pick<LectureAgentProfile, 'agent_name' | 'instructions'> | null,
+  baseVersion: string = ANSWER_PROMPT_VERSION
+): string => (profile ? `${baseVersion}+agent:${computeAgentConfigFingerprint(profile)}` : baseVersion);
+
+// undefined => the global version (every pre-agent caller). A blank string is
+// a caller bug and is rejected (null) rather than silently stored or replaced.
+const resolvePromptVersion = (explicit: string | undefined): string | null => {
+  if (explicit === undefined) return ANSWER_PROMPT_VERSION;
+  return explicit.trim() === '' ? null : explicit;
+};
 
 // ── Normalization ──────────────────────────────────────────────────────
 // Conservative on purpose: only case/whitespace/harmless-trailing-punctuation
@@ -75,6 +127,11 @@ export interface LookupParams {
   lectureId: number;
   question: string;
   generateEmbedding: (text: string, isQuery?: boolean) => Promise<number[]>;
+  // Effective prompt version to match against — see
+  // getEffectiveAnswerPromptVersion. Defaults to ANSWER_PROMPT_VERSION, so
+  // callers that don't use agent profiles are unaffected. A caller that
+  // passes one here MUST pass the same value to writeAnswerMemory.
+  answerPromptVersion?: string;
 }
 
 export interface SemanticLookupOptions {
@@ -127,10 +184,16 @@ export const lookupAnswerMemory = async (
   const threshold = opts.similarityThreshold !== undefined ? opts.similarityThreshold : env.RAG_MEMORY.SIMILARITY_THRESHOLD;
   const failed: MemoryLookupResult = { hit: null, embedding: null, lectureContentHash: null, lookupFailed: true };
 
+  const promptVersion = resolvePromptVersion(params.answerPromptVersion);
+  if (promptVersion === null) {
+    logger.warn('[RAG-MEMORY] memoryLookupFailed: blank answerPromptVersion supplied — treating as a miss');
+    return failed;
+  }
+
   try {
     const normalized = normalizeQuery(question);
     const lectureContentHash = await computeLectureContentHash(lectureId);
-    const versionParams = [studentId, lectureId, normalized, lectureContentHash, EMBEDDING_MODEL_VERSION, ANSWER_PROMPT_VERSION];
+    const versionParams = [studentId, lectureId, normalized, lectureContentHash, EMBEDDING_MODEL_VERSION, promptVersion];
 
     // 1. Exact normalized-question match.
     const { rows: exactRows } = await query<{ id: number; answer: string; source_chunk_ids: number[] }>(
@@ -182,7 +245,7 @@ export const lookupAnswerMemory = async (
     const vectorLiteral = `[${embedding.join(',')}]`;
     const { rows: semanticRows } = await query<{ id: number; answer: string; source_chunk_ids: number[]; similarity: number }>(
       SEMANTIC_LOOKUP_SQL,
-      [studentId, lectureId, lectureContentHash, EMBEDDING_MODEL_VERSION, ANSWER_PROMPT_VERSION, vectorLiteral]
+      [studentId, lectureId, lectureContentHash, EMBEDDING_MODEL_VERSION, promptVersion, vectorLiteral]
     );
 
     // Walk ranked candidates best-first: a stale top match (deleted source
@@ -235,6 +298,10 @@ export interface WriteMemoryParams {
   sourceChunkIds: number[];
   questionEmbedding: number[];
   lectureContentHash: string;
+  // Must equal the answerPromptVersion used for the lookup that preceded
+  // this write (see LookupParams.answerPromptVersion). Defaults to
+  // ANSWER_PROMPT_VERSION for callers that don't use agent profiles.
+  answerPromptVersion?: string;
 }
 
 // Called only after a successful, grounded FACT_QUESTION answer has already
@@ -249,6 +316,12 @@ export const writeAnswerMemory = async (params: WriteMemoryParams): Promise<void
   } = params;
 
   if (sourceChunkIds.length === 0) return; // matches the DB CHECK constraint; nothing to cache
+
+  const promptVersion = resolvePromptVersion(params.answerPromptVersion);
+  if (promptVersion === null) {
+    logger.warn('[RAG-MEMORY] memoryWriteFailed: blank answerPromptVersion supplied — nothing stored');
+    return;
+  }
 
   try {
     const normalized = normalizeQuery(originalQuestion);
@@ -273,7 +346,7 @@ export const writeAnswerMemory = async (params: WriteMemoryParams): Promise<void
         studentId, lectureId, sourceChatHistoryId,
         originalQuestion, retrievalQuery, normalized, vectorLiteral,
         answer, sourceChunkIds,
-        lectureContentHash, EMBEDDING_MODEL_VERSION, ANSWER_PROMPT_VERSION,
+        lectureContentHash, EMBEDDING_MODEL_VERSION, promptVersion,
       ]
     );
     logger.info(`[RAG-MEMORY] memoryEntryCreated lecture=${lectureId} chunks=${sourceChunkIds.length}`);

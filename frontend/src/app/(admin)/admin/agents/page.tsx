@@ -9,7 +9,7 @@ import {
 } from 'recharts';
 import { GET_LECTURE_AGENT_DETAILS } from '@/graphql/admin.queries';
 
-interface AgentDetail { id: number; title: string; status: string; chunkCount: number; createdAt: string; updatedAt: string }
+interface AgentDetail { id: number; title: string; status: string; chunkCount: number; createdAt: string; updatedAt: string; agentProfileStatus: string; chatReady: boolean }
 
 const STATUS_CONFIG: Record<string, { label: string; dot: string; text: string; bg: string; border: string; icon: string; color: string }> = {
   READY:            { label: 'AI Ready',      dot: 'bg-emerald-400', text: 'text-emerald-700', bg: 'bg-emerald-50',  border: 'border-emerald-200', icon: 'fas fa-robot',       color: '#10b981' },
@@ -18,6 +18,8 @@ const STATUS_CONFIG: Record<string, { label: string; dot: string; text: string; 
   DATASET_UPLOADED: { label: 'Dataset Ready', dot: 'bg-amber-400',   text: 'text-amber-700',   bg: 'bg-amber-50',    border: 'border-amber-200',   icon: 'fas fa-file-check',  color: '#f59e0b' },
   NO_DATASET:       { label: 'No Dataset',    dot: 'bg-slate-400',   text: 'text-slate-600',   bg: 'bg-slate-50',    border: 'border-slate-200',   icon: 'fas fa-database',    color: '#94a3b8' },
   FAILED:           { label: 'Failed',        dot: 'bg-red-400',     text: 'text-red-700',     bg: 'bg-red-50',      border: 'border-red-200',     icon: 'fas fa-circle-xmark',color: '#ef4444' },
+  // Dataset is READY but chat cannot serve it: no (or an inactive) agent profile.
+  AGENT_NOT_READY:  { label: 'Agent Not Ready', dot: 'bg-amber-400', text: 'text-amber-700',   bg: 'bg-amber-50',    border: 'border-amber-200',   icon: 'fas fa-triangle-exclamation', color: '#f59e0b' },
 };
 
 const PROGRESS: Record<string, number> = { NO_DATASET: 0, DATASET_UPLOADED: 25, PROCESSING: 50, EMBEDDING: 75, READY: 100, FAILED: 0 };
@@ -37,7 +39,9 @@ export default function AdminAgentsPage() {
   });
 
   const summary = {
-    ready:      agents.filter(a => a.status === 'READY').length,
+    // "Ready" = what chat can actually serve (READY dataset AND an active agent profile).
+    ready:      agents.filter(a => a.chatReady).length,
+    needsAgent: agents.filter(a => a.status === 'READY' && !a.chatReady).length,
     processing: agents.filter(a => ['PROCESSING','EMBEDDING','DATASET_UPLOADED'].includes(a.status)).length,
     failed:     agents.filter(a => a.status === 'FAILED').length,
     noDataset:  agents.filter(a => a.status === 'NO_DATASET').length,
@@ -46,6 +50,7 @@ export default function AdminAgentsPage() {
   // Donut chart data — only statuses with count > 0
   const donutData = Object.entries({
     READY: summary.ready,
+    AGENT_NOT_READY: summary.needsAgent,
     PROCESSING: summary.processing,
     FAILED: summary.failed,
     NO_DATASET: summary.noDataset,
@@ -86,9 +91,10 @@ export default function AdminAgentsPage() {
       />
 
       {/* Summary cards */}
-      <div className="grid grid-cols-4 gap-4 mb-5">
+      <div className="grid grid-cols-5 gap-4 mb-5">
         {[
           { label: 'AI Ready',    value: summary.ready,      color: 'bg-emerald-600', light: 'bg-emerald-50 text-emerald-700', icon: 'fas fa-robot' },
+          { label: 'Agent Not Ready', value: summary.needsAgent, color: 'bg-amber-600', light: 'bg-amber-50 text-amber-700',   icon: 'fas fa-triangle-exclamation' },
           { label: 'Processing',  value: summary.processing, color: 'bg-blue-600',    light: 'bg-blue-50 text-blue-700',       icon: 'fas fa-cog' },
           { label: 'Failed',      value: summary.failed,     color: 'bg-red-600',     light: 'bg-red-50 text-red-700',         icon: 'fas fa-circle-xmark' },
           { label: 'No Dataset',  value: summary.noDataset,  color: 'bg-slate-600',   light: 'bg-slate-100 text-slate-600',    icon: 'fas fa-database' },
@@ -223,7 +229,8 @@ export default function AdminAgentsPage() {
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
           <div className="divide-y divide-slate-100">
             {filtered.map(a => {
-              const s = STATUS_CONFIG[a.status] ?? STATUS_CONFIG.NO_DATASET;
+              const agentNotReady = a.status === 'READY' && !a.chatReady;
+              const s = agentNotReady ? STATUS_CONFIG.AGENT_NOT_READY : (STATUS_CONFIG[a.status] ?? STATUS_CONFIG.NO_DATASET);
               const pct = PROGRESS[a.status] ?? 0;
               const barColor = PROGRESS_COLOR[a.status] ?? 'bg-slate-300';
               const isActive = ['PROCESSING','EMBEDDING'].includes(a.status);
@@ -235,7 +242,9 @@ export default function AdminAgentsPage() {
                       <p className="text-[16px] font-semibold text-slate-800 truncate">{a.title}</p>
                     </div>
                     <div className="flex items-center gap-3 shrink-0 ml-4">
-                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px] font-semibold border ${s.bg} ${s.border} ${s.text}`}>
+                      <span
+                        title={agentNotReady ? (a.agentProfileStatus === 'INACTIVE' ? 'The dataset is ready, but this lecture\'s agent profile is inactive.' : 'The dataset is ready, but this lecture has no agent profile.') : undefined}
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px] font-semibold border ${s.bg} ${s.border} ${s.text}`}>
                         <span className={`w-1.5 h-1.5 rounded-full ${s.dot} ${isActive ? 'animate-pulse' : ''}`} />
                         {s.label}
                       </span>

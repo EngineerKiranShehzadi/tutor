@@ -160,6 +160,11 @@ export const typeDefs = `#graphql
     chunkCount: Int!
     createdAt:  String!
     updatedAt:  String!
+    # Operational readiness (additive): status is dataset processing only.
+    # agentProfileStatus: ACTIVE | INACTIVE | MISSING.
+    # chatReady: status READY AND an active agent profile (what chat will serve).
+    agentProfileStatus: String!
+    chatReady:          Boolean!
   }
 
   # ── Student Journey ───────────────────────────────────
