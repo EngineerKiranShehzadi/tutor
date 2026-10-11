@@ -100,6 +100,9 @@ export async function verifyAnswerGroundedness(params: VerifyAnswerParams): Prom
         systemPrompt: buildGroundednessSystemPrompt(),
         temperature: env.LLM.ANSWER_VERIFICATION.TEMPERATURE,
         maxOutputTokens: 500,
+        // The verdict is a small JSON object; with thinking on, Gemini can
+        // spend the whole 500-token cap thinking and return truncated JSON.
+        thinkingBudget: 0,
         responseSchema: GROUNDEDNESS_RESPONSE_SCHEMA,
         timeoutMs,
       }),

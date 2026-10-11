@@ -25,6 +25,9 @@ export interface LlmRequest {
   userPrompt: string;
   temperature?: number;
   maxOutputTokens?: number;
+  // 0 disables model "thinking" so it can't consume maxOutputTokens (honored
+  // by providers that support it, ignored otherwise).
+  thinkingBudget?: number;
   // When set, the provider must return JSON matching this shape in
   // `response.raw` (adapters handle whatever provider-specific flag turns
   // structured output on, e.g. Gemini's responseMimeType+responseSchema).

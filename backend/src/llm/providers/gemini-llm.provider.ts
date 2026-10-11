@@ -58,6 +58,7 @@ export const geminiLlmProvider: LlmProvider = {
       systemInstruction: request.systemPrompt,
       temperature: request.temperature,
       maxOutputTokens: request.maxOutputTokens,
+      thinkingBudget: request.thinkingBudget,
       timeoutMs: request.timeoutMs,
       // Gemini requires responseMimeType alongside responseSchema for
       // structured output — callers only ever specify the schema, this

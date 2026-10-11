@@ -32,6 +32,10 @@ export interface GeminiGenerateOptions {
   maxOutputTokens?: number;
   responseMimeType?: string;
   responseSchema?: GeminiSchema;
+  // Gemini 2.5 thinking tokens count against maxOutputTokens, so a small
+  // structured-output call can burn its whole budget on thinking and return
+  // truncated JSON. 0 turns thinking off for that call.
+  thinkingBudget?: number;
   // Aborts the underlying HTTP request via AbortSignal.timeout(), the same
   // idiom already used for the local embedding/rerank calls in
   // embedding.service.ts and rerank.service.ts — not a bare Promise.race,
@@ -59,6 +63,7 @@ export async function generateContent(opts: GeminiGenerateOptions): Promise<Gemi
   if (opts.maxOutputTokens !== undefined) config.maxOutputTokens = opts.maxOutputTokens;
   if (opts.responseMimeType !== undefined) config.responseMimeType = opts.responseMimeType;
   if (opts.responseSchema !== undefined) config.responseSchema = opts.responseSchema;
+  if (opts.thinkingBudget !== undefined) config.thinkingConfig = { thinkingBudget: opts.thinkingBudget };
   if (opts.timeoutMs !== undefined) config.abortSignal = AbortSignal.timeout(opts.timeoutMs);
 
   const response = await ai.models.generateContent({

@@ -58,13 +58,24 @@ const resolvePromptVersion = (explicit: string | undefined): string | null => {
 };
 
 // ── Normalization ──────────────────────────────────────────────────────
-// Conservative on purpose: only case/whitespace/harmless-trailing-punctuation
-// are collapsed. Numbers, symbols, negation, and word order are all left
-// untouched so different-intent questions never collapse onto the same key.
-const TRAILING_PUNCTUATION = /[?!.,;:]+$/;
+// Conservative on purpose: only case/whitespace/unicode-form and harmless
+// leading/trailing sentence punctuation are collapsed. Numbers, symbols
+// (e.g. "C++"), negation, and word order are all left untouched so
+// different-intent questions never collapse onto the same key. Typed text
+// ("what is x ?"), pasted text and speech-to-text output ("What is x?") of
+// the same question must all land on one key — stripping happens AFTER
+// whitespace collapse and trims again, so a space before a trailing "?"
+// can't survive into the key.
+const EDGE_PUNCTUATION = /^[\s?!.,;:"'()]+|[\s?!.,;:"'()]+$/g;
 
 export const normalizeQuery = (question: string): string =>
-  question.trim().toLowerCase().replace(/\s+/g, ' ').replace(TRAILING_PUNCTUATION, '');
+  question
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/\s+/g, ' ')
+    .replace(EDGE_PUNCTUATION, '');
 
 // ── Lecture content fingerprint ─────────────────────────────────────────
 // Deterministic hash over every chunk's id + content, ordered by id — not a
