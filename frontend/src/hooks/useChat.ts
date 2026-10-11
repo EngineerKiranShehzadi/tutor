@@ -55,12 +55,28 @@ function entryToMessages(entry: HistoryEntry): ChatMessage[] {
   ];
 }
 
-export const useChat = (lectureTitle: string, lectureId: number, agentName: string) => {
+export interface UseChatOptions {
+  /**
+   * Called with the server's FINAL (guardrail-checked) answer text once it is
+   * known — never with a streamed draft. Return true when the caller speaks it
+   * itself (e.g. the 3D teacher avatar), so the built-in auto-speak is skipped
+   * and two voices never play at once.
+   */
+  onFinalAnswer?: (answer: string) => boolean | void;
+  /** Called when no answer could be obtained (stream and GraphQL fallback both failed). */
+  onAnswerError?: () => void;
+}
+
+export const useChat = (lectureTitle: string, lectureId: number, agentName: string, options?: UseChatOptions) => {
   const [currentSessionId,  setCurrentSessionId]  = useState<number | null>(null);
   const [sessionMessages,   setSessionMessages]   = useState<ChatMessage[]>([]);
   const [localMessages,     setLocalMessages]     = useState<ChatMessage[]>([]);
   const [isTyping,          setTyping]            = useState(false);
   const [isLoadingSession,  setIsLoadingSession]  = useState(true);
+  // true from the moment a question is sent until its final answer (or failure) is known
+  const [isAnswerPending,   setAnswerPending]    = useState(false);
+  const optionsRef          = useRef<UseChatOptions | undefined>(options);
+  optionsRef.current       = options;
   const [sessionsRefreshKey, setSessionsRefreshKey] = useState(0);
   const [inputText,         setInputText]         = useState('');
   const [autoSpeak,         setAutoSpeak]         = useState<boolean>(() => {
@@ -117,6 +133,7 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
     streamAbortRef.current?.abort();
     streamAbortRef.current = null;
     setTyping(false);
+    setAnswerPending(false);
     setCurrentSessionId(null);
     setSessionMessages([]);
     setLocalMessages([]);
@@ -203,7 +220,7 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
 
   // Typewriter animation for answers that arrive whole (greetings, summaries,
   // cached answers, guardrail fallbacks, or the GraphQL fallback path).
-  const animateAnswer = useCallback((rawAnswer: string, sources: ChunkSource[]) => {
+  const animateAnswer = useCallback((rawAnswer: string, sources: ChunkSource[], speakHandled = false) => {
     const citation = sources.length > 0 && sources[0].startTime
       ? `Lecture content · ${sources[0].startTime}`
       : 'Lecture content';
@@ -218,7 +235,7 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
     }]);
     setTyping(false);
 
-    if (autoSpeakRef.current) {
+    if (autoSpeakRef.current && !speakHandled) {
       voiceSpeakRef.current(rawAnswer);
     }
 
@@ -270,6 +287,7 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
       };
       setLocalMessages(prev => [...prev, userMsg]);
       setTyping(true);
+      setAnswerPending(true);
       console.log(`[CHAT] 📤 Session #${sessionId}: "${content.slice(0, 60)}..."`);
 
       let liveMsgId: string | null = null;
@@ -303,8 +321,11 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
           controller.signal
         );
         if (controller.signal.aborted) return;
+        if (!sessionGuardRef.current.isCurrent(requestToken)) return;
 
         const sources = result.sources;
+        // Final, guardrail-checked answer: offer it to the avatar (if any).
+        const speakHandled = optionsRef.current?.onFinalAnswer?.(result.answer) === true;
         if (liveMsgId) {
           // Server's final answer is authoritative — it may differ from the
           // streamed draft if the output guardrail revised or replaced it.
@@ -316,12 +337,12 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
               : 'Lecture content',
             isStreaming: false,
           });
-          if (autoSpeakRef.current) voiceSpeakRef.current(result.answer);
+          if (autoSpeakRef.current && !speakHandled) voiceSpeakRef.current(result.answer);
           setSessionsRefreshKey(k => k + 1);
           console.log(`[CHAT] ✅ Live stream complete (${result.answer.length} chars)`);
         } else {
           // Nothing streamed (greeting, summary, cached answer, not-found…)
-          animateAnswer(result.answer, sources);
+          animateAnswer(result.answer, sources, speakHandled);
         }
         return;
       } catch (err) {
@@ -337,7 +358,13 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
             });
             if (!sessionGuardRef.current.isCurrent(requestToken)) return;
             const response = data?.askLectureAgent;
-            animateAnswer(response?.answer ?? FALLBACK_REPLY, response?.sources ?? []);
+            if (response?.answer) {
+              const handled = optionsRef.current?.onFinalAnswer?.(response.answer) === true;
+              animateAnswer(response.answer, response.sources ?? [], handled);
+            } else {
+              optionsRef.current?.onAnswerError?.();
+              animateAnswer(FALLBACK_REPLY, []);
+            }
             return;
           } catch (gqlErr) {
             console.error('[CHAT] ❌ Error:', gqlErr);
@@ -346,6 +373,7 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
           console.error('[CHAT] ❌ Stream error:', err);
         }
 
+        optionsRef.current?.onAnswerError?.();
         if (liveMsgId) {
           updateLive({ content: FALLBACK_REPLY, isStreaming: false });
         } else {
@@ -354,6 +382,9 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
           }]);
         }
         setTyping(false);
+      } finally {
+        // Only the request that belongs to the current lecture selection may clear the flag.
+        if (sessionGuardRef.current.isCurrent(requestToken)) setAnswerPending(false);
       }
     },
     [lectureId, askLectureAgent, animateAnswer]
@@ -387,6 +418,7 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
     messages,
     isTyping,
     isLoadingSession,
+    isAnswerPending,
     currentSessionId,
     sessionsRefreshKey,
     inputText,

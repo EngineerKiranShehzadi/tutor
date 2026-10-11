@@ -1,5 +1,4 @@
 'use client';
-import Image from 'next/image';
 import { notFound } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@apollo/client';
@@ -11,6 +10,10 @@ import { SuggestionChips } from '@/components/chat/SuggestionChips';
 import { ChatInput }       from '@/components/chat/ChatInput';
 import { ChatSidebar }     from '@/components/chat/ChatSidebar';
 import { useChat }         from '@/hooks/useChat';
+import { useAvatarSpeech } from '@/hooks/useAvatarSpeech';
+import { TeacherAvatarPanel } from '@/components/avatar/TeacherAvatarPanel';
+import { deriveAvatarState } from '@/lib/avatar/avatar-state';
+import { resolveAgentName } from '@/lib/avatar/agent-identity';
 import { cn }              from '@/lib/cn';
 import { useRouter }       from 'next/navigation';
 
@@ -36,10 +39,38 @@ export default function LecturePage({ params }: Props) {
   const lecture: DBLecture | undefined = lectureData?.lecture;
   const allLectures: DBLecture[]       = allData?.lectures ?? [];
 
+  // Displayed agent identity — resolved from the lecture's YouTube id via the
+  // existing lecture -> agent mapping (no database ids hardcoded). The agent
+  // that actually answers is still selected server-side from lecture_id.
+  const agentName = resolveAgentName(lecture?.youtubeVideoId);
+
+  // 3D teacher avatar: a presentation layer over the existing chat. It only
+  // receives the final (guardrail-checked) answer text; it never changes it.
+  const speech = useAvatarSpeech();
+  const [avatarVisible, setAvatarVisible] = useState(true);
+  const [avatarError, setAvatarError]     = useState(false);
+  const avatarSpeaksRef = useRef(false);
+  avatarSpeaksRef.current = avatarVisible && speech.supported;
+
+  useEffect(() => {
+    try { if (localStorage.getItem('askaitutor_avatar_visible') === 'false') setAvatarVisible(false); } catch { /* storage unavailable */ }
+  }, []);
+
   const chat = useChat(
     lecture?.title ?? 'this lecture',
     lectureId,
-    'AI Tutor'
+    agentName,
+    {
+      // Returning true tells useChat the avatar speaks this answer, so the
+      // built-in auto-speak is skipped (never two voices).
+      onFinalAnswer: (answer) => {
+        if (!avatarSpeaksRef.current) return false;
+        setAvatarError(false);
+        speech.speak(answer);
+        return true;
+      },
+      onAnswerError: () => { speech.stop(); setAvatarError(true); },
+    }
   );
 
   const bottomRef       = useRef<HTMLDivElement>(null);
@@ -48,13 +79,47 @@ export default function LecturePage({ params }: Props) {
   const [showSidebar,   setShowSidebar]   = useState(true);
   const [speakingMsgId, setSpeakingMsgId] = useState<string | null>(null);
 
-  // Clear speakingMsgId when TTS finishes
+  // Clear speakingMsgId when TTS finishes (built-in voice, or the avatar's voice when it is shown)
+  const anySpeaking = avatarVisible ? speech.isSpeaking : chat.isSpeaking;
   useEffect(() => {
-    if (!chat.isSpeaking) setSpeakingMsgId(null);
-  }, [chat.isSpeaking]);
+    if (!anySpeaking) setSpeakingMsgId(null);
+  }, [anySpeaking]);
+
+  // Switching lecture or chat session always stops the previous answer's speech.
+  useEffect(() => {
+    speech.stop();
+    chat.stopSpeaking();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lectureId, chat.currentSessionId]);
+
+  // A speech failure (not just an answer failure) also surfaces as the ERROR state, briefly.
+  useEffect(() => {
+    if (speech.error) setAvatarError(true);
+  }, [speech.error]);
+  useEffect(() => {
+    if (!avatarError) return;
+    const id = setTimeout(() => setAvatarError(false), 4000);
+    return () => clearTimeout(id);
+  }, [avatarError]);
+
+  const avatarState = deriveAvatarState({
+    isAnswerPending:   chat.isAnswerPending,
+    isSpeaking:        speech.isSpeaking,
+    isUserInputActive: chat.inputText.trim().length > 0 || chat.isRecording,
+    hasError:          avatarError,
+  });
+
+  const toggleAvatar = (visible: boolean) => {
+    setAvatarVisible(visible);
+    if (!visible) speech.stop();
+    try { localStorage.setItem('askaitutor_avatar_visible', String(visible)); } catch { /* storage unavailable */ }
+  };
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    // Scroll only the messages list. (scrollIntoView also scrolls the
+    // overflow-hidden chat panel itself, which clipped the chat header.)
+    const el = chatMessagesRef.current;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
   }, [chat.messages, chat.isTyping]);
 
   useEffect(() => {
@@ -201,33 +266,6 @@ export default function LecturePage({ params }: Props) {
         >
           {/* Chat panel */}
           <div className="flex-1 min-w-0 flex flex-col overflow-hidden relative">
-          {/* Chat header */}
-          <div className="flex items-center gap-3 px-5 py-3.5 border-b border-[var(--border)] shrink-0">
-            <div className="w-11 h-11 rounded-xl overflow-hidden shrink-0">
-              <Image src="/agent-avatar.png" alt="AI Tutor" width={44} height={44} className="object-cover w-full h-full" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-[17px] font-bold text-[var(--text)]">{chat.agentName}</p>
-              <p className="text-[13px] text-[var(--muted)] truncate">
-                Scoped to: {lecture.title}
-              </p>
-            </div>
-
-            {/* Auto-speak toggle */}
-            <button
-              onClick={chat.toggleAutoSpeak}
-              title={chat.autoSpeak ? 'Auto-speak on — click to turn off' : 'Auto-speak off — click to turn on'}
-              className={cn(
-                'w-9 h-9 rounded-xl flex items-center justify-center transition-colors',
-                chat.autoSpeak
-                  ? 'bg-indigo-600 text-white'
-                  : 'bg-[var(--surface)] text-[var(--muted)] hover:bg-indigo-50 hover:text-indigo-600'
-              )}
-            >
-              <i className={`fas ${chat.autoSpeak ? 'fa-volume-high' : 'fa-volume-xmark'} text-[13px]`} />
-            </button>
-          </div>
-
           {/* Speaking indicator */}
           {chat.isSpeaking && (
             <div className="flex items-center gap-2 bg-indigo-50 border-b border-indigo-100 px-5 py-2.5 shrink-0">
@@ -245,6 +283,55 @@ export default function LecturePage({ params }: Props) {
             </div>
           )}
 
+          {/* AI teacher avatar — shown on the right, at the top of the chat column.
+              Additional to the text chat, never a replacement for it. */}
+          {isReady && (
+            avatarVisible ? (
+              <TeacherAvatarPanel
+                compact
+                agentName={agentName}
+                lectureTitle={lecture.title}
+                state={avatarState}
+                getMouth={speech.getMouth}
+                speechSupported={speech.supported}
+                isSpeaking={speech.isSpeaking}
+                isPaused={speech.isPaused}
+                muted={speech.muted}
+                canReplay={speech.hasSpoken()}
+                errorMessage={speech.error}
+                onPlay={speech.replay}
+                onPause={speech.pause}
+                onResume={speech.resume}
+                onStop={speech.stop}
+                onToggleMute={speech.toggleMute}
+                onHide={() => toggleAvatar(false)}
+              />
+            ) : (
+              <div className="px-5 py-2 border-b border-[var(--border)] shrink-0 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => toggleAvatar(true)}
+                  className="text-[13px] font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-100 rounded-xl px-3.5 py-1.5 transition-colors"
+                >
+                  <i className="fas fa-chalkboard-user mr-2 text-[12px]" />Show AI teacher
+                </button>
+                <span className="flex-1" />
+                <button
+                  onClick={chat.toggleAutoSpeak}
+                  title={chat.autoSpeak ? 'Auto-speak on — click to turn off' : 'Auto-speak off — click to turn on'}
+                  className={cn(
+                    'w-9 h-9 rounded-xl flex items-center justify-center transition-colors',
+                    chat.autoSpeak
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-[var(--surface)] text-[var(--muted)] hover:bg-indigo-50 hover:text-indigo-600'
+                  )}
+                >
+                  <i className={`fas ${chat.autoSpeak ? 'fa-volume-high' : 'fa-volume-xmark'} text-[13px]`} />
+                </button>
+              </div>
+            )
+          )}
+
           {/* Not ready state */}
           {!isReady ? (
             <div className="flex-1 flex flex-col items-center justify-center text-[var(--muted)] gap-3 px-6">
@@ -259,7 +346,7 @@ export default function LecturePage({ params }: Props) {
           ) : (
             <>
               {/* Messages */}
-              <div ref={chatMessagesRef} className="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-4">
+              <div ref={chatMessagesRef} className="flex-1 min-h-[180px] overflow-y-auto px-5 py-4 flex flex-col gap-4">
                 <div className="flex items-center justify-center">
                   <span className="bg-indigo-50 border border-indigo-100 text-indigo-700 text-[13px] font-medium px-4 py-2 rounded-xl flex items-center gap-2">
                     <i className="fas fa-circle-check text-indigo-500 text-[11px]" />
@@ -279,9 +366,14 @@ export default function LecturePage({ params }: Props) {
                         message={msg}
                         onSpeak={msg.role === 'ai' ? (text) => {
                           setSpeakingMsgId(msg.id);
-                          chat.speak(text);
+                          if (avatarSpeaksRef.current) {
+                            chat.stopSpeaking();      // never two voices
+                            speech.speak(text);
+                          } else {
+                            chat.speak(text);
+                          }
                         } : undefined}
-                        isSpeaking={speakingMsgId === msg.id && chat.isSpeaking}
+                        isSpeaking={speakingMsgId === msg.id && anySpeaking}
                       />
                     </div>
                   ))
