@@ -16,6 +16,10 @@ export const env = {
   NODE_ENV:      optional('NODE_ENV', 'development'),
   PORT:          parseInt(optional('PORT', '5000'), 10),
   FRONTEND_URL:  optional('FRONTEND_URL', 'http://localhost:3000'),
+  // Upper bound for a graceful shutdown (SIGTERM/SIGINT): finishing in-flight
+  // requests, flushing traces to Phoenix and closing the DB pool. If it is
+  // not done by then, the process exits with code 1. See server.ts.
+  SHUTDOWN_TIMEOUT_MS: parseInt(optional('SHUTDOWN_TIMEOUT_MS', '10000'), 10),
 
   // Dataset pipeline (dataset-version.service.ts). How long to wait before
   // retrying a build that is paused because the embedding service is down.

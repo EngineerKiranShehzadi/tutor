@@ -79,7 +79,56 @@ function setSafeAttributes(
   }
 }
 
-export async function exportTraceToPhoenix(trace: FinishedTrace): Promise<void> {
+// Exports that have started but not yet handed their spans to the
+// BatchSpanProcessor. recordTrace() is fire-and-forget, so at shutdown a
+// just-finished request's export may still be loading the OTel modules;
+// shutdownPhoenixExporter() waits for these before flushing.
+const pendingExports = new Set<Promise<void>>();
+
+export function exportTraceToPhoenix(trace: FinishedTrace): Promise<void> {
+  const p = exportTrace(trace);
+  pendingExports.add(p);
+  void p.finally(() => pendingExports.delete(p));
+  return p;
+}
+
+// Flushes buffered spans to Phoenix and shuts the exporter down. Called once
+// from the SIGTERM/SIGINT handler in server.ts. Never throws; returns as soon
+// as `timeoutMs` has passed even if Phoenix is slow or unreachable.
+export async function shutdownPhoenixExporter(timeoutMs = 5000): Promise<void> {
+  if (!tracerProvider && pendingExports.size === 0) return;
+
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<'timeout'>(resolve => {
+    timer = setTimeout(() => resolve('timeout'), timeoutMs);
+    timer.unref();
+  });
+
+  const flush = (async () => {
+    await Promise.allSettled([...pendingExports]);
+    if (!tracerProvider) return;
+    await tracerProvider.forceFlush();
+    await tracerProvider.shutdown();
+  })();
+
+  try {
+    const outcome = await Promise.race([flush.then(() => 'done' as const), timeout]);
+    if (outcome === 'timeout') {
+      logger.warn(`[PHOENIX] Shutdown flush did not finish within ${timeoutMs}ms — some traces may be lost`);
+    } else {
+      logger.info('[PHOENIX] Exporter flushed and shut down');
+    }
+  } catch (err) {
+    logger.warn(`[PHOENIX] Shutdown flush failed (non-fatal): ${(err as Error).message}`);
+  } finally {
+    if (timer) clearTimeout(timer);
+    // If the race timed out, a late rejection from `flush` must not surface
+    // as an unhandled rejection.
+    flush.catch(() => undefined);
+  }
+}
+
+async function exportTrace(trace: FinishedTrace): Promise<void> {
   if (!env.OBSERVABILITY.ENABLED || !env.OBSERVABILITY.PHOENIX_ENABLED) return;
   if (env.OBSERVABILITY.SAMPLE_RATE < 1 && Math.random() > env.OBSERVABILITY.SAMPLE_RATE) return;
 
