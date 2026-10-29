@@ -12,7 +12,10 @@ import { User, PasswordResetToken, EmailVerificationToken } from '../types';
 // ── REGISTER ──────────────────────────────────────────
 export const registerUser = async (name: string, email: string, password: string) => {
   logger.info(`[AUTH] registerUser: email="${email}" name="${name}"`);
-  const existing = await query<User>('SELECT id FROM users WHERE email = $1', [email]);
+  // Lowercased to match how the address is stored on insert below, and how
+  // every other lookup in this file does it. Previously this relied on
+  // normalizeEmail() having already lowercased the address upstream.
+  const existing = await query<User>('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
   if (existing.rows[0]) {
     logger.warn(`[AUTH] registerUser: email already in use — "${email}"`);
     throw new AppError('Email already in use', 409);
@@ -164,10 +167,10 @@ const issuePasswordResetOtp = async (email: string): Promise<void> => {
   const user = rows[0];
   if (!user) throw new AppError('No account found with that email address', 400);
 
-  // 5-digit OTP via cryptographically secure random
-  const otp = crypto.randomInt(10000, 100000).toString();
+  // 6-digit OTP via cryptographically secure random (NIST SP 800-63B: minimum 6 digits)
+  const otp = crypto.randomInt(100000, 1000000).toString();
   const codeHash = await bcrypt.hash(otp, 12);
-  const expiresAt = new Date(Date.now() + 60 * 1000); // 60 seconds
+  const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes (NIST SP 800-63B: max 10 min)
 
   // Invalidate all previous unused tokens for this user
   await query(
@@ -310,9 +313,9 @@ export const resetPasswordWithOtp = async (
 
 // ── SIGNUP: INTERNAL OTP HELPER ───────────────────────
 const issueEmailVerificationOtp = async (userId: string): Promise<string> => {
-  const otp = crypto.randomInt(10000, 100000).toString();
+  const otp = crypto.randomInt(100000, 1000000).toString();
   const codeHash = await bcrypt.hash(otp, 12);
-  const expiresAt = new Date(Date.now() + 60_000);
+  const expiresAt = new Date(Date.now() + 5 * 60_000); // 5 minutes (NIST SP 800-63B: max 10 min)
 
   // Invalidate old unused tokens
   await query(
@@ -329,12 +332,53 @@ const issueEmailVerificationOtp = async (userId: string): Promise<string> => {
   return otp;
 };
 
+// ── SIGNUP: INPUT VALIDATION ───────────────────────────
+// The signup form validates in the browser, and auth.controller.ts defines
+// express-validator rules — but those are bound to the REST /register route,
+// which the frontend does not use. Signup reaches the server through GraphQL,
+// so without these checks a request sent straight to /graphql (bypassing the
+// form entirely) could create an account with any password at all.
+//
+// These rules deliberately mirror the browser rules in
+// frontend/src/app/(auth)/signup/page.tsx, so a normal user sees no change.
+// The length caps also match the users table (name VARCHAR(100),
+// email VARCHAR(255)), turning what would be a raw database error into a
+// clear message.
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// bcrypt only considers the first 72 BYTES of a password and silently ignores
+// everything after that, so a longer password is not fully protected and the
+// user is never told. Reject it rather than accept it misleadingly.
+const MAX_PASSWORD_BYTES = 72;
+
+const validateSignupInput = (name: string, email: string, password: string): void => {
+  const trimmedName = (name ?? '').trim();
+  if (trimmedName.length < 2)   throw new AppError('Name must be at least 2 characters', 400);
+  if (trimmedName.length > 100) throw new AppError('Name must be 100 characters or fewer', 400);
+
+  const trimmedEmail = (email ?? '').trim();
+  if (!EMAIL_PATTERN.test(trimmedEmail)) throw new AppError('Enter a valid email address', 400);
+  if (trimmedEmail.length > 255)         throw new AppError('Email must be 255 characters or fewer', 400);
+
+  const pw = password ?? '';
+  if (pw.length < 8)             throw new AppError('Password must be at least 8 characters', 400);
+  if (!/[A-Z]/.test(pw))         throw new AppError('Password must contain an uppercase letter', 400);
+  if (!/[0-9]/.test(pw))         throw new AppError('Password must contain a number', 400);
+  if (Buffer.byteLength(pw, 'utf8') > MAX_PASSWORD_BYTES) {
+    throw new AppError(`Password must be ${MAX_PASSWORD_BYTES} characters or fewer`, 400);
+  }
+};
+
 // ── SIGNUP: INITIATE ───────────────────────────────────
 export const signupUser = async (
   name: string,
   email: string,
   password: string
 ): Promise<{ email: string; message: string }> => {
+  // Validate before touching the database: cheaper, and it keeps invalid input
+  // from reaching the users table at all.
+  validateSignupInput(name, email, password);
+
   const existing = await query<User>('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
   if (existing.rows[0]) throw new AppError('Email already in use', 409);
 

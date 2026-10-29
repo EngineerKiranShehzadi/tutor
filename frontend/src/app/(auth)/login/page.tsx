@@ -38,7 +38,7 @@ function LoginPageInner() {
 
   const [verifyEmail, setVerifyEmail] = useState('');
   const [verifyExpires, setVerifyExpires] = useState(0);
-  const [digits, setDigits] = useState<string[]>(['', '', '', '', '']);
+  const [digits, setDigits] = useState<string[]>(['', '', '', '', '', '']);
   const [otpError, setOtpError] = useState('');
   const [resendError, setResendError] = useState('');
   const [countdown, setCountdown] = useState(0);
@@ -87,7 +87,7 @@ function LoginPageInner() {
 
   const handleDigitKeyDown = (i: number, e: React.KeyboardEvent<HTMLInputElement>) => {
     const el = e.target as HTMLInputElement;
-    if (digits[i] && e.key !== 'Backspace' && i < 4) {
+    if (digits[i] && e.key !== 'Backspace' && i < 5) {
       const nextInput = el.parentElement?.parentElement?.children[i + 1]?.querySelector('input') as HTMLInputElement;
       nextInput?.focus();
     }
@@ -109,7 +109,7 @@ function LoginPageInner() {
         setVerifyEmail(result.email);
         setVerifyExpires(result.verificationExpiresInSeconds);
         startCountdown(result.verificationExpiresInSeconds);
-        setDigits(['', '', '', '', '']);
+        setDigits(['', '', '', '', '', '']);
         setOtpError('');
         setResendError('');
         setMode('verify');
@@ -124,7 +124,7 @@ function LoginPageInner() {
     e.preventDefault();
     setOtpError('');
     const code = digits.join('');
-    if (code.length !== 5) { setOtpError('Enter the complete 5-digit code'); return; }
+    if (code.length !== 6) { setOtpError('Enter the complete 6-digit code'); return; }
     try {
       const result = await verifyOtp(verifyEmail, code);
       localStorage.setItem('accessToken', result.accessToken);
@@ -133,7 +133,7 @@ function LoginPageInner() {
     } catch (err: unknown) {
       const ae = err as any;
       setOtpError(ae?.response?.data?.message || ae?.message || 'Verification failed. Please try again.');
-      setDigits(['', '', '', '', '']);
+      setDigits(['', '', '', '', '', '']);
     }
   };
 
@@ -142,7 +142,7 @@ function LoginPageInner() {
     setOtpError('');
     try {
       const expiresInSeconds = await resendOtp(verifyEmail);
-      setDigits(['', '', '', '', '']);
+      setDigits(['', '', '', '', '', '']);
       startCountdown(expiresInSeconds);
     } catch (err: unknown) {
       setResendError(getResendError(err));
@@ -156,7 +156,7 @@ function LoginPageInner() {
       <AuthCard>
         <button
           type="button"
-          onClick={() => { setMode('login'); setDigits(['', '', '', '', '']); }}
+          onClick={() => { setMode('login'); setDigits(['', '', '', '', '', '']); }}
           className="flex items-center gap-1.5 text-[13px] text-slate-500 hover:text-slate-800 transition-colors mb-6"
         >
           <i className="fas fa-arrow-left text-[11px]" /> Back to Sign In
@@ -174,7 +174,7 @@ function LoginPageInner() {
           onResend={handleResend}
           isVerifying={verifyLoading}
           isResending={resendLoading}
-          message="A 5-digit code has been sent to "
+          message="A 6-digit code has been sent to "
         />
       </AuthCard>
     );

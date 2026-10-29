@@ -34,8 +34,8 @@ export function ForgotPasswordFlow({ onBack }: Props) {
   const [resetError, setResetError]   = useState('');
 
   // OTP: 5 individual digit inputs
-  const [digits, setDigits] = useState<string[]>(['', '', '', '', '']);
-  const inputRefs = useRef<(HTMLInputElement | null)[]>([null, null, null, null, null]);
+  const [digits, setDigits] = useState<string[]>(['', '', '', '', '', '']);
+  const inputRefs = useRef<(HTMLInputElement | null)[]>([null, null, null, null, null, null]);
 
   // Resend countdown
   const [countdown, setCountdown] = useState(0);
@@ -77,7 +77,7 @@ export function ForgotPasswordFlow({ onBack }: Props) {
     const next = [...digits];
     next[i] = value.slice(-1);
     setDigits(next);
-    if (value && i < 4) inputRefs.current[i + 1]?.focus();
+    if (value && i < 5) inputRefs.current[i + 1]?.focus();
   };
 
   const handleDigitKeyDown = (i: number, e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -105,13 +105,13 @@ export function ForgotPasswordFlow({ onBack }: Props) {
     e.preventDefault();
     setOtpError('');
     const code = digits.join('');
-    if (code.length !== 5) { setOtpError('Enter the complete 5-digit OTP'); return; }
+    if (code.length !== 6) { setOtpError('Enter the complete 6-digit OTP'); return; }
     try {
       await verifyOtp(email, code);
       setStep('reset');
     } catch (err) {
       setOtpError(extractMessage(err));
-      setDigits(['', '', '', '', '']);
+      setDigits(['', '', '', '', '', '']);
       inputRefs.current[0]?.focus();
     }
   };
@@ -121,7 +121,7 @@ export function ForgotPasswordFlow({ onBack }: Props) {
     setOtpError('');
     try {
       await resendOtp(email);
-      setDigits(['', '', '', '', '']);
+      setDigits(['', '', '', '', '', '']);
       startCountdown();
       setTimeout(() => inputRefs.current[0]?.focus(), 50);
     } catch (err) {
@@ -159,7 +159,7 @@ export function ForgotPasswordFlow({ onBack }: Props) {
         </button>
         <h2 className="text-xl font-bold mb-1 text-[var(--text)]">Forgot Password</h2>
         <p className="text-sm text-[var(--muted)] mb-6">
-          Enter your email and we'll send a 5-digit OTP.
+          Enter your email and we'll send a 6-digit OTP.
         </p>
         <form onSubmit={handleEmailSubmit} className="flex flex-col gap-4">
           <Input
@@ -191,7 +191,7 @@ export function ForgotPasswordFlow({ onBack }: Props) {
         </button>
         <h2 className="text-xl font-bold mb-1 text-[var(--text)]">Enter OTP</h2>
         <p className="text-sm text-[var(--muted)] mb-6">
-          We sent a 5-digit code to <strong>{email}</strong>. Valid for 60 seconds.
+          We sent a 6-digit code to <strong>{email}</strong>. Valid for 5 minutes.
         </p>
         <form onSubmit={handleOtpSubmit} className="flex flex-col gap-5">
           {/* 5 digit inputs */}

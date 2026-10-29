@@ -59,9 +59,19 @@ const COOKIE_OPTS = {
 };
 
 // ── Validators ────────────────────────────────────────
+// normalizeEmail() is deliberately NOT used on any of these.
+// Its defaults strip dots and "+tags" out of Gmail addresses, so
+// "ali.khan@gmail.com" became "alikhan@gmail.com" before the lookup — while
+// signup (which goes through GraphQL, not these validators) stored the address
+// exactly as typed. The two disagreed, and any account with a dot in its Gmail
+// address could never be found at login.
+// RFC 5321 2.4: the local part is to be interpreted only by the destination
+// host, so an application should not rewrite it. Addresses are stored and
+// looked up as typed; the service layer lowercases them, which is safe because
+// providers treat addresses case-insensitively.
 export const registerValidators = [
   body('name').trim().notEmpty().withMessage('Name is required').isLength({ max: 100 }),
-  body('email').isEmail().withMessage('Valid email required').normalizeEmail(),
+  body('email').isEmail().withMessage('Valid email required'),
   body('password')
     .isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
     .matches(/[A-Z]/).withMessage('Password must contain an uppercase letter')
@@ -69,12 +79,12 @@ export const registerValidators = [
 ];
 
 export const loginValidators = [
-  body('email').isEmail().withMessage('Valid email required').normalizeEmail(),
+  body('email').isEmail().withMessage('Valid email required'),
   body('password').notEmpty().withMessage('Password is required'),
 ];
 
 export const resendLoginOtpValidators = [
-  body('email').isEmail().withMessage('Valid email required').normalizeEmail(),
+  body('email').isEmail().withMessage('Valid email required'),
 ];
 
 // ── Controllers ───────────────────────────────────────

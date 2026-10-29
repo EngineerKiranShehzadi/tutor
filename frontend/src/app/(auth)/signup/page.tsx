@@ -42,7 +42,7 @@ const extractMessage = (err: unknown): string => {
 
 export default function SignupPage() {
   const router = useRouter();
-  const { user, isLoading } = useAuth();
+  const { user, isLoading, setUser } = useAuth();
   const [step, setStep] = useState<Step>('form');
   const [pendingEmail, setPendingEmail] = useState('');
   const [signupMessage, setSignupMessage] = useState('');
@@ -55,10 +55,10 @@ export default function SignupPage() {
     }
   }, [user, isLoading, router]);
 
-  const [digits, setDigits] = useState<string[]>(['', '', '', '', '']);
+  const [digits, setDigits] = useState<string[]>(['', '', '', '', '', '']);
   const [otpError, setOtpError] = useState('');
   const [resendError, setResendError] = useState('');
-  const inputRefs = useRef<(HTMLInputElement | null)[]>([null, null, null, null, null]);
+  const inputRefs = useRef<(HTMLInputElement | null)[]>([null, null, null, null, null, null]);
 
   const [countdown, setCountdown] = useState(0);
   const [canResend, setCanResend] = useState(false);
@@ -95,7 +95,7 @@ export default function SignupPage() {
     const next = [...digits];
     next[i] = value.slice(-1);
     setDigits(next);
-    if (value && i < 4) inputRefs.current[i + 1]?.focus();
+    if (value && i < 5) inputRefs.current[i + 1]?.focus();
   };
 
   const handleDigitKeyDown = (i: number, e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -119,14 +119,20 @@ export default function SignupPage() {
     e.preventDefault();
     setOtpError('');
     const code = digits.join('');
-    if (code.length !== 5) { setOtpError('Enter the complete 5-digit code'); return; }
+    if (code.length !== 6) { setOtpError('Enter the complete 6-digit code'); return; }
     try {
       const result = await verifyOtp(pendingEmail, code);
       localStorage.setItem('accessToken', result.accessToken);
+      // Update the shared auth state too, not just localStorage. AuthProvider
+      // calls getMe only on its first mount, so without this a client-side push
+      // to /courses reaches the dashboard guard with `user` still null and gets
+      // bounced to /login — forcing a brand-new student to sign in again
+      // immediately after verifying. The login page already does this.
+      setUser(result.user);
       router.push('/courses');
     } catch (err) {
       setOtpError(extractMessage(err));
-      setDigits(['', '', '', '', '']);
+      setDigits(['', '', '', '', '', '']);
       inputRefs.current[0]?.focus();
     }
   };
@@ -136,7 +142,7 @@ export default function SignupPage() {
     setOtpError('');
     try {
       await resendOtp(pendingEmail);
-      setDigits(['', '', '', '', '']);
+      setDigits(['', '', '', '', '', '']);
       startCountdown();
       setTimeout(() => inputRefs.current[0]?.focus(), 50);
     } catch (err) {

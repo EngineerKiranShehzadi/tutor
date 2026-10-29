@@ -21,13 +21,18 @@ export interface ChunkPiece {
   chunkText: string;
 }
 
+// Only content that carries meaning about the lecture goes into the text that
+// gets embedded. Bookkeeping fields — which LLM wrote the row, and where in the
+// transcript/slides it came from — are still stored on the row and shown in the
+// UI, but are deliberately kept OUT of the vector: they are identical or
+// near-identical across rows, so they add no distinguishing signal and only
+// dilute the part that matters.
 function buildChunkText(row: RawRow): string {
   return [
-    `Topic: ${row.topic ?? ''}`,
+    row.topic ? `Topic: ${row.topic}` : null,
     `Question: ${row.question}`,
     `Answer: ${row.answer}`,
     row.keywords ? `Keywords: ${row.keywords}` : null,
-    row.start_time ? `Timestamp: ${row.start_time} - ${row.end_time ?? ''}` : null,
   ]
     .filter(Boolean)
     .join('\n')
@@ -98,11 +103,10 @@ export async function buildChunkPieces(row: RawRow): Promise<ChunkPiece[]> {
   return parts.map((part, chunkIndex) => ({
     chunkIndex,
     chunkText: [
-      `Topic: ${row.topic ?? ''}`,
+      row.topic ? `Topic: ${row.topic}` : null,
       `Question: ${row.question}`,
       `Answer: ${part}`,
       row.keywords ? `Keywords: ${row.keywords}` : null,
-      row.start_time ? `Timestamp: ${row.start_time} - ${row.end_time ?? ''}` : null,
     ]
       .filter(Boolean)
       .join('\n')
@@ -114,13 +118,18 @@ function normaliseKey(k: string): string {
   return k.toLowerCase().replace(/\s+/g, '_').trim();
 }
 
-// Accepts both standard column names and the dataset.xlsx aliases:
-//   Model Name → topic   |   Questions → question   |   Answers → answer
+// Accepts both the standard column names and the aliases used by the merged
+// FYP datasets:
+//   Questions        → question
+//   Answers          → answer
+//   Model Name       → llm_name   (which AI generated the row — NOT a topic)
+//   Source Reference → start_time (e.g. "Transcript — 00:14", "Title slide")
 function normaliseRow(r: Record<string, unknown>): RawRow {
   const n = Object.fromEntries(Object.entries(r).map(([k, v]) => [normaliseKey(k), v]));
-  if (!('topic'    in n) && 'model_name' in n) n['topic']    = n['model_name'];
-  if (!('question' in n) && 'questions' in n) n['question'] = n['questions'];
-  if (!('answer'   in n) && 'answers'   in n) n['answer']   = n['answers'];
+  if (!('question'   in n) && 'questions'        in n) n['question']   = n['questions'];
+  if (!('answer'     in n) && 'answers'          in n) n['answer']     = n['answers'];
+  if (!('llm_name'   in n) && 'model_name'       in n) n['llm_name']   = n['model_name'];
+  if (!('start_time' in n) && 'source_reference' in n) n['start_time'] = n['source_reference'];
   return n as RawRow;
 }
 
@@ -137,7 +146,8 @@ export function parseExcel(buffer: Buffer): RawRow[] {
   // Validate required columns exist in first row
   const first = rows[0];
   const missing: string[] = [];
-  if (!('topic'    in first)) missing.push('topic (or Model Name)');
+  // `topic` is intentionally NOT required: the merged datasets have no topic
+  // column, and the LLM name previously mapped into it was noise, not a topic.
   if (!('question' in first)) missing.push('question (or Questions)');
   if (!('answer'   in first)) missing.push('answer (or Answers)');
   if (missing.length > 0) {
