@@ -128,6 +128,10 @@ async function startScratch(): Promise<Scratch | null> {
     const dbSql = path.join(__dirname, '..', 'db');
     await client.query(fs.readFileSync(path.join(dbSql, 'schema.sql'), 'utf8'));
     await client.query(fs.readFileSync(path.join(dbSql, 'migrate.sql'), 'utf8'));
+    // Numbered migrations the app relies on (answer memory, agent profiles, dataset versions).
+    for (const f of fs.readdirSync(path.join(dbSql, 'migrations')).filter(n => /^\d+_.*\.sql$/.test(n)).sort()) {
+      await client.query(fs.readFileSync(path.join(dbSql, 'migrations', f), 'utf8'));
+    }
     return { client, stop: () => { client.end().catch(() => {}); stop(); } };
   } catch {
     stop();
@@ -163,11 +167,23 @@ async function withScratch(fn: (s: Scratch, ids: Record<string, number>) => Prom
           [ids[key], `Agent-${key}`, profile === 'active']
         );
       }
-      for (let i = 0; i < chunks; i++) {
-        await scratch.client.query(
-          `INSERT INTO lecture_qna_chunks (lecture_id, question, answer, chunk_text) VALUES ($1, $2, 'a', 'c')`,
-          [ids[key], `q${i}`]
-        );
+      if (chunks > 0) {
+        // Chunk counts are of the lecture's ACTIVE dataset version, so give the
+        // chunk-bearing fixture lecture a published version holding its chunks.
+        const { rows: v } = await scratch.client.query(
+          `INSERT INTO dataset_versions (lecture_id, version_no, status, embedding_model_version, chunking_config_version)
+           VALUES ($1, 1, 'ACTIVE', 'test', 'test') RETURNING id`, [ids[key]]);
+        for (let i = 0; i < chunks; i++) {
+          const { rows: c } = await scratch.client.query(
+            `INSERT INTO lecture_qna_chunks (lecture_id, question, answer, chunk_text, qa_id) VALUES ($1, $2, 'a', 'c', $3) RETURNING id`,
+            [ids[key], `q${i}`, `qa_${key}_${i}`]
+          );
+          await scratch.client.query(
+            `INSERT INTO dataset_version_chunks (version_id, chunk_id, qa_id, chunk_index) VALUES ($1, $2, $3, 0)`,
+            [v[0].id, c[0].id, `qa_${key}_${i}`]
+          );
+        }
+        await scratch.client.query('UPDATE lectures SET active_version_id = $1 WHERE id = $2', [v[0].id, ids[key]]);
       }
     }
     await scratch.client.query(`INSERT INTO users (name, email, password_hash, role) VALUES ('S', 's@example.com', 'x', 'STUDENT')`);

@@ -81,6 +81,8 @@ async function inWorld<T>(world: World, fn: () => Promise<T>): Promise<T> {
     const rec = (kind: string) => world.stmts.push({ kind, text: t, params });
     const ok = (rows: unknown[] = [], rowCount = rows.length) => ({ rows, rowCount });
 
+    // The request pins itself to the lecture's active dataset version once, up front.
+    if (t.includes('SELECT active_version_id FROM lectures')) { rec('active-version'); return ok([{ active_version_id: 1 }]); }
     if (/^SELECT \* FROM lectures WHERE id = \$1/.test(t)) { rec('lecture-load'); return ok(world.lectures.filter(l => l.id === params[0])); }
     if (/FROM lecture_agent_profiles WHERE lecture_id = \$1/.test(t)) { rec('profile-load'); return ok(world.profiles.filter(p => p.lecture_id === params[0])); }
     if (/^SELECT 1 AS ok FROM chat_sessions WHERE id = \$1 AND student_id = \$2 AND lecture_id = \$3$/.test(t)) {
@@ -142,7 +144,7 @@ function makeDeps(route: 'FACT_QUESTION' | 'GREETING' | 'LECTURE_SUMMARY' | 'CON
       finalAnswer: p.draftAnswer, verified: true, decision: 'VERIFIED', reason: 'VERIFIED', revisionAttempted: false, revisionSucceeded: false,
       unsupportedClaimCount: 0, missingAspectCount: 0, expectedFormat: 'NATURAL_TEXT', formatValidationRequired: false, formatValid: true,
       formatRepairAttempted: false, formatRepairSucceeded: false, piiDetected: false, piiCategories: [] }; },
-    lookupAnswerMemory: async () => { spies.memLookup++; return { hit: null, embedding: [0.1, 0.2], lectureContentHash: 'h', lookupFailed: false }; },
+    lookupAnswerMemory: async () => { spies.memLookup++; return { hit: null, embedding: [0.1, 0.2], datasetVersionId: 1, lookupFailed: false }; },
     writeAnswerMemory: async () => { spies.memWrite++; },
     generateGreeting: async () => { spies.greeting++; return 'hello'; },
     getAllLectureChunks: async l => { spies.summaryChunks++; return [chunk(1, l)]; },

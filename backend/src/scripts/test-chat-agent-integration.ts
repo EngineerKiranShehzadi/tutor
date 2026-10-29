@@ -47,7 +47,7 @@ const STUDENT = '1e8039ae-e9b0-448f-b563-10351fab051c';
 // so each lecture gets its own session id in the fake world.
 const sessionOf = (lectureId: number): number => 1000 + lectureId;
 const QUESTION = 'Who is the instructor of this course?';
-const HASH = 'fake-content-hash';
+const VERSION_ID = 7;
 const EMB = [0.1, 0.2, 0.3];
 
 const profileRow = (lectureId: number, name: string, videoId: string, isActive = true): LectureAgentProfile => ({
@@ -58,7 +58,7 @@ const profileRow = (lectureId: number, name: string, videoId: string, isActive =
 const lectureRow = (id: number, title: string, status = 'READY') => ({ id, title, status, youtube_video_id: null });
 
 interface MemRow {
-  id: number; student_id: string; lecture_id: number; normalized_query: string; lecture_content_hash: string;
+  id: number; student_id: string; lecture_id: number; normalized_query: string; dataset_version_id: number;
   embedding_model_version: string; answer_prompt_version: string; answer: string; source_chunk_ids: number[];
   cache_eligible: boolean; hit_count: number;
 }
@@ -140,12 +140,13 @@ async function inWorld<T>(world: World, fn: () => Promise<T>): Promise<T> {
     if (/^UPDATE chat_sessions/.test(t)) { rec('session-touch'); return ok([], 1); }
 
     // answer memory (real service)
-    if (t.includes('string_agg(id::text')) { rec('memory-content-hash'); return ok([{ hash: HASH }]); }
+    if (t.includes('SELECT active_version_id FROM lectures')) { rec('memory-active-version'); return ok([{ active_version_id: VERSION_ID }]); }
+    if (t.includes('FROM dataset_version_chunks WHERE version_id = $1 AND chunk_id = ANY')) { rec('memory-version-guard'); return ok([{ n: String(new Set(params[1] as number[]).size) }]); }
     if (t.includes('FROM rag_answer_memory m') && t.includes('m.normalized_query = $3')) {
       rec('memory-exact-lookup');
-      const [s, l, nq, h, em, v] = params as [string, number, string, string, string, string];
+      const [s, l, nq, h, em, v] = params as [string, number, string, number, string, string];
       const hit = world.memory.filter(r => r.student_id === s && r.lecture_id === l && r.normalized_query === nq
-        && r.lecture_content_hash === h && r.embedding_model_version === em && r.answer_prompt_version === v && r.cache_eligible);
+        && r.dataset_version_id === h && r.embedding_model_version === em && r.answer_prompt_version === v && r.cache_eligible);
       return ok(hit.slice(0, 1).map(r => ({ id: r.id, answer: r.answer, source_chunk_ids: r.source_chunk_ids })), hit.length);
     }
     if (t.includes('SELECT id FROM rag_answer_memory')) { rec('memory-stale-diagnostic'); return ok(); }
@@ -155,11 +156,11 @@ async function inWorld<T>(world: World, fn: () => Promise<T>): Promise<T> {
     }
     if (/^INSERT INTO rag_answer_memory/.test(t)) {
       rec('memory-upsert');
-      const [s, l, , , , nq, , answer, chunkIds, h, em, v] = params as [string, number, number, string, string, string, string, string, number[], string, string, string];
+      const [s, l, , , , nq, , answer, chunkIds, h, em, v] = params as [string, number, number, string, string, string, string, string, number[], number, string, string];
       const existing = world.memory.find(r => r.student_id === s && r.lecture_id === l && r.normalized_query === nq
-        && r.lecture_content_hash === h && r.embedding_model_version === em && r.answer_prompt_version === v);
+        && r.dataset_version_id === h && r.embedding_model_version === em && r.answer_prompt_version === v);
       if (existing) { existing.answer = answer; existing.source_chunk_ids = chunkIds; }
-      else world.memory.push({ id: nextId++, student_id: s, lecture_id: l, normalized_query: nq, lecture_content_hash: h,
+      else world.memory.push({ id: nextId++, student_id: s, lecture_id: l, normalized_query: nq, dataset_version_id: h,
         embedding_model_version: em, answer_prompt_version: v, answer, source_chunk_ids: chunkIds, cache_eligible: true, hit_count: 0 });
       return ok([], 1);
     }
@@ -359,7 +360,7 @@ cases.push({
   label: 'H. An old generic ("v1") cached answer is not returned to an agent request; it stays untouched; the agent answer is then cached and reused',
   run: async () => {
     const generic: MemRow = { id: 79, student_id: STUDENT, lecture_id: 4, normalized_query: 'who is the instructor of this course',
-      lecture_content_hash: HASH, embedding_model_version: EMBEDDING_MODEL_VERSION, answer_prompt_version: 'v1',
+      dataset_version_id: VERSION_ID, embedding_model_version: EMBEDDING_MODEL_VERSION, answer_prompt_version: 'v1',
       answer: 'GENERIC CACHED ANSWER', source_chunk_ids: [1], cache_eligible: true, hit_count: 0 };
     const snapshot = JSON.stringify(generic);
     const w = newWorld({ memory: [generic] });

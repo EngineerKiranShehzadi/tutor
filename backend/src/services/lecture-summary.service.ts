@@ -20,13 +20,15 @@ export const LECTURE_SUMMARY_UNAVAILABLE_MESSAGE =
 // chunk_text, so without this filter a split row's full Q&A would appear
 // in the summary input once per piece — inflating the summary's input
 // size and repeating the same content back to Gemini for no benefit.
-export const getAllLectureChunks = async (lectureId: number): Promise<QnaChunk[]> => {
+export const getAllLectureChunks = async (lectureId: number, datasetVersionId?: number): Promise<QnaChunk[]> => {
   const { rows } = await query<QnaChunk>(
     `SELECT id, lecture_id, topic, question, answer, chunk_text, start_time, end_time, keywords
      FROM lecture_qna_chunks
      WHERE lecture_id = $1 AND chunk_index = 0
+       AND id IN (SELECT chunk_id FROM dataset_version_chunks
+                  WHERE version_id = COALESCE($2::int, (SELECT active_version_id FROM lectures WHERE id = $1)))
      ORDER BY id ASC`,
-    [lectureId]
+    [lectureId, datasetVersionId ?? null]
   );
   return rows;
 };

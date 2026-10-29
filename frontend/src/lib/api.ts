@@ -81,14 +81,55 @@ export const authApi = {
                       api.patch('/auth/me', data),
 };
 
+// ── Dataset versions (see backend dataset-version.service.ts) ─────────
+export type DatasetMode = 'MERGE' | 'REPLACE';
+
+export interface DatasetPreview {
+  mode: DatasetMode;
+  rowsInFile: number;
+  added: number;
+  updated: number;
+  unchanged: number;
+  carriedOver: number;   // MERGE: existing Q&As missing from the file, kept as they are
+  removed: number;       // REPLACE: existing Q&As missing from the file, dropped
+  removedSamples: { qaId: string; question: string }[];
+  chunksToEmbed: number;
+  chunksCopied: number;
+  chunksReused: number;
+}
+
+export interface DatasetVersionInfo {
+  id: number;
+  version_no: number;
+  status: 'BUILDING' | 'READY_TO_ACTIVATE' | 'ACTIVE' | 'SUPERSEDED' | 'FAILED' | 'ARCHIVED';
+  mode: DatasetMode;
+  source_filename: string | null;
+  stats: Partial<DatasetPreview>;
+  attempts: number;
+  last_error: string | null;
+  created_at: string;
+  activated_at: string | null;
+  is_active: boolean;
+  chunk_count: string;
+  pending_count: string;
+  to_embed: number;
+}
+
 export const datasetApi = {
-  upload: (lectureId: number, file: File) => {
+  // dryRun=true plans the update and returns what WOULD change without writing anything.
+  upload: (lectureId: number, file: File, opts: { mode?: DatasetMode; dryRun?: boolean; confirmRemovals?: number } = {}) => {
     const form = new FormData();
     form.append('file', file);
+    form.append('mode', opts.mode ?? 'MERGE');
+    if (opts.dryRun) form.append('dryRun', 'true');
+    if (opts.confirmRemovals !== undefined) form.append('confirmRemovals', String(opts.confirmRemovals));
     return api.post(`/datasets/upload/${lectureId}`, form, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },
+  versions: (lectureId: number) => api.get(`/datasets/versions/${lectureId}`),
+  rollback: (lectureId: number) => api.post(`/datasets/rollback/${lectureId}`),
+  exportXlsx: (lectureId: number) => api.get(`/datasets/export/${lectureId}`, { responseType: 'blob' }),
 };
 
 // Observability API calls live in ./observability-api.ts (kept separate —

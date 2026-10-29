@@ -76,6 +76,9 @@ export interface Lecture {
   dataset_s3_bucket: string | null;
   dataset_s3_key: string | null;
   dataset_original_filename: string | null;
+  // The dataset version chat reads from (dataset_versions.id); null until a
+  // first dataset has been published.
+  active_version_id?: number | null;
   created_at: Date;
   updated_at: Date;
 }

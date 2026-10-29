@@ -1,0 +1,683 @@
+/**
+ * End-to-end scenarios for the incremental / resumable / safely-published
+ * dataset pipeline (dataset-version.service.ts) against a REAL Postgres+pgvector.
+ *
+ * Embeddings are produced by a deterministic fake embedder (so every call can be
+ * counted and failures injected); everything else — SQL, transactions,
+ * membership, activation, rollback, retention, answer-memory binding, vector
+ * search — is the real code path.
+ *
+ * SAFETY: refuses to run unless DATABASE_URL is a local database whose name
+ * contains "test"/"pipe". It never touches Neon.
+ *
+ * Usage:
+ *   DATABASE_URL=postgresql://postgres:test@localhost:55432/askai_pipe \
+ *     ts-node --transpile-only src/scripts/test-dataset-pipeline.ts [--lecture-copy <id>]
+ */
+import { createHash } from 'crypto';
+import { spawn } from 'child_process';
+import * as XLSX from 'xlsx';
+import { join } from 'path';
+
+const dbUrl = process.env.DATABASE_URL ?? '';
+if (!/(localhost|127\.0\.0\.1)/.test(dbUrl) || !/(test|pipe)/i.test(dbUrl.split('/').pop() ?? '')) {
+  console.error('Refusing to run: DATABASE_URL must point at a LOCAL database whose name contains "test" or "pipe".');
+  process.exit(2);
+}
+
+import pool, { query } from '../config/database';
+import { EMBEDDING_MODEL_VERSION, EmbeddingUnavailableError } from '../services/embedding.service';
+import { buildChunkPieces } from '../services/chunk.service';
+import { matchRows, FileRow, ActiveQa, QaFields } from '../services/dataset-plan';
+import {
+  prepareDatasetVersion, finishDatasetVersion, resumePendingVersions, rollbackDataset, exportActiveDataset,
+  listDatasetVersions, RemovalConfirmationRequired,
+} from '../services/dataset-version.service';
+import { searchChunks } from '../services/vector-search.service';
+import { lookupAnswerMemory, writeAnswerMemory } from '../services/rag-answer-memory.service';
+
+// ── helpers ─────────────────────────────────────────────────────────────
+
+const DIMS = 1024;
+const vecFor = (text: string): number[] => {
+  let seed = createHash('sha256').update(text).digest().readUInt32LE(0);
+  const rnd = () => { seed |= 0; seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const v = Array.from({ length: DIMS }, () => rnd() - 0.5);
+  const n = Math.sqrt(v.reduce((a, x) => a + x * x, 0));
+  return v.map(x => x / n);
+};
+
+class CountingEmbedder {
+  calls: string[] = [];
+  failOn: ((text: string) => boolean) | null = null;
+  zeroVectors = false;
+  gate: Promise<void> | null = null;
+  delayMs = 0;
+  embed = async (text: string): Promise<number[]> => {
+    if (this.gate) await this.gate;
+    if (this.delayMs) await new Promise(r => setTimeout(r, this.delayMs));
+    this.calls.push(text);
+    if (this.failOn?.(text)) throw new Error('injected embedding failure');
+    return this.zeroVectors ? new Array(DIMS).fill(0) : vecFor(text);
+  };
+  reset() { this.calls = []; this.failOn = null; this.zeroVectors = false; this.gate = null; this.delayMs = 0; }
+}
+
+interface Row { qa_id?: string; question: string; answer: string; keywords?: string; topic?: string }
+const makeXlsx = (rows: Row[]): Buffer => {
+  const header = ['qa_id', 'topic', 'question', 'answer', 'keywords'].filter(h => rows.some(r => (r as unknown as Record<string, unknown>)[h] !== undefined));
+  const ws = XLSX.utils.json_to_sheet(rows, { header });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'S');
+  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+};
+
+const LONG_ANSWER = Array.from({ length: 140 }, (_, i) => `Sentence ${i} of the long answer explains one more detail.`).join(' ');
+const baseRows = (n = 12): Row[] =>
+  Array.from({ length: n }, (_, i) => ({
+    question: `What does test concept number ${i + 1} mean?`,
+    answer: i === 5 ? LONG_ANSWER : `Concept ${i + 1} means something specific and unique: ${'detail '.repeat(10)}${i + 1}.`,
+    keywords: `kw${i + 1}`,
+  }));
+
+const FAST = { retryDelayMs: 20, chunkBackoffMs: 1, maxAttempts: 3 };
+let embedder = new CountingEmbedder();
+const fin = (versionId: number, extra = {}) => finishDatasetVersion(versionId, { embed: embedder.embed, ...FAST, ...extra });
+
+const countOne = async (sql: string, params: unknown[] = []): Promise<number> =>
+  Number((await query<{ n: string }>(sql, params)).rows[0].n);
+
+const lectureState = async (lectureId: number) =>
+  (await query<{ status: string; active_version_id: number | null }>('SELECT status, active_version_id FROM lectures WHERE id = $1', [lectureId])).rows[0];
+
+const versionRows = async (lectureId: number) =>
+  (await query<{ id: number; version_no: number; status: string; last_error: string | null }>(
+    'SELECT id, version_no, status, last_error FROM dataset_versions WHERE lecture_id = $1 ORDER BY version_no', [lectureId])).rows;
+
+const activeChunks = async (lectureId: number) =>
+  (await query<{ id: number; qa_id: string; chunk_index: number; question: string; answer: string; has_vec: boolean }>(
+    `SELECT c.id, d.qa_id, d.chunk_index, c.question, c.answer, (c.local_embedding IS NOT NULL) AS has_vec
+     FROM lectures l JOIN dataset_version_chunks d ON d.version_id = l.active_version_id
+     JOIN lecture_qna_chunks c ON c.id = d.chunk_id
+     WHERE l.id = $1 ORDER BY c.id`, [lectureId])).rows;
+
+// What chat can actually see: probe the REAL vector search (active version only)
+// with the text of every chunk row that exists for the lecture — in any version —
+// and collect what comes back.
+const visibleAnswers = async (lectureId: number): Promise<Set<string>> => {
+  const texts = (await query<{ chunk_text: string }>('SELECT chunk_text FROM lecture_qna_chunks WHERE lecture_id = $1', [lectureId])).rows;
+  const seen = new Set<string>();
+  for (const t of texts) for (const hit of await searchChunks(vecFor(t.chunk_text), lectureId, 3)) seen.add(hit.answer);
+  return seen;
+};
+
+const newLecture = async (tag: string): Promise<number> =>
+  (await query<{ id: number }>(
+    `INSERT INTO lectures (title, youtube_url, youtube_video_id) VALUES ($1, 'https://youtu.be/xxxxxxxxxxx', 'xxxxxxxxxxx') RETURNING id`,
+    [`[pipeline-test] ${tag}`])).rows[0].id;
+
+const results: { name: string; pass: boolean; detail: string }[] = [];
+const check = (name: string, pass: boolean, detail: string) => {
+  results.push({ name, pass, detail });
+  console.log(`${pass ? 'PASS' : 'FAIL'}  ${name}\n        ${detail}`);
+};
+
+const expectReject = async (p: Promise<unknown>): Promise<{ rejected: boolean; message: string; err?: unknown }> =>
+  p.then(() => ({ rejected: false, message: '' }), e => ({ rejected: true, message: (e as Error).message, err: e }));
+
+const TSNODE = join(__dirname, '../../node_modules/.bin/ts-node');
+
+// ── worker mode (used by the restart-resume scenario) ───────────────────
+
+const workerMain = async () => {
+  const mode = process.argv[3];
+  const delay = Number(process.argv[4] ?? 0);
+  const emb = new CountingEmbedder();
+  emb.delayMs = delay;
+  if (mode === 'build') {
+    const lectureId = Number(process.argv[5]);
+    const file = Buffer.from(process.argv[6], 'base64');
+    const prep = await prepareDatasetVersion(lectureId, file, { mode: 'MERGE' });
+    console.log('WORKER prepared ' + JSON.stringify(prep.kind === 'CREATED' ? { versionId: prep.versionId } : { kind: prep.kind }));
+    if (prep.kind === 'CREATED') await finishDatasetVersion(prep.versionId, { embed: emb.embed, ...FAST });
+  } else if (mode === 'resume') {
+    const ids = await resumePendingVersions({ embed: emb.embed, ...FAST });
+    console.log('WORKER resumed ' + JSON.stringify({ versionIds: ids, embedCalls: emb.calls.length, texts: emb.calls }));
+  }
+  await pool.end();
+};
+
+// ── scenarios ───────────────────────────────────────────────────────────
+
+const run = async () => {
+  const lecture = await newLecture('main');
+  const L = lecture;
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 1. First upload of a brand-new lecture
+  // ─────────────────────────────────────────────────────────────────────
+  {
+    embedder.reset();
+    const file = makeXlsx(baseRows());
+    const expectedChunks = (await Promise.all(baseRows().map(r => buildChunkPieces({ question: r.question, answer: r.answer, keywords: r.keywords })))).flat().length;
+    const prep = await prepareDatasetVersion(L, file, { filename: 'v1.xlsx' });
+    const midState = await lectureState(L);
+    const res = prep.kind === 'CREATED' ? await fin(prep.versionId) : null;
+    const st = await lectureState(L);
+    const chunks = await activeChunks(L);
+    check('1. First upload builds, embeds and publishes version 1',
+      prep.kind === 'CREATED' && res?.outcome === 'ACTIVATED' && st.status === 'READY' && st.active_version_id === (prep as { versionId: number }).versionId
+        && chunks.length === expectedChunks && chunks.every(c => c.has_vec) && embedder.calls.length === expectedChunks && midState.status === 'EMBEDDING' && midState.active_version_id === null,
+      `rows=12 chunks(expected)=${expectedChunks} chunks(active)=${chunks.length} embedCalls=${embedder.calls.length} statusDuringBuild=${midState.status} statusAfter=${st.status} outcome=${res?.outcome}`);
+    const longPieces = chunks.filter(c => c.question === baseRows()[5].question).length;
+    check('1b. A long answer is split into several pieces under ONE qa_id',
+      longPieces > 1 && new Set(chunks.filter(c => c.question === baseRows()[5].question).map(c => c.qa_id)).size === 1,
+      `pieces for the long answer=${longPieces}`);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 2. Same file uploaded again
+  // ─────────────────────────────────────────────────────────────────────
+  {
+    embedder.reset();
+    const beforeVersions = (await versionRows(L)).length;
+    const beforeChunks = await countOne('SELECT COUNT(*) n FROM lecture_qna_chunks WHERE lecture_id = $1', [L]);
+    const prep = await prepareDatasetVersion(L, makeXlsx(baseRows()));
+    const afterVersions = (await versionRows(L)).length;
+    const afterChunks = await countOne('SELECT COUNT(*) n FROM lecture_qna_chunks WHERE lecture_id = $1', [L]);
+    check('2. Re-uploading the identical file is a no-op: no new version, no embeddings, no duplicate rows',
+      prep.kind === 'NOOP' && embedder.calls.length === 0 && afterVersions === beforeVersions && afterChunks === beforeChunks && prep.preview.unchanged === 12,
+      `result=${prep.kind} unchanged=${prep.preview.unchanged} embedCalls=${embedder.calls.length} versions ${beforeVersions}→${afterVersions} chunkRows ${beforeChunks}→${afterChunks}`);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 3. Edited Q&A + one new Q&A + rows missing from file (MERGE); old dataset live while building
+  // ─────────────────────────────────────────────────────────────────────
+  let v1Active = (await lectureState(L)).active_version_id!;
+  {
+    embedder.reset();
+    const before = await activeChunks(L);
+    const rows = baseRows().slice(0, 8);                       // 4 existing rows missing from the file
+    rows[1] = { ...rows[1], answer: 'EDITED ANSWER about concept two, now different.' };   // same question → update by exact unique match
+    rows.push({ question: 'What is a brand new concept?', answer: 'A brand new answer.', keywords: 'new' });
+    const prep = await prepareDatasetVersion(L, makeXlsx(rows));
+    if (prep.kind !== 'CREATED') { check('3. merge update', false, `unexpected ${prep.kind}`); return; }
+
+    // while the new version is still building, chat must see only the OLD dataset
+    let release!: () => void;
+    embedder.gate = new Promise<void>(r => { release = r; });
+    const finishing = fin(prep.versionId);
+    await new Promise(r => setTimeout(r, 150));
+    const midActive = (await lectureState(L)).active_version_id;
+    const oldHit = await searchChunks(vecFor(before.find(c => c.question === baseRows()[1].question)!.answer ? (await query<{ chunk_text: string }>('SELECT chunk_text FROM lecture_qna_chunks WHERE id = $1', [before.find(c => c.question === baseRows()[1].question)!.id])).rows[0].chunk_text : ''), L, 3);
+    const visEarly = await visibleAnswers(L);
+    const newTextVisibleEarly = [...visEarly].some(a => a.includes('EDITED ANSWER') || a === 'A brand new answer.');
+    release();
+    const res = await finishing;
+    const after = await activeChunks(L);
+    const qaOfEdited = before.find(c => c.question === baseRows()[1].question)!.qa_id;
+
+    check('3a. While the update is still embedding, the old dataset stays live and unchanged',
+      midActive === v1Active && oldHit.length > 0 && oldHit[0].answer === baseRows()[1].answer && !newTextVisibleEarly,
+      `activeVersionDuringBuild=${midActive} (v1=${v1Active}) topHitAnswerIsOld=${oldHit[0]?.answer === baseRows()[1].answer} newContentVisibleEarly=${newTextVisibleEarly}`);
+    check('3b. Merge: only the edited + new Q&A were embedded; missing rows carried over; edited Q&A keeps its qa_id',
+      res.outcome === 'ACTIVATED' && embedder.calls.length === 2 && prep.preview.updated === 1 && prep.preview.added === 1
+        && prep.preview.carriedOver === 4 && prep.preview.removed === 0 && prep.preview.unchanged === 7
+        && after.some(c => c.qa_id === qaOfEdited && c.answer.startsWith('EDITED')) && after.length === before.length + 1,
+      `embedCalls=${embedder.calls.length} stats=${JSON.stringify({ updated: prep.preview.updated, added: prep.preview.added, unchanged: prep.preview.unchanged, carried: prep.preview.carriedOver, removed: prep.preview.removed })} chunks ${before.length}→${after.length}`);
+    const beforeIds = new Set(before.map(c => c.id));
+    const reusedSame = after.filter(c => beforeIds.has(c.id)).length;
+    check('3c. Unchanged chunks are the SAME rows (embeddings reused, not recomputed)',
+      reusedSame === before.length - 1 /* the edited chunk was replaced */ ,
+      `chunk rows shared with previous version=${reusedSame}/${before.length - 1} expected`);
+    const newHit = await searchChunks(vecFor((await query<{ chunk_text: string }>('SELECT chunk_text FROM lecture_qna_chunks c JOIN dataset_version_chunks d ON d.chunk_id=c.id JOIN lectures l ON l.active_version_id=d.version_id WHERE l.id=$1 AND c.answer LIKE $2 LIMIT 1', [L, 'EDITED%'])).rows[0].chunk_text), L, 3);
+    const dupes = await countOne(`SELECT COUNT(*) n FROM (SELECT d.qa_id, d.chunk_index FROM dataset_version_chunks d JOIN lectures l ON l.active_version_id = d.version_id WHERE l.id = $1 GROUP BY 1,2 HAVING COUNT(*) > 1) t`, [L]);
+    const visNow = await visibleAnswers(L);
+    const oldAnswerStillSearchable = visNow.has(baseRows()[1].answer);
+    check('3d. After publish, search returns the new content, the old edited answer is gone, no duplicates',
+      newHit[0]?.answer.startsWith('EDITED') && !oldAnswerStillSearchable && dupes === 0,
+      `top hit startsWithEDITED=${newHit[0]?.answer.startsWith('EDITED')} oldAnswerStillInActive=${oldAnswerStillSearchable} duplicateQaPieces=${dupes}`);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 4. Ambiguous / invalid matches are rejected, never guessed
+  // ─────────────────────────────────────────────────────────────────────
+  {
+    const L2 = await newLecture('ambiguity');
+    embedder.reset();
+    const dupRows: Row[] = [
+      { question: 'Same question?', answer: 'Answer from model A.' },
+      { question: 'Same question?', answer: 'Answer from model B.' },
+      { question: 'Other question?', answer: 'Other answer.' },
+    ];
+    const p1 = await prepareDatasetVersion(L2, makeXlsx(dupRows));
+    if (p1.kind === 'CREATED') await fin(p1.versionId);
+    const verBefore = (await versionRows(L2)).length;
+
+    // 4a. identical re-upload of the duplicate-question dataset still matches (identical content), no error
+    const same = await prepareDatasetVersion(L2, makeXlsx(dupRows));
+    // 4b. edit one of the two same-question rows without a qa_id → ambiguous
+    const edited = [{ ...dupRows[0], answer: 'Answer from model A, edited.' }, dupRows[1], dupRows[2]];
+    const amb = await expectReject(prepareDatasetVersion(L2, makeXlsx(edited)));
+    const verAfter = (await versionRows(L2)).length;
+    check('4a. Duplicate questions with identical content re-match safely (no error, no change)', same.kind === 'NOOP', `result=${same.kind}`);
+    check('4b. Ambiguous question match → error, nothing changed (no guessing)',
+      amb.rejected && /ambiguous/i.test(amb.message) && verBefore === verAfter,
+      `rejected=${amb.rejected} versions ${verBefore}→${verAfter} message="${amb.message.split('\n').slice(0, 2).join(' | ').slice(0, 220)}"`);
+
+    // 4c. unknown qa_id
+    const unk = await expectReject(prepareDatasetVersion(L2, makeXlsx([{ qa_id: 'qa_doesnotexist', question: 'q', answer: 'a' }])));
+    check('4c. Unknown qa_id → error', unk.rejected && /does not exist/i.test(unk.message), `message="${unk.message.split('\n')[1]?.trim()}"`);
+
+    // 4d. using qa_id resolves the ambiguity and edits exactly that Q&A
+    const exported = await exportActiveDataset(L2);
+    const wb = XLSX.read(exported, { type: 'buffer' });
+    const exRows = XLSX.utils.sheet_to_json<Record<string, string>>(wb.Sheets[wb.SheetNames[0]]);
+    const target = exRows.find(r => r.answer === 'Answer from model A.')!;
+    embedder.reset();
+    const viaId = await prepareDatasetVersion(L2, makeXlsx(exRows.map(r => r === target ? { ...r, answer: 'Answer from model A, edited.' } : r) as unknown as Row[]));
+    if (viaId.kind === 'CREATED') await fin(viaId.versionId);
+    const after = await activeChunks(L2);
+    check('4d. With qa_id the same edit is applied to exactly that Q&A; the sibling is untouched',
+      viaId.kind === 'CREATED' && viaId.preview.updated === 1 && viaId.preview.unchanged === 2 && embedder.calls.length === 1
+        && after.find(c => c.qa_id === target.qa_id)?.answer === 'Answer from model A, edited.' && after.some(c => c.answer === 'Answer from model B.'),
+      `updated=${viaId.kind === 'CREATED' ? viaId.preview.updated : '-'} embedCalls=${embedder.calls.length}`);
+
+    // 4e. editing the QUESTION text needs the qa_id: with it → update in place; without → new Q&A (old one carried)
+    const exported2 = await exportActiveDataset(L2);
+    const ex2 = XLSX.utils.sheet_to_json<Record<string, string>>(XLSX.read(exported2, { type: 'buffer' }).Sheets['dataset']);
+    const other = ex2.find(r => r.question === 'Other question?')!;
+    embedder.reset();
+    const q1 = await prepareDatasetVersion(L2, makeXlsx(ex2.map(r => r === other ? { ...r, question: 'Other question, reworded?' } : r) as unknown as Row[]));
+    if (q1.kind === 'CREATED') await fin(q1.versionId);
+    const a2 = await activeChunks(L2);
+    check('4e. Question text edited WITH qa_id → updated in place (same qa_id, old wording gone)',
+      q1.kind === 'CREATED' && q1.preview.updated === 1 && q1.preview.added === 0
+        && a2.some(c => c.qa_id === other.qa_id && c.question === 'Other question, reworded?') && !a2.some(c => c.question === 'Other question?'),
+      `updated=${q1.kind === 'CREATED' ? q1.preview.updated : '-'} added=${q1.kind === 'CREATED' ? q1.preview.added : '-'}`);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 5. REPLACE needs explicit, count-bound confirmation
+  // ─────────────────────────────────────────────────────────────────────
+  let vBeforeReplace = 0;
+  {
+    embedder.reset();
+    vBeforeReplace = (await lectureState(L)).active_version_id!;
+    const currentCount = (await activeChunks(L)).length;
+    const keep = baseRows().slice(0, 8);
+    keep[1] = { ...keep[1], answer: 'EDITED ANSWER about concept two, now different.' };
+    keep.push({ question: 'What is a brand new concept?', answer: 'A brand new answer.', keywords: 'new' });
+    const versionsBefore = (await versionRows(L)).length;
+    const noConfirm = await expectReject(prepareDatasetVersion(L, makeXlsx(keep), { mode: 'REPLACE' }));
+    const wrongConfirm = await expectReject(prepareDatasetVersion(L, makeXlsx(keep), { mode: 'REPLACE', confirmRemovals: 1 }));
+    const dry = await prepareDatasetVersion(L, makeXlsx(keep), { mode: 'REPLACE', dryRun: true });
+    const versionsAfter = (await versionRows(L)).length;
+    const removed = noConfirm.err instanceof RemovalConfirmationRequired ? noConfirm.err.preview.removed : -1;
+    check('5a. REPLACE without confirmation is refused, the message says how many Q&As would be removed, nothing changes',
+      noConfirm.rejected && removed === 4 && wrongConfirm.rejected && versionsBefore === versionsAfter && dry.kind === 'DRY_RUN' && dry.preview.removed === 4
+        && (await activeChunks(L)).length === currentCount && /remove 4/.test(noConfirm.message),
+      `wouldRemove=${removed} wrongCount(1)Rejected=${wrongConfirm.rejected} dryRunRemoved=${dry.kind === 'DRY_RUN' ? dry.preview.removed : '-'} versions ${versionsBefore}→${versionsAfter} msg="${noConfirm.message.slice(0, 90)}…"`);
+
+    const ok = await prepareDatasetVersion(L, makeXlsx(keep), { mode: 'REPLACE', confirmRemovals: 4 });
+    if (ok.kind === 'CREATED') await fin(ok.versionId);
+    const after = await activeChunks(L);
+    const qas = new Set(after.map(c => c.qa_id)).size;
+    check('5b. Confirmed REPLACE drops exactly the missing Q&As; previous version is kept for rollback',
+      ok.kind === 'CREATED' && qas === 9 && ok.preview.removed === 4 && (await versionRows(L)).some(v => v.id === vBeforeReplace && v.status === 'SUPERSEDED'),
+      `qaCount=${qas} (expected 9) statuses=${(await versionRows(L)).map(v => `v${v.version_no}:${v.status}`).join(' ')}`);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 6. Failed updates: old dataset keeps serving
+  // ─────────────────────────────────────────────────────────────────────
+  {
+    embedder.reset();
+    const activeBefore = (await lectureState(L)).active_version_id!;
+    const chunksBefore = await activeChunks(L);
+    const rows = baseRows().slice(0, 8);
+    rows[1] = { ...rows[1], answer: 'EDITED ANSWER about concept two, now different.' };
+    rows.push({ question: 'What is a brand new concept?', answer: 'A brand new answer.', keywords: 'new' });
+    rows.push({ question: 'Poison question?', answer: 'This one can never be embedded.' });
+    const prep = await prepareDatasetVersion(L, makeXlsx(rows), { mode: 'REPLACE', confirmRemovals: 0 });
+    embedder.failOn = t => t.includes('never be embedded');
+    let outcome = '';
+    if (prep.kind === 'CREATED') {
+      for (let i = 0; i < 6 && outcome !== 'FAILED'; i++) { outcome = (await fin(prep.versionId)).outcome; if (outcome === 'PAUSED') await new Promise(r => setTimeout(r, 40)); }
+    }
+    const st = await lectureState(L);
+    const vers = await versionRows(L);
+    const failedV = vers.find(v => prep.kind === 'CREATED' && v.id === prep.versionId);
+    const servedStillSet = await visibleAnswers(L);
+    const servedStill = [...servedStillSet];
+    check('6a. Embedding keeps failing → version marked FAILED after retries; lecture stays READY on the previous dataset',
+      outcome === 'FAILED' && failedV?.status === 'FAILED' && st.status === 'READY' && st.active_version_id === activeBefore,
+      `finalOutcome=${outcome} versionStatus=${failedV?.status} lectureStatus=${st.status} activeUnchanged=${st.active_version_id === activeBefore} error="${failedV?.last_error?.slice(0, 80)}"`);
+    check('6b. Chat search during/after the failed update still returns the old dataset, with none of the new rows',
+      servedStill.length === new Set(chunksBefore.map(c => c.answer)).size
+        && !servedStill.some(a => a.includes('never be embedded')) && servedStill.includes(baseRows()[0].answer),
+      `distinct answers visible to chat=${servedStill.length} (active dataset has ${new Set(chunksBefore.map(c => c.answer)).size}) poisonRowVisible=${servedStill.some(a => a.includes('never be embedded'))}`);
+    const leftovers = await countOne(`SELECT COUNT(*) n FROM dataset_version_chunks WHERE version_id = $1`, [prep.kind === 'CREATED' ? prep.versionId : 0]);
+    check('6c. A failed version is emptied (no half-built rows left behind), its error is kept', leftovers === 0 && !!failedV?.last_error, `membershipRowsLeft=${leftovers}`);
+
+    // validation failure: all-zero vectors
+    embedder.reset();
+    embedder.zeroVectors = true;
+    const prep2 = await prepareDatasetVersion(L, makeXlsx([...rows.slice(0, 9), { question: 'Zero-vector question?', answer: 'This row is embedded as an all-zero vector.' }]), { mode: 'REPLACE', confirmRemovals: 0 });
+    const r2 = prep2.kind === 'CREATED' ? await fin(prep2.versionId) : null;
+    const st2 = await lectureState(L);
+    check('6d. Validation catches empty/zero vectors → FAILED, nothing published',
+      r2?.outcome === 'FAILED' && /invalid vector|empty/i.test(r2.error ?? '') && st2.active_version_id === activeBefore,
+      `outcome=${r2?.outcome} error="${r2?.error?.slice(0, 100)}" activeUnchanged=${st2.active_version_id === activeBefore}`);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 7. Restart-resume with a REAL killed process
+  // ─────────────────────────────────────────────────────────────────────
+  {
+    const L3 = await newLecture('restart');
+    embedder.reset();
+    const big = Array.from({ length: 30 }, (_, i): Row => ({ question: `Resume question ${i + 1}?`, answer: `Resume answer ${i + 1} ${'x'.repeat(40)}` }));
+    const b64 = makeXlsx(big).toString('base64');
+    const child = spawn(TSNODE, ['--transpile-only', __filename, '--worker', 'build', '120', String(L3), b64], { env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let childOut = '';
+    child.stdout.on('data', d => { childOut += d.toString(); });
+    // wait until some (but not all) chunks have been embedded, then SIGKILL (a crash, not a clean stop)
+    let embeddedAtKill = 0;
+    for (let i = 0; i < 400; i++) {
+      await new Promise(r => setTimeout(r, 100));
+      embeddedAtKill = await countOne(`SELECT COUNT(*) n FROM lecture_qna_chunks WHERE lecture_id = $1 AND local_embedding IS NOT NULL`, [L3]);
+      if (embeddedAtKill >= 8) break;
+    }
+    child.kill('SIGKILL');
+    await new Promise(r => child.on('exit', r));
+    const total = await countOne(`SELECT COUNT(*) n FROM lecture_qna_chunks WHERE lecture_id = $1`, [L3]);
+    const embeddedAfterKill = await countOne(`SELECT COUNT(*) n FROM lecture_qna_chunks WHERE lecture_id = $1 AND local_embedding IS NOT NULL`, [L3]);
+    const stAfterKill = await lectureState(L3);
+    const vAfterKill = await versionRows(L3);
+    check('7a. After a hard kill mid-embedding, progress is in the DB (partial), version still BUILDING, nothing activated',
+      embeddedAfterKill > 0 && embeddedAfterKill < total && vAfterKill.length === 1 && vAfterKill[0].status === 'BUILDING' && stAfterKill.active_version_id === null,
+      `embedded=${embeddedAfterKill}/${total} versionStatus=${vAfterKill[0]?.status} lectureStatus=${stAfterKill.status}`);
+
+    // "restart": a fresh process resumes
+    const resumed = await new Promise<string>((resolve) => {
+      const c2 = spawn(TSNODE, ['--transpile-only', __filename, '--worker', 'resume', '0'], { env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+      let o = ''; c2.stdout.on('data', d => { o += d.toString(); }); c2.on('exit', () => resolve(o));
+    });
+    const line = resumed.split('\n').find(l => l.startsWith('WORKER resumed '))!;
+    const info = JSON.parse(line.slice('WORKER resumed '.length)) as { versionIds: number[]; embedCalls: number; texts: string[] };
+    const embeddedFinal = await countOne(`SELECT COUNT(*) n FROM lecture_qna_chunks WHERE lecture_id = $1 AND local_embedding IS NOT NULL`, [L3]);
+    const dupRows = await countOne(`SELECT COUNT(*) n FROM (SELECT qa_id, chunk_index FROM dataset_version_chunks d JOIN dataset_versions v ON v.id = d.version_id WHERE v.lecture_id = $1 GROUP BY 1,2 HAVING COUNT(*) > 1) t`, [L3]);
+    const totalRows = await countOne(`SELECT COUNT(*) n FROM lecture_qna_chunks WHERE lecture_id = $1`, [L3]);
+    const st3 = await lectureState(L3);
+    check('7b. After restart the build resumes from the pending chunks only (finished chunks are not embedded again)',
+      info.embedCalls === total - embeddedAfterKill && embeddedFinal === total && st3.status === 'READY' && st3.active_version_id !== null,
+      `pendingBeforeResume=${total - embeddedAfterKill} embedCallsAfterRestart=${info.embedCalls} embeddedNow=${embeddedFinal}/${total} lectureStatus=${st3.status}`);
+    check('7c. Resume created no duplicate rows', dupRows === 0 && totalRows === total, `duplicateQaPieces=${dupRows} chunkRows ${total}→${totalRows}`);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 8. Rollback, and answer memory bound to the version
+  // ─────────────────────────────────────────────────────────────────────
+  {
+    const student = (await query<{ id: string }>(`SELECT id FROM users LIMIT 1`)).rows[0]?.id;
+    const verList = await versionRows(L);
+    const activeNow = (await lectureState(L)).active_version_id!;
+    const prevId = verList.filter(v => v.status === 'SUPERSEDED').sort((a, b) => b.version_no - a.version_no)[0]?.id;
+
+    // memory entry under the CURRENT version
+    const chunks = await activeChunks(L);
+    const hist = (await query<{ id: number }>(`INSERT INTO chat_history (student_id, lecture_id, question, answer, source_chunk_ids) VALUES ($1,$2,'mem q','mem a',$3) RETURNING id`, [student, L, [chunks[0].id]])).rows[0].id;
+    const Q = 'What does test concept number 1 mean exactly?';
+    const emb = async () => vecFor('mem');
+    await writeAnswerMemory({ studentId: student, lectureId: L, sourceChatHistoryId: hist, originalQuestion: Q, retrievalQuery: Q, answer: 'CACHED-UNDER-CURRENT', sourceChunkIds: [chunks[0].id], questionEmbedding: vecFor('mem'), datasetVersionId: activeNow });
+    const hit1 = await lookupAnswerMemory({ studentId: student, lectureId: L, question: Q, generateEmbedding: emb });
+
+    // stale-source guard: a chunk that is not in the version must not be filed under it
+    await writeAnswerMemory({ studentId: student, lectureId: L, sourceChatHistoryId: hist, originalQuestion: 'other q?', retrievalQuery: 'other q?', answer: 'BAD', sourceChunkIds: [999999999], questionEmbedding: vecFor('b'), datasetVersionId: activeNow });
+    const badRow = await countOne(`SELECT COUNT(*) n FROM rag_answer_memory WHERE answer = 'BAD'`);
+
+    const rb = await rollbackDataset(L);
+    const afterRb = await lectureState(L);
+    const memAfterRollback = await lookupAnswerMemory({ studentId: student, lectureId: L, question: Q, generateEmbedding: emb });
+    const searchRb = await visibleAnswers(L);
+    const hasRemovedQaBack = searchRb.has(baseRows()[7].answer);   // row 8 existed before the REPLACE
+    check('8a. Rollback re-activates the previous version atomically; chat now reads it', rb.activeVersionId === prevId && afterRb.active_version_id === prevId && afterRb.status === 'READY' && hasRemovedQaBack,
+      `active ${activeNow}→${afterRb.active_version_id} (expected previous=${prevId}) removedRowSearchableAgain=${hasRemovedQaBack}`);
+    check('8b. Cached answer from the newer version is NOT served after rollback (memory is version-bound)',
+      hit1.hit?.answer === 'CACHED-UNDER-CURRENT' && memAfterRollback.hit === null && badRow === 0,
+      `hitBeforeRollback=${hit1.hit?.answer} hitAfterRollback=${memAfterRollback.hit?.answer ?? 'none'} writeWithForeignChunkStored=${badRow}`);
+
+    const rb2 = await rollbackDataset(L);   // roll forward again (the demoted version is now the "previous")
+    const memBack = await lookupAnswerMemory({ studentId: student, lectureId: L, question: Q, generateEmbedding: emb });
+    check('8c. Rolling forward again makes that version\'s cache valid again; cached answer is served',
+      rb2.activeVersionId === activeNow && memBack.hit?.answer === 'CACHED-UNDER-CURRENT', `active=${rb2.activeVersionId} (expected ${activeNow}) hit=${memBack.hit?.answer ?? 'none'}`);
+
+    // publishing a NEW version invalidates the cache too
+    embedder.reset();
+    const rows = baseRows().slice(0, 8);
+    rows[0] = { ...rows[0], answer: 'Concept 1 has been CORRECTED.' };
+    const prep = await prepareDatasetVersion(L, makeXlsx(rows));
+    if (prep.kind === 'CREATED') await fin(prep.versionId);
+    const memAfterPublish = await lookupAnswerMemory({ studentId: student, lectureId: L, question: Q, generateEmbedding: emb });
+    check('8d. Publishing corrected data → the old cached answer is no longer returned', memAfterPublish.hit === null, `hit=${memAfterPublish.hit?.answer ?? 'none'}`);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 9. Retention: active + 1 previous only; chat source references survive
+  // ─────────────────────────────────────────────────────────────────────
+  {
+    const student = (await query<{ id: string }>(`SELECT id FROM users LIMIT 1`)).rows[0]?.id;
+    // reference one chunk of the CURRENT active version from chat history, then push 2 more versions
+    const cur = await activeChunks(L);
+    const referenced = cur.find(c => c.answer.startsWith('Concept 1 has been CORRECTED'))!;
+    const hist = (await query<{ id: number }>(`INSERT INTO chat_history (student_id, lecture_id, question, answer, source_chunk_ids) VALUES ($1,$2,'ref q','ref a',$3) RETURNING id`, [student, L, [referenced.id]])).rows[0].id;
+    for (const n of [1, 2]) {
+      const rows = baseRows().slice(0, 8);
+      rows[0] = { ...rows[0], answer: `Concept 1 revision ${n}.` };
+      embedder.reset();
+      const prep = await prepareDatasetVersion(L, makeXlsx(rows));
+      if (prep.kind === 'CREATED') await fin(prep.versionId);
+    }
+    const vers = await versionRows(L);
+    const live = vers.filter(v => v.status === 'ACTIVE' || v.status === 'SUPERSEDED');
+    const refRow = (await query<{ chunk_text: string; has_vec: boolean }>('SELECT chunk_text, (local_embedding IS NOT NULL) AS has_vec FROM lecture_qna_chunks WHERE id = $1', [referenced.id])).rows[0];
+    const src = (await query<{ sources: { id: number; question: string }[] }>(
+      `SELECT COALESCE((SELECT json_agg(json_build_object('id', c.id, 'question', c.question)) FROM lecture_qna_chunks c WHERE c.id = ANY(ch.source_chunk_ids)), '[]'::json) AS sources FROM chat_history ch WHERE ch.id = $1`, [hist])).rows[0].sources;
+    const inflight = vers.filter(v => v.status === 'BUILDING' || v.status === 'READY_TO_ACTIVATE').length;
+    check('9a. Retention keeps exactly ACTIVE + 1 previous successful version; older ones are archived',
+      live.length === 2 && live.filter(v => v.status === 'ACTIVE').length === 1 && vers.some(v => v.status === 'ARCHIVED') && inflight === 0,
+      `versions=${vers.map(v => `v${v.version_no}:${v.status}`).join(' ')}`);
+    check('9b. A chunk referenced by existing chat history survives cleanup (text kept, vector dropped) so the chat\'s sources still resolve',
+      !!refRow && src.length === 1 && src[0].id === referenced.id && refRow.has_vec === false,
+      `chunkStillExists=${!!refRow} sourcesResolved=${src.length} vectorDropped=${refRow && refRow.has_vec === false}`);
+    const orphanUnref = await countOne(
+      `SELECT COUNT(*) n FROM lecture_qna_chunks c WHERE c.lecture_id = $1 AND NOT EXISTS (SELECT 1 FROM dataset_version_chunks d WHERE d.chunk_id = c.id)
+         AND NOT EXISTS (SELECT 1 FROM chat_history h WHERE c.id = ANY(h.source_chunk_ids)) AND NOT EXISTS (SELECT 1 FROM rag_answer_memory m WHERE c.id = ANY(m.source_chunk_ids))`, [L]);
+    check('9c. Chunks used by no version and no chat/cached answer are deleted (no garbage accumulates)', orphanUnref === 0, `unreferenced orphan chunks=${orphanUnref}`);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 10. Different model / settings → everything re-embedded; same model → reused
+  // ─────────────────────────────────────────────────────────────────────
+  {
+    const L4 = await newLecture('model-change');
+    embedder.reset();
+    const p = await prepareDatasetVersion(L4, makeXlsx(baseRows(6)));
+    if (p.kind === 'CREATED') await fin(p.versionId);
+    // pretend the vectors were produced by an older model
+    await query(`UPDATE lecture_qna_chunks SET embedding_model_version = 'old-model:768' WHERE lecture_id = $1`, [L4]);
+    embedder.reset();
+    const p2 = await prepareDatasetVersion(L4, makeXlsx(baseRows(6)));
+    if (p2.kind === 'CREATED') await fin(p2.versionId);
+    const total = (await activeChunks(L4)).length;
+    check('10. Vectors made by a different embedding model are NOT reused: same file re-embeds every chunk (and only then)',
+      p2.kind === 'CREATED' && embedder.calls.length === total && p2.preview.updated === 6,
+      `result=${p2.kind} embedCalls=${embedder.calls.length}/${total} (model ${EMBEDDING_MODEL_VERSION})`);
+    embedder.reset();
+    const p3 = await prepareDatasetVersion(L4, makeXlsx(baseRows(6)));
+    check('10b. Once on the current model, the same file is a no-op again', p3.kind === 'NOOP' && embedder.calls.length === 0, `result=${p3.kind} embedCalls=${embedder.calls.length}`);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 11. Only one update in flight per lecture
+  // ─────────────────────────────────────────────────────────────────────
+  {
+    const L5 = await newLecture('concurrent');
+    const p = await prepareDatasetVersion(L5, makeXlsx(baseRows(4)));     // left BUILDING on purpose
+    const second = await expectReject(prepareDatasetVersion(L5, makeXlsx(baseRows(5))));
+    check('11. A second upload while one is still building is refused (409), no second version created',
+      p.kind === 'CREATED' && second.rejected && /in progress/i.test(second.message) && (await versionRows(L5)).length === 1, `message="${second.message.slice(0, 100)}"`);
+    if (p.kind === 'CREATED') await fin(p.versionId);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 12. Backfilled real lecture (copy of live data): export → re-upload is a no-op
+  // ─────────────────────────────────────────────────────────────────────
+  {
+    const copyArg = process.argv.indexOf('--lecture-copy');
+    if (copyArg > -1) {
+      const RL = Number(process.argv[copyArg + 1]);
+      embedder.reset();
+      const exported = await exportActiveDataset(RL);
+      const beforeV = (await versionRows(RL)).length;
+      const prep = await prepareDatasetVersion(RL, exported);
+      // edit one row via the exported qa_id
+      const rows = XLSX.utils.sheet_to_json<Record<string, string>>(XLSX.read(exported, { type: 'buffer' }).Sheets['dataset']);
+      rows[10] = { ...rows[10], answer: rows[10].answer + ' (corrected)' };
+      embedder.reset();
+      const prep2 = await prepareDatasetVersion(RL, makeXlsx(rows as unknown as Row[]));
+      if (prep2.kind === 'CREATED') await fin(prep2.versionId);
+      check(`12. Backfilled real lecture #${RL} (${rows.length} Q&As): exported file re-uploads as a no-op; one edit → exactly 1 chunk embedded`,
+        prep.kind === 'NOOP' && (await versionRows(RL)).length === beforeV + 1 && prep2.kind === 'CREATED' && embedder.calls.length === 1 && prep2.preview.unchanged === rows.length - 1,
+        `reupload=${prep.kind} (unchanged=${prep.preview.unchanged}/${rows.length}) afterEdit: updated=${prep2.kind === 'CREATED' ? prep2.preview.updated : '-'} embedCalls=${embedder.calls.length}`);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 14. Embedding service outage: no restart needed, version is never failed by an outage
+  // ─────────────────────────────────────────────────────────────────────
+  {
+    const L6 = await newLecture('outage');
+    embedder.reset();
+    const p = await prepareDatasetVersion(L6, makeXlsx(baseRows(8)));
+    let outageCalls = 0;
+    let serviceBack = false;
+    const flaky = async (text: string): Promise<number[]> => {
+      if (!serviceBack) { outageCalls++; throw new EmbeddingUnavailableError('Local embedding server not reachable (simulated outage)'); }
+      return vecFor(text);
+    };
+    // maxAttempts=2 on purpose: a non-outage failure would give up after 2 passes. An outage must not.
+    const first = p.kind === 'CREATED' ? await finishDatasetVersion(p.versionId, { embed: flaky, retryDelayMs: 40, chunkBackoffMs: 1, maxAttempts: 2 }) : null;
+    await new Promise(r => setTimeout(r, 400));                       // several retry cycles while the service is down
+    const during = (await versionRows(L6))[0];
+    const attemptsDuring = (await query<{ attempts: number }>('SELECT attempts FROM dataset_versions WHERE lecture_id = $1', [L6])).rows[0].attempts;
+    serviceBack = true;                                              // service comes back — nobody restarts anything
+    let statusAfter = '';
+    for (let i = 0; i < 50; i++) { await new Promise(r => setTimeout(r, 100)); statusAfter = (await versionRows(L6))[0].status; if (statusAfter === 'ACTIVE') break; }
+    const done = await activeChunks(L6);
+    check('14. Embedding service down for several retry cycles → version stays BUILDING (never FAILED, attempts not consumed); when it returns, the build finishes by itself, no restart',
+      first?.outcome === 'PAUSED' && during.status === 'BUILDING' && attemptsDuring === 0 && /unavailable/i.test(during.last_error ?? '') && outageCalls >= 6
+        && statusAfter === 'ACTIVE' && done.length > 0 && done.every(c => c.has_vec) && (await lectureState(L6)).status === 'READY',
+      `firstOutcome=${first?.outcome} statusDuringOutage=${during.status} attempts=${attemptsDuring} failedEmbedCallsDuringOutage=${outageCalls} note="${(during.last_error ?? '').slice(0, 60)}" → afterRecovery=${statusAfter} chunks=${done.length}`);
+  }
+
+  // 14b: the same, with a single chunk left (fewer than the consecutive-failure limit)
+  {
+    const L6b = await newLecture('outage-single-chunk');
+    const p = await prepareDatasetVersion(L6b, makeXlsx(baseRows(1)));
+    let back = false;
+    const flaky = async (text: string): Promise<number[]> => { if (!back) throw new EmbeddingUnavailableError('simulated outage'); return vecFor(text); };
+    if (p.kind === 'CREATED') await finishDatasetVersion(p.versionId, { embed: flaky, retryDelayMs: 40, chunkBackoffMs: 1, maxAttempts: 2 });
+    await new Promise(r => setTimeout(r, 500));
+    const v = (await query<{ status: string; attempts: number; last_error: string | null }>('SELECT status, attempts, last_error FROM dataset_versions WHERE lecture_id = $1', [L6b])).rows[0];
+    back = true;
+    let st = '';
+    for (let i = 0; i < 40; i++) { await new Promise(r => setTimeout(r, 100)); st = (await versionRows(L6b))[0].status; if (st === 'ACTIVE') break; }
+    check('14b. Outage with only ONE chunk left is still treated as an outage (not a chunk failure): never FAILED, attempts not consumed, finishes on recovery',
+      v.status === 'BUILDING' && v.attempts === 0 && /unavailable/i.test(v.last_error ?? '') && st === 'ACTIVE', `duringOutage: status=${v.status} attempts=${v.attempts} note="${(v.last_error ?? '').slice(0, 50)}" → afterRecovery=${st}`);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 15. Simultaneous uploads on one lecture
+  // ─────────────────────────────────────────────────────────────────────
+  {
+    const L7 = await newLecture('simultaneous');
+    embedder.reset();
+    const f = (n: number) => makeXlsx(baseRows(n));
+    const settled = await Promise.allSettled([prepareDatasetVersion(L7, f(5)), prepareDatasetVersion(L7, f(6)), prepareDatasetVersion(L7, f(7)), prepareDatasetVersion(L7, f(8))]);
+    const created = settled.filter(r => r.status === 'fulfilled' && (r.value as { kind: string }).kind === 'CREATED') as PromiseFulfilledResult<{ kind: 'CREATED'; versionId: number }>[];
+    const rejected = settled.filter(r => r.status === 'rejected') as PromiseRejectedResult[];
+    const vers = await versionRows(L7);
+    const members = created.length ? await countOne('SELECT COUNT(*) n FROM dataset_version_chunks WHERE version_id = $1', [created[0].value.versionId]) : -1;
+    const chunkRows = await countOne('SELECT COUNT(*) n FROM lecture_qna_chunks WHERE lecture_id = $1', [L7]);
+    if (created.length) await fin(created[0].value.versionId);
+    const act = await activeChunks(L7);
+    check('15. Four simultaneous uploads on one lecture → exactly one builds, the other three get 409; no mixed or orphan rows',
+      created.length === 1 && rejected.length === 3 && rejected.every(r => /in progress/i.test((r.reason as Error).message)) && vers.length === 1
+        && members === chunkRows && act.length === chunkRows,
+      `created=${created.length} rejected409=${rejected.length} versions=${vers.length} membersOfWinner=${members} chunkRowsInLecture=${chunkRows} activeAfterFinish=${act.length}`);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 16. A request pinned to a version is not affected by a publish that lands mid-request
+  // ─────────────────────────────────────────────────────────────────────
+  {
+    const L8 = await newLecture('pinned');
+    embedder.reset();
+    const p = await prepareDatasetVersion(L8, makeXlsx(baseRows(6)));
+    if (p.kind === 'CREATED') await fin(p.versionId);
+    const pinned = (await lectureState(L8)).active_version_id!;
+    const probe = (await query<{ chunk_text: string }>('SELECT c.chunk_text FROM lecture_qna_chunks c JOIN dataset_version_chunks d ON d.chunk_id=c.id WHERE d.version_id=$1 AND c.question=$2', [pinned, baseRows()[1].question])).rows[0].chunk_text;
+    const step1 = await searchChunks(vecFor(probe), L8, 3, pinned);              // "retrieval step 1" of a long request
+    // ── a new version is published while that request is still running ──
+    const edited = baseRows(6); edited[1] = { ...edited[1], answer: 'Concept 2 now says something different.' };
+    const p2 = await prepareDatasetVersion(L8, makeXlsx(edited));
+    if (p2.kind === 'CREATED') await fin(p2.versionId);
+    const nowActive = (await lectureState(L8)).active_version_id!;
+    const editedProbe = (await query<{ chunk_text: string }>('SELECT c.chunk_text FROM lecture_qna_chunks c JOIN dataset_version_chunks d ON d.chunk_id=c.id WHERE d.version_id=$1 AND c.question=$2', [nowActive, baseRows()[1].question])).rows[0].chunk_text;
+    const step2Pinned = await searchChunks(vecFor(probe), L8, 3, pinned);        // "retrieval step 2" of the SAME request (pinned)
+    const step2PinnedNew = await searchChunks(vecFor(editedProbe), L8, 3, pinned);
+    const freshOld = await searchChunks(vecFor(probe), L8, 3);                   // a NEW request (not pinned): sees the new version
+    const freshNew = await searchChunks(vecFor(editedProbe), L8, 3);
+    check('16. Pinned request keeps seeing its own version after a publish (no mixing); a new request sees the new version',
+      nowActive !== pinned && step1[0]?.answer === baseRows()[1].answer && step2Pinned[0]?.answer === baseRows()[1].answer && step2PinnedNew.length === 0
+        && freshOld.length === 0 && freshNew[0]?.answer === 'Concept 2 now says something different.',
+      `pinnedBefore=${step1[0]?.answer === baseRows()[1].answer} pinnedAfterPublish=old:${step2Pinned[0]?.answer === baseRows()[1].answer}/seesNew:${step2PinnedNew.length > 0} newRequest=sees old:${freshOld.length > 0}/sees new:${freshNew.length > 0}`);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 13. Pure matcher
+  // ─────────────────────────────────────────────────────────────────────
+  {
+    const f = (q: string, a = 'a'): QaFields => ({ topic: null, question: q, answer: a, start_time: null, end_time: null, keywords: null, llm_name: null });
+    const row = (q: string, a: string, qaId: string | null, n: number): FileRow => ({ ...f(q, a), qaId, sheetRow: n });
+    let c = 0; const id = () => `new${++c}`;
+    const active: ActiveQa[] = [{ qaId: 'A', fields: f('dup', '1') }, { qaId: 'B', fields: f('dup', '2') }, { qaId: 'C', fields: f('solo', 's') }];
+    const t1 = matchRows([row('dup', '1', null, 2), row('dup', '2', null, 3), row('solo', 's2', null, 4)], active, id);
+    const t2 = matchRows([row('dup', 'changed', null, 2)], active, id);
+    const t3 = matchRows([row('dup', '1', null, 2), row('dup', '2', null, 3), row('dup', 'third', null, 4)], active, id);
+    const t4 = matchRows([row('x', 'x', 'A', 2), row('y', 'y', 'A', 3)], active, id);
+    check('13. Matcher: identical dupes re-match; edited dupe is ambiguous; extra dupe beyond existing is new; repeated qa_id errors',
+      t1.errors.length === 0 && t1.matches.map(m => m.qaId).join() === 'A,B,C'
+        && t2.errors.length === 1 && t3.errors.length === 0 && t3.matches[2].isNew && t4.errors.length === 1,
+      `t1=${t1.matches.map(m => m.qaId)} t2err=${t2.errors.length} t3new=${t3.matches[2]?.isNew} t4err=${t4.errors.length}`);
+  }
+};
+
+// ── main ────────────────────────────────────────────────────────────────
+
+(async () => {
+  if (process.argv[2] === '--worker') { await workerMain(); return; }
+  try {
+    await run();
+  } catch (err) {
+    console.error('Test run crashed:', err);
+    results.push({ name: 'run completed', pass: false, detail: (err as Error).message });
+  }
+  const failed = results.filter(r => !r.pass);
+  console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
+  if (failed.length) console.log('FAILED: ' + failed.map(f => f.name).join(' | '));
+  await pool.end();
+  process.exit(failed.length ? 1 : 0);
+})();

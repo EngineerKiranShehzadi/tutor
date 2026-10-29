@@ -91,7 +91,7 @@ async function runTracingChecks(): Promise<Record<string, CaseResult>> {
     searchChunks: async () => [fakeChunk(1, lectureId, { similarity: 0.91 })],
     rerankChunks: async (_q, c) => c.map(x => ({ ...x, rerankScore: 0.9 })),
     generateAnswer: async () => 'DISTINCTIVE_ANSWER_TOKEN_ZR7',
-    lookupAnswerMemory: async () => ({ hit: null, embedding: [0.1], lectureContentHash: 'h', lookupFailed: false }),
+    lookupAnswerMemory: async () => ({ hit: null, embedding: [0.1], datasetVersionId: 1, lookupFailed: false }),
     writeAnswerMemory: async () => {},
   };
 
@@ -114,7 +114,7 @@ async function runTracingChecks(): Promise<Record<string, CaseResult>> {
     {
       const { trace } = await withTrace('OBSTEST fresh embedding question', {
         ...factDeps,
-        lookupAnswerMemory: async () => ({ hit: null, embedding: null, lectureContentHash: 'h', lookupFailed: false }),
+        lookupAnswerMemory: async () => ({ hit: null, embedding: null, datasetVersionId: 1, lookupFailed: false }),
       }, ctx);
       const names = spanNames(trace);
       results['2b'] = { pass: names.includes('generate-query-embedding'), detail: `spans=${JSON.stringify(names)}` };
@@ -156,7 +156,7 @@ async function runTracingChecks(): Promise<Record<string, CaseResult>> {
         classifyRoute: async () => ({ route: 'FACT_QUESTION', source: 'rule' }),
         lookupAnswerMemory: async () => ({
           hit: { matchType: 'EXACT', memoryId: 999, answer: 'cached answer', sourceChunkIds: [1], chunks: [fakeChunk(1, lectureId)] },
-          embedding: null, lectureContentHash: 'h', lookupFailed: false,
+          embedding: null, datasetVersionId: 1, lookupFailed: false,
         }),
         recordMemoryHit: async () => {},
       }, ctx);

@@ -22,7 +22,7 @@ import { EMBEDDING_MODEL_VERSION } from '../services/embedding.service';
 import {
   computeAgentConfigFingerprint,
   getEffectiveAnswerPromptVersion,
-  computeLectureContentHash,
+  getActiveDatasetVersionId,
   lookupAnswerMemory,
   writeAnswerMemory,
   LookupParams,
@@ -47,13 +47,13 @@ const CLARITY = mkProfile(2, 'Clarity', INSTRUCTIONS_BY_VIDEO_ID['1mi-gFalmSQ'])
 const STUDENT = '1e8039ae-e9b0-448f-b563-10351fab051c';
 const LECTURE = 4;
 const QUESTION = 'What is the best learning methodology?';
-const FAKE_CONTENT_HASH = 'fake-lecture-content-hash';
+const FAKE_VERSION_ID = 7;
 const EMBEDDING = [0.1, 0.2, 0.3];
 const stubEmbedding = async () => EMBEDDING;
 
 interface Row {
   id: number; student_id: string; lecture_id: number; normalized_query: string;
-  lecture_content_hash: string; embedding_model_version: string; answer_prompt_version: string;
+  dataset_version_id: number; embedding_model_version: string; answer_prompt_version: string;
   answer: string; source_chunk_ids: number[]; cache_eligible: boolean;
 }
 interface Statement { kind: string; text: string; params: unknown[] }
@@ -61,10 +61,10 @@ interface Statement { kind: string; text: string; params: unknown[] }
 const seedRows = (): Row[] => ([
   // Mirrors the two rows that exist in the dev database today (generic "v1").
   { id: 79, student_id: STUDENT, lecture_id: LECTURE, normalized_query: 'what is the best learning methodology',
-    lecture_content_hash: FAKE_CONTENT_HASH, embedding_model_version: EMBEDDING_MODEL_VERSION, answer_prompt_version: 'v1',
+    dataset_version_id: FAKE_VERSION_ID, embedding_model_version: EMBEDDING_MODEL_VERSION, answer_prompt_version: 'v1',
     answer: 'GENERIC ANSWER', source_chunk_ids: [1, 2], cache_eligible: true },
   { id: 80, student_id: STUDENT, lecture_id: LECTURE, normalized_query: 'why is doing a task yourself the best way',
-    lecture_content_hash: FAKE_CONTENT_HASH, embedding_model_version: EMBEDDING_MODEL_VERSION, answer_prompt_version: 'v1',
+    dataset_version_id: FAKE_VERSION_ID, embedding_model_version: EMBEDDING_MODEL_VERSION, answer_prompt_version: 'v1',
     answer: 'ANOTHER GENERIC ANSWER', source_chunk_ids: [3], cache_eligible: true },
 ]);
 
@@ -81,15 +81,19 @@ async function withFakeDb<T>(rows: Row[], fn: (ctx: { rows: Row[]; statements: S
 
   (pool as unknown as { query: unknown }).query = async (text: string, params: unknown[] = []) => {
     const t = text.replace(/\s+/g, ' ').trim();
-    if (t.includes('string_agg(id::text')) {
-      statements.push({ kind: 'content-hash', text: t, params });
-      return { rows: [{ hash: FAKE_CONTENT_HASH }], rowCount: 1 };
+    if (t.includes('SELECT active_version_id FROM lectures')) {
+      statements.push({ kind: 'active-version', text: t, params });
+      return { rows: [{ active_version_id: FAKE_VERSION_ID }], rowCount: 1 };
+    }
+    if (t.includes('FROM dataset_version_chunks WHERE version_id = $1 AND chunk_id = ANY')) {
+      statements.push({ kind: 'version-membership-guard', text: t, params });
+      return { rows: [{ n: String(new Set(params[1] as number[]).size) }], rowCount: 1 };
     }
     if (t.includes('FROM rag_answer_memory m') && t.includes('m.normalized_query = $3')) {
       statements.push({ kind: 'exact-lookup', text: t, params });
-      const [student, lecture, normalized, hash, model, version] = params as [string, number, string, string, string, string];
+      const [student, lecture, normalized, hash, model, version] = params as [string, number, string, number, string, string];
       const hit = rows.filter(r => r.student_id === student && r.lecture_id === lecture && r.normalized_query === normalized
-        && r.lecture_content_hash === hash && r.embedding_model_version === model && r.answer_prompt_version === version && r.cache_eligible);
+        && r.dataset_version_id === hash && r.embedding_model_version === model && r.answer_prompt_version === version && r.cache_eligible);
       return { rows: hit.slice(0, 1).map(r => ({ id: r.id, answer: r.answer, source_chunk_ids: r.source_chunk_ids })), rowCount: hit.length };
     }
     if (t.includes('SELECT id FROM rag_answer_memory')) {
@@ -100,8 +104,8 @@ async function withFakeDb<T>(rows: Row[], fn: (ctx: { rows: Row[]; statements: S
     }
     if (t.includes('m.question_embedding <=>')) {
       statements.push({ kind: 'semantic-lookup', text: t, params });
-      const [student, lecture, hash, model, version] = params as [string, number, string, string, string];
-      const hit = rows.filter(r => r.student_id === student && r.lecture_id === lecture && r.lecture_content_hash === hash
+      const [student, lecture, hash, model, version] = params as [string, number, number, string, string];
+      const hit = rows.filter(r => r.student_id === student && r.lecture_id === lecture && r.dataset_version_id === hash
         && r.embedding_model_version === model && r.answer_prompt_version === version && r.cache_eligible);
       return { rows: hit.map(r => ({ id: r.id, answer: r.answer, source_chunk_ids: r.source_chunk_ids, similarity: 0.99 })), rowCount: hit.length };
     }
@@ -112,11 +116,11 @@ async function withFakeDb<T>(rows: Row[], fn: (ctx: { rows: Row[]; statements: S
     }
     if (/^INSERT INTO rag_answer_memory/i.test(t)) {
       statements.push({ kind: 'upsert', text: t, params });
-      const [student, lecture, , , , normalized, , answer, chunkIds, hash, model, version] = params as [string, number, number, string, string, string, string, string, number[], string, string, string];
+      const [student, lecture, , , , normalized, , answer, chunkIds, hash, model, version] = params as [string, number, number, string, string, string, string, string, number[], number, string, string];
       const existing = rows.find(r => r.student_id === student && r.lecture_id === lecture && r.normalized_query === normalized
-        && r.lecture_content_hash === hash && r.embedding_model_version === model && r.answer_prompt_version === version);
+        && r.dataset_version_id === hash && r.embedding_model_version === model && r.answer_prompt_version === version);
       if (existing) { existing.answer = answer; existing.source_chunk_ids = chunkIds; }    // ON CONFLICT ... DO UPDATE
-      else rows.push({ id: nextId++, student_id: student, lecture_id: lecture, normalized_query: normalized, lecture_content_hash: hash,
+      else rows.push({ id: nextId++, student_id: student, lecture_id: lecture, normalized_query: normalized, dataset_version_id: hash,
         embedding_model_version: model, answer_prompt_version: version, answer, source_chunk_ids: chunkIds, cache_eligible: true });
       return { rows: [], rowCount: 1 };
     }
@@ -137,7 +141,7 @@ const lookupParams = (version?: string): LookupParams =>
   ({ studentId: STUDENT, lectureId: LECTURE, question: QUESTION, generateEmbedding: stubEmbedding, ...(version !== undefined ? { answerPromptVersion: version } : {}) });
 const writeParams = (answer: string, version?: string): WriteMemoryParams => ({
   studentId: STUDENT, lectureId: LECTURE, sourceChatHistoryId: 1, originalQuestion: QUESTION, retrievalQuery: QUESTION,
-  answer, sourceChunkIds: [1, 2], questionEmbedding: EMBEDDING, lectureContentHash: FAKE_CONTENT_HASH,
+  answer, sourceChunkIds: [1, 2], questionEmbedding: EMBEDDING, datasetVersionId: FAKE_VERSION_ID,
   ...(version !== undefined ? { answerPromptVersion: version } : {}),
 });
 
@@ -259,22 +263,22 @@ cases.push({
   },
 });
 
-// ── G: content-hash semantics untouched ────────────────────────────────
+// ── G: dataset-version binding ─────────────────────────────────────────
 
 cases.push({
-  label: 'G. Lecture content hash unchanged: same SQL, takes only a lecture id, identical with or without an agent',
+  label: 'G. Cache is bound to the active dataset version: lookups/writes use that id (not a content hash), identical with or without an agent',
   run: async () => {
     return withFakeDb([], async ({ statements }) => {
-      const direct = await computeLectureContentHash(LECTURE);
+      const direct = await getActiveDatasetVersionId(LECTURE);
       const noAgent = await lookupAnswerMemory(lookupParams());
       const withAgent = await lookupAnswerMemory(lookupParams(getEffectiveAnswerPromptVersion(NOVA)));
-      const hashSql = statements.find(s => s.kind === 'content-hash')!;
-      const expectedSql = "SELECT md5(COALESCE(string_agg(id::text || ':' || md5(chunk_text), '|' ORDER BY id), '')) AS hash FROM lecture_qna_chunks WHERE lecture_id = $1";
-      const pass = hashSql.text === expectedSql && computeLectureContentHash.length === 1
-        && JSON.stringify(hashSql.params) === JSON.stringify([LECTURE])
-        && direct === FAKE_CONTENT_HASH && noAgent.lectureContentHash === direct && withAgent.lectureContentHash === direct
-        && !/agent|instruction|profile/i.test(hashSql.text);
-      return { pass, detail: `arity=${computeLectureContentHash.length}, sqlUnchanged=${hashSql.text === expectedSql}` };
+      const versionSql = statements.find(s => s.kind === 'active-version')!;
+      const pass = getActiveDatasetVersionId.length === 1
+        && JSON.stringify(versionSql.params) === JSON.stringify([LECTURE])
+        && direct === FAKE_VERSION_ID && noAgent.datasetVersionId === direct && withAgent.datasetVersionId === direct
+        && !/agent|instruction|profile/i.test(versionSql.text)
+        && !statements.some(s => s.text.includes('string_agg'));
+      return { pass, detail: `arity=${getActiveDatasetVersionId.length}, version=${direct}, noPerRequestHashing=${!statements.some(s => s.text.includes('string_agg'))}` };
     });
   },
 });
@@ -289,7 +293,7 @@ cases.push({
     return withFakeDb([], async ({ rows, statements }) => {
       await writeAnswerMemory({
         studentId: STUDENT, lectureId: LECTURE, sourceChatHistoryId: 1, originalQuestion: QUESTION, retrievalQuery: QUESTION,
-        answer: 'GENERIC NEW', sourceChunkIds: [1], questionEmbedding: EMBEDDING, lectureContentHash: FAKE_CONTENT_HASH,
+        answer: 'GENERIC NEW', sourceChunkIds: [1], questionEmbedding: EMBEDDING, datasetVersionId: FAKE_VERSION_ID,
       });
       const r = await lookupAnswerMemory(legacyLookup);
       const upsert = statements.find(s => s.kind === 'upsert')!;

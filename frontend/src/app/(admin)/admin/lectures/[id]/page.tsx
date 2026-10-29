@@ -4,9 +4,9 @@ import Link from 'next/link';
 import { useQuery, useMutation } from '@apollo/client';
 import { GET_LECTURE, UPDATE_LECTURE_MUTATION } from '@/graphql/lecture.queries';
 import { GET_LECTURE_CHUNKS } from '@/graphql/admin.queries';
-import { datasetApi } from '@/lib/api';
 import { DBLecture } from '@/types';
 import { AdminPageHero } from '@/components/admin/AdminPageHero';
+import { DatasetManager } from '@/components/admin/DatasetManager';
 
 interface QnaChunk { id: number; topic: string | null; question: string; answer: string; startTime: string | null; endTime: string | null; keywords: string | null }
 
@@ -35,8 +35,6 @@ const STATUS_GRADIENT: Record<string, string> = {
 interface Props { params: { id: string } }
 
 export default function LectureDetailPage({ params }: Props) {
-  const fileRef = useRef<HTMLInputElement>(null);
-
   const { data, loading, refetch } = useQuery(GET_LECTURE, {
     variables: { id: params.id },
     fetchPolicy: 'network-only',
@@ -49,7 +47,7 @@ export default function LectureDetailPage({ params }: Props) {
   const [chunkPage,   setChunkPage]   = useState(1);
   const CHUNK_PAGE_SIZE = 10;
 
-  const { data: chunksData, loading: chunksLoading } = useQuery(GET_LECTURE_CHUNKS, {
+  const { data: chunksData, loading: chunksLoading, refetch: refetchChunks } = useQuery(GET_LECTURE_CHUNKS, {
     variables: { lectureId: parseInt(params.id, 10) },
     fetchPolicy: 'network-only',
     skip: !data?.lecture || data.lecture.status !== 'READY',
@@ -67,9 +65,6 @@ export default function LectureDetailPage({ params }: Props) {
   const [editForm,    setEditForm]    = useState({ title: '', description: '', youtubeUrl: '' });
   const [editError,   setEditError]   = useState('');
   const [savedNotif,  setSavedNotif]  = useState(false);
-  const [uploading,   setUploading]   = useState(false);
-  const [uploadMsg,   setUploadMsg]   = useState('');
-  const [uploadError, setUploadError] = useState('');
 
   // Track actual embedding rate across polls: { count, timestamp }
   const prevProgressRef = useRef<{ count: number; ts: number } | null>(null);
@@ -131,23 +126,6 @@ export default function LectureDetailPage({ params }: Props) {
     }
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!file.name.endsWith('.xlsx')) { setUploadError('Only .xlsx files are accepted.'); return; }
-    setUploading(true); setUploadMsg(''); setUploadError('');
-    try {
-      await datasetApi.upload(parseInt(params.id, 10), file);
-      setUploadMsg('Dataset uploaded! Processing started — status updates automatically.');
-      refetch();
-    } catch (err: unknown) {
-      setUploadError((err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? 'Upload failed.');
-    } finally {
-      setUploading(false);
-      if (fileRef.current) fileRef.current.value = '';
-    }
-  };
-
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -168,7 +146,6 @@ export default function LectureDetailPage({ params }: Props) {
 
   const s = STATUS_CONFIG[lecture.status] ?? STATUS_CONFIG.NO_DATASET;
   const isPolling = POLLING_STATUSES.has(lecture.status);
-  const canUpload = ['NO_DATASET', 'DATASET_UPLOADED', 'FAILED', 'READY'].includes(lecture.status);
 
   return (
     <div>
@@ -314,50 +291,13 @@ export default function LectureDetailPage({ params }: Props) {
           </div>
         );
 
+        // Upload, preview/confirm, build progress, export, versions and rollback.
         const uploadCard = (
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-            <div className="flex items-center gap-2.5 px-6 py-4 border-b border-slate-100 bg-slate-50/60">
-              <div className="w-7 h-7 rounded-lg bg-emerald-600 flex items-center justify-center">
-                <i className="fas fa-table text-white text-[17px]" />
-              </div>
-              <span className="text-[16px] font-semibold text-slate-700">Dataset Upload</span>
-            </div>
-            <div className="p-6">
-              <p className="text-[17px] text-slate-500 mb-4 leading-relaxed">
-                Upload the lecture Q&amp;A dataset to power the AI tutor.
-              </p>
-              {uploadMsg && (
-                <div className="flex items-start gap-2.5 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 mb-4 text-base text-emerald-800">
-                  <i className="fas fa-circle-check mt-0.5 shrink-0" /> {uploadMsg}
-                </div>
-              )}
-              {uploadError && (
-                <div className="flex items-start gap-2.5 bg-red-50 border border-red-200 rounded-xl px-4 py-3 mb-4 text-base text-red-700">
-                  <i className="fas fa-circle-exclamation mt-0.5 shrink-0" /> {uploadError}
-                </div>
-              )}
-              <input ref={fileRef} type="file" accept=".xlsx" className="hidden" onChange={handleFileUpload} />
-              <div className="flex items-center gap-4">
-                <button
-                  onClick={() => fileRef.current?.click()}
-                  disabled={uploading || !canUpload}
-                  className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 text-white rounded-xl text-[17px] font-semibold hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
-                >
-                  {uploading ? (
-                    <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Uploading…</>
-                  ) : (
-                    <><i className="fas fa-cloud-arrow-up" /> Upload Dataset (.xlsx)</>
-                  )}
-                </button>
-                {!canUpload && lecture.status !== 'READY' && (
-                  <p className="text-[17px] text-slate-400"><i className="fas fa-lock text-[17px] mr-1" /> Locked while processing</p>
-                )}
-                {lecture.status === 'READY' && (
-                  <p className="text-[17px] text-slate-400"><i className="fas fa-rotate-right text-[17px] mr-1" /> Re-upload to replace dataset</p>
-                )}
-              </div>
-            </div>
-          </div>
+          <DatasetManager
+            lectureId={parseInt(params.id, 10)}
+            lectureStatus={lecture.status}
+            onChanged={() => { void refetch(); void refetchChunks(); }}
+          />
         );
 
         if (showProgress) {
@@ -468,7 +408,7 @@ export default function LectureDetailPage({ params }: Props) {
         }
 
         return (
-          <div className="grid grid-cols-2 gap-5 mb-5">
+          <div className="flex flex-col gap-5 mb-5">
             {detailsCard}
             {uploadCard}
           </div>

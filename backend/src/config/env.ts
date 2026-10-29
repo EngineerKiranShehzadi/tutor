@@ -17,6 +17,12 @@ export const env = {
   PORT:          parseInt(optional('PORT', '5000'), 10),
   FRONTEND_URL:  optional('FRONTEND_URL', 'http://localhost:3000'),
 
+  // Dataset pipeline (dataset-version.service.ts). How long to wait before
+  // retrying a build that is paused because the embedding service is down.
+  DATASET: {
+    RETRY_DELAY_MS: parseInt(optional('DATASET_RETRY_DELAY_MS', '15000'), 10),
+  },
+
   DB: {
     HOST:     optional('DB_HOST', 'localhost'),
     PORT:     parseInt(optional('DB_PORT', '5432'), 10),
@@ -123,6 +129,24 @@ export const env = {
   HEALTH: {
     CACHE_TTL_MS:          parseInt(optional('HEALTH_CHECK_CACHE_TTL_MS', '60000'), 10),
     GEMINI_CHECK_ENABLED:  optional('HEALTH_GEMINI_CHECK_ENABLED', 'true') === 'true',
+  },
+
+  // ── Groq (TEMPORARY free-tier test provider; see llm/providers/groq-llm.provider.ts) ──
+  // Only used when a service's *_PROVIDER is set to 'groq'. Gemini stays the default everywhere.
+  // The limits below are CLIENT-SIDE ceilings kept under the free-tier numbers for openai/gpt-oss-120b
+  // (about 30 requests/min, 8,000 tokens/min, 200,000 tokens/day); Groq's own response headers tighten them further.
+  GROQ: {
+    API_KEY:            optional('GROQ_API_KEY', ''),
+    BASE_URL:           optional('GROQ_BASE_URL', 'https://api.groq.com/openai/v1'),
+    MAX_RPM:            parseInt(optional('GROQ_MAX_RPM', '20'), 10),
+    MAX_TPM:            parseInt(optional('GROQ_MAX_TPM', '7000'), 10),
+    // Hard stop for one process lifetime so a test run can never eat the whole daily allowance.
+    RUN_TOKEN_BUDGET:   parseInt(optional('GROQ_RUN_TOKEN_BUDGET', '120000'), 10),
+    // A retry-after longer than this is a daily/long limit: fail clearly instead of sleeping for hours.
+    MAX_WAIT_MS:        parseInt(optional('GROQ_MAX_WAIT_MS', '90000'), 10),
+    REASONING_EFFORT:   optional('GROQ_REASONING_EFFORT', 'low'),
+    // gpt-oss counts its reasoning inside max_completion_tokens: never ask for less than this floor.
+    MIN_COMPLETION_TOKENS: parseInt(optional('GROQ_MIN_COMPLETION_TOKENS', '1024'), 10),
   },
 
   // ── Provider-neutral LLM configuration ─────────────────────────

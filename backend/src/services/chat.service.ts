@@ -45,7 +45,7 @@ export const LECTURE_NOT_FOUND_MESSAGE = 'I could not find this information in t
 export interface AskLectureAgentDeps {
   runInputGuardrails?:     (question: string) => Promise<InputGuardrailResult>;
   generateEmbedding?:      (text: string, isQuery?: boolean) => Promise<number[]>;
-  searchChunks?:           (embedding: number[], lectureId: number, limit: number) => Promise<QnaChunk[]>;
+  searchChunks?:           (embedding: number[], lectureId: number, limit: number, datasetVersionId?: number) => Promise<QnaChunk[]>;
   rerankChunks?:           (question: string, candidates: QnaChunk[], topN?: number) => Promise<QnaChunk[]>;
   dedupeAndSelect?:        (rankedChunks: QnaChunk[], desiredCount?: number, minRerankScore?: number) => DedupeResult;
   reorderForContext?:      (chunks: QnaChunk[]) => QnaChunk[];
@@ -59,7 +59,9 @@ export interface AskLectureAgentDeps {
   decomposeQuery?:         (effectiveQuery: string) => Promise<SubqueryDecompositionResult>;
   runAdaptiveRetrieval?:   (params: AdaptiveRetrievalParams, deps: SubqueryRetrievalDeps) => Promise<AdaptiveRetrievalResult>;
   runOutputGuardrail?:     (params: OutputGuardrailParams) => Promise<OutputGuardrailResult>;
-  getAllLectureChunks?:    (lectureId: number) => Promise<QnaChunk[]>;
+  getAllLectureChunks?:    (lectureId: number, datasetVersionId?: number) => Promise<QnaChunk[]>;
+  // Test-only: pin the request to this dataset version instead of resolving the active one.
+  datasetVersionId?:       number | null;
   generateLectureSummary?: (chunks: QnaChunk[], lectureTitle: string, deps?: SummarizeDeps) => Promise<string | null>;
   lookupAnswerMemory?:     (params: MemoryLookupParams) => Promise<MemoryLookupResult>;
   writeAnswerMemory?:      (params: WriteMemoryParams) => Promise<void>;
@@ -420,7 +422,16 @@ export const askLectureAgent = async (
     // 3. Lazy imports — skipped for any dependency the caller already
     // injected (tests only; production always falls through to these).
     const generateEmbedding     = deps.generateEmbedding     ?? (await import('./embedding.service')).generateEmbedding;
-    const searchChunks          = deps.searchChunks          ?? (await import('./vector-search.service')).searchChunks;
+    // Pin this request to ONE dataset version: every retrieval call below (the
+    // direct search, each decomposed sub-query, adaptive retrieval, the summary
+    // route) and the answer-memory lookup/write use the same version, so a
+    // dataset published while the request is running cannot mix two versions.
+    const pinnedVersionId = deps.datasetVersionId !== undefined
+      ? deps.datasetVersionId
+      : await (await import('./rag-answer-memory.service')).getActiveDatasetVersionId(lectureId);
+    const searchChunksBase      = deps.searchChunks          ?? (await import('./vector-search.service')).searchChunks;
+    const searchChunks          = (embedding: number[], lecId: number, limit: number) =>
+      searchChunksBase(embedding, lecId, limit, pinnedVersionId ?? undefined);
     const rerankChunksFn        = deps.rerankChunks          ?? (await import('./rerank.service')).rerankChunks;
     const dedupeAndSelect       = deps.dedupeAndSelect       ?? (await import('./rerank.service')).dedupeAndSelect;
     const reorderForContext     = deps.reorderForContext     ?? (await import('./rerank.service')).reorderForContext;
@@ -474,7 +485,8 @@ export const askLectureAgent = async (
     // lecture, not just the chunks most similar to the word "summary".
     if (route === 'LECTURE_SUMMARY') {
       const summaryModule = await import('./lecture-summary.service');
-      const getAllLectureChunksFn    = deps.getAllLectureChunks    ?? summaryModule.getAllLectureChunks;
+      const getAllLectureChunksBase  = deps.getAllLectureChunks    ?? summaryModule.getAllLectureChunks;
+      const getAllLectureChunksFn    = (lecId: number) => getAllLectureChunksBase(lecId, pinnedVersionId ?? undefined);
       const generateLectureSummaryFn = deps.generateLectureSummary ?? summaryModule.generateLectureSummary;
       const summaryUnavailable       = summaryModule.LECTURE_SUMMARY_UNAVAILABLE_MESSAGE;
 
@@ -549,7 +561,7 @@ export const askLectureAgent = async (
     // reuses the embedding this generates below, so retrieval never embeds
     // the same text twice.
     let precomputedEmbedding: number[] | null = null;
-    let memoryLectureContentHash: string | null = null;
+    let memoryDatasetVersionId: number | null = null;
     let memoryResultAttr = 'NOT_ATTEMPTED';
 
     if (route === 'FACT_QUESTION') {
@@ -557,7 +569,7 @@ export const askLectureAgent = async (
       const lookupAnswerMemory = deps.lookupAnswerMemory ?? (await import('./rag-answer-memory.service')).lookupAnswerMemory;
       const memoryResult = await trace.span(
         'exact-memory-lookup', // also covers the optional semantic sub-lookup when enabled
-        () => lookupAnswerMemory({ studentId, lectureId, question, generateEmbedding, answerPromptVersion }),
+        () => lookupAnswerMemory({ studentId, lectureId, question, generateEmbedding, answerPromptVersion, datasetVersionId: pinnedVersionId }),
         r => ({
           memoryResult: r.lookupFailed ? 'LOOKUP_FAILED' : r.hit ? (r.hit.matchType === 'EXACT' ? 'EXACT_HIT' : 'SEMANTIC_HIT') : 'MISS',
           semanticAttempted: env.RAG_MEMORY.SEMANTIC_ENABLED,
@@ -566,7 +578,7 @@ export const askLectureAgent = async (
           similarity: r.hit?.similarity ?? null,
         })
       );
-      memoryLectureContentHash = memoryResult.lectureContentHash;
+      memoryDatasetVersionId = memoryResult.datasetVersionId;
       memoryResultAttr = memoryResult.lookupFailed ? 'LOOKUP_FAILED' : memoryResult.hit ? (memoryResult.hit.matchType === 'EXACT' ? 'EXACT_HIT' : 'SEMANTIC_HIT') : 'MISS';
 
       if (memoryResult.hit) {
@@ -908,7 +920,8 @@ export const askLectureAgent = async (
       try {
         const memoryService = await import('./rag-answer-memory.service');
         const writeAnswerMemory = deps.writeAnswerMemory ?? memoryService.writeAnswerMemory;
-        const lectureContentHash = memoryLectureContentHash ?? await memoryService.computeLectureContentHash(lectureId);
+        const datasetVersionId = memoryDatasetVersionId ?? await memoryService.getActiveDatasetVersionId(lectureId);
+        if (datasetVersionId === null) throw new Error('lecture has no active dataset version');
         // A decomposed query never computes a single embedding for the
         // parent/effective question (each subquery gets its own — see
         // decomposed-retrieval.service.ts, and the "do not distort the
@@ -928,7 +941,7 @@ export const askLectureAgent = async (
             answer,
             sourceChunkIds: chunkIds,
             questionEmbedding: memoryEmbedding,
-            lectureContentHash,
+            datasetVersionId,
             answerPromptVersion,
           }),
           () => ({ writeAttempted: true, sourceChunkCount: chunkIds.length })

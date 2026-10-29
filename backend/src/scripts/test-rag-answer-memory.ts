@@ -25,7 +25,7 @@ import { query } from '../config/database';
 import { QnaChunk } from '../types';
 import {
   normalizeQuery,
-  computeLectureContentHash,
+  getActiveDatasetVersionId,
   lookupAnswerMemory,
   writeAnswerMemory,
 } from '../services/rag-answer-memory.service';
@@ -151,7 +151,11 @@ async function runServiceLevelChecks(): Promise<Record<string, CaseResult>> {
   const studentId = userRows[0].id;
   const results: Record<string, CaseResult> = {};
 
-  const { rows: realChunkRows } = await query<{ id: number }>(`SELECT id FROM lecture_qna_chunks WHERE lecture_id = $1 LIMIT 1`, [lectureId]);
+  // A chunk that belongs to the lecture's ACTIVE dataset version (memory entries
+  // can only reference chunks of the version they are filed under).
+  const { rows: realChunkRows } = await query<{ id: number }>(
+    `SELECT d.chunk_id AS id FROM dataset_version_chunks d JOIN lectures l ON l.active_version_id = d.version_id
+     WHERE l.id = $1 LIMIT 1`, [lectureId]);
   if (realChunkRows.length === 0) {
     const skip: CaseResult = { pass: false, skip: true, detail: 'SKIPPED — lecture has no chunks to reference' };
     return Object.fromEntries(KEYS.map(k => [k, skip]));
@@ -174,17 +178,29 @@ async function runServiceLevelChecks(): Promise<Record<string, CaseResult>> {
     return rows[0].id;
   });
 
-  const realHash = await computeLectureContentHash(lectureId);
+  const realVersionId = await getActiveDatasetVersionId(lectureId);
+  if (realVersionId === null) {
+    const skip: CaseResult = { pass: false, skip: true, detail: 'SKIPPED — lecture has no active dataset version' };
+    return Object.fromEntries(KEYS.map(k => [k, skip]));
+  }
+  // A second, never-published version of the same lecture, to prove an answer cached
+  // under another version is not served.
+  const { rows: otherVer } = await query<{ id: number }>(
+    `INSERT INTO dataset_versions (lecture_id, version_no, status, embedding_model_version, chunking_config_version)
+     VALUES ($1, (SELECT COALESCE(MAX(version_no),0)+1 FROM dataset_versions WHERE lecture_id = $1), 'FAILED', 'test', 'test') RETURNING id`,
+    [lectureId]
+  );
+  const otherVersionId = otherVer[0].id;
   const insertedIds: number[] = [];
 
   const insertRow = async (normalizedQuery: string, overrides: Partial<{
-    student_id: string; lecture_id: number; lecture_content_hash: string;
+    student_id: string; lecture_id: number; dataset_version_id: number;
     embedding_model_version: string; answer_prompt_version: string;
     source_chat_history_id: number; source_chunk_ids: number[]; cache_eligible: boolean;
     question_embedding: number[];
   }> = {}): Promise<number> => {
     const v = {
-      student_id: studentId, lecture_id: lectureId, lecture_content_hash: realHash,
+      student_id: studentId, lecture_id: lectureId, dataset_version_id: realVersionId,
       embedding_model_version: EMBEDDING_MODEL_VERSION, answer_prompt_version: ANSWER_PROMPT_VERSION,
       source_chat_history_id: sourceChatHistoryId, source_chunk_ids: [999999], cache_eligible: true,
       question_embedding: makeVector(1),
@@ -193,13 +209,13 @@ async function runServiceLevelChecks(): Promise<Record<string, CaseResult>> {
     const { rows } = await query<{ id: number }>(
       `INSERT INTO rag_answer_memory (
          student_id, lecture_id, source_chat_history_id, original_question, retrieval_query,
-         normalized_query, question_embedding, answer, source_chunk_ids, lecture_content_hash,
+         normalized_query, question_embedding, answer, source_chunk_ids, dataset_version_id,
          embedding_model_version, answer_prompt_version, cache_eligible
        ) VALUES ($1,$2,$3,$4,$4,$5,$6::vector,$7,$8,$9,$10,$11,$12) RETURNING id`,
       [
         v.student_id, v.lecture_id, v.source_chat_history_id, `${TAG} ${normalizedQuery}`,
         normalizedQuery, `[${v.question_embedding.join(',')}]`, `fixture answer for ${normalizedQuery}`,
-        v.source_chunk_ids, v.lecture_content_hash, v.embedding_model_version, v.answer_prompt_version, v.cache_eligible,
+        v.source_chunk_ids, v.dataset_version_id, v.embedding_model_version, v.answer_prompt_version, v.cache_eligible,
       ]
     );
     insertedIds.push(rows[0].id);
@@ -223,7 +239,7 @@ async function runServiceLevelChecks(): Promise<Record<string, CaseResult>> {
     }
     {
       const q = `${TAG.toLowerCase()} version isolation question`;
-      await insertRow(q, { lecture_content_hash: 'STALE_FAKE_HASH', question_embedding: makeVector(201) });
+      await insertRow(q, { dataset_version_id: otherVersionId, question_embedding: makeVector(201) });
       const r = await lookupAnswerMemory({ studentId, lectureId, question: q, generateEmbedding: fakeEmbed });
       results['12'] = { pass: r.hit === null, detail: `hit=${JSON.stringify(r.hit)}` };
     }
@@ -246,7 +262,7 @@ async function runServiceLevelChecks(): Promise<Record<string, CaseResult>> {
       await writeAnswerMemory({
         studentId, lectureId, sourceChatHistoryId,
         originalQuestion: `${TAG} no chunk ids question`, retrievalQuery: `${TAG} no chunk ids question`,
-        answer: 'should not be stored', sourceChunkIds: [], questionEmbedding: makeVector(2), lectureContentHash: realHash,
+        answer: 'should not be stored', sourceChunkIds: [], questionEmbedding: makeVector(2), datasetVersionId: realVersionId,
       });
       const after = (await query<{ c: string }>(`SELECT COUNT(*) c FROM rag_answer_memory`)).rows[0].c;
       results['19'] = { pass: before === after, detail: `count before=${before}, after=${after}` };
@@ -353,7 +369,7 @@ async function runServiceLevelChecks(): Promise<Record<string, CaseResult>> {
       const before = (await query<{ c: string }>(`SELECT COUNT(*) c FROM rag_answer_memory WHERE normalized_query = $1`, [normalizeQuery(q)])).rows[0].c;
       await writeAnswerMemory({
         studentId, lectureId, sourceChatHistoryId, originalQuestion: q, retrievalQuery: q,
-        answer: 'a real grounded answer', sourceChunkIds: [1], questionEmbedding: makeVector(5), lectureContentHash: realHash,
+        answer: 'a real grounded answer', sourceChunkIds: [realChunkId], questionEmbedding: makeVector(5), datasetVersionId: realVersionId,
       });
       const after = (await query<{ c: string }>(`SELECT COUNT(*) c FROM rag_answer_memory WHERE normalized_query = $1`, [normalizeQuery(q)])).rows[0].c;
       results['34'] = { pass: before === '0' && after === '1', detail: `before=${before}, after=${after}` };
@@ -364,11 +380,11 @@ async function runServiceLevelChecks(): Promise<Record<string, CaseResult>> {
       const q = `${TAG} duplicate write question`;
       await writeAnswerMemory({
         studentId, lectureId, sourceChatHistoryId, originalQuestion: q, retrievalQuery: q,
-        answer: 'first answer', sourceChunkIds: [1], questionEmbedding: makeVector(6), lectureContentHash: realHash,
+        answer: 'first answer', sourceChunkIds: [realChunkId], questionEmbedding: makeVector(6), datasetVersionId: realVersionId,
       });
       await writeAnswerMemory({
         studentId, lectureId, sourceChatHistoryId, originalQuestion: q, retrievalQuery: q,
-        answer: 'second answer (updated)', sourceChunkIds: [1, 2], questionEmbedding: makeVector(6), lectureContentHash: realHash,
+        answer: 'second answer (updated)', sourceChunkIds: [realChunkId], questionEmbedding: makeVector(6), datasetVersionId: realVersionId,
       });
       const { rows } = await query<{ answer: string; c: string }>(
         `SELECT answer, (SELECT COUNT(*) FROM rag_answer_memory WHERE normalized_query = $1)::text AS c
@@ -395,7 +411,7 @@ async function runServiceLevelChecks(): Promise<Record<string, CaseResult>> {
         await writeAnswerMemory({
           studentId: 'not-a-valid-uuid', lectureId, sourceChatHistoryId,
           originalQuestion: `${TAG} write failure question`, retrievalQuery: `${TAG} write failure question`,
-          answer: 'x', sourceChunkIds: [1], questionEmbedding: makeVector(7), lectureContentHash: realHash,
+          answer: 'x', sourceChunkIds: [1], questionEmbedding: makeVector(7), datasetVersionId: realVersionId,
         });
       } catch { threw = true; }
       results['37a'] = { pass: !threw };
@@ -408,6 +424,7 @@ async function runServiceLevelChecks(): Promise<Record<string, CaseResult>> {
     }
     await query(`DELETE FROM rag_answer_memory WHERE lecture_id = $1 AND normalized_query LIKE $2`, [lectureId, `${TAG.toLowerCase()}%`]).catch(() => {});
     await query(`DELETE FROM chat_history WHERE question LIKE $1`, [`${TAG}%`]).catch(() => {});
+    await query(`DELETE FROM dataset_versions WHERE id = $1`, [otherVersionId]).catch(() => {});
   }
 }
 
@@ -425,7 +442,11 @@ async function runIntegrationChecks(): Promise<Record<string, CaseResult>> {
   const lectureId = lectureRows[0].id;
   const studentId = userRows[0].id;
 
-  const { rows: realChunkRows } = await query<{ id: number }>(`SELECT id FROM lecture_qna_chunks WHERE lecture_id = $1 LIMIT 1`, [lectureId]);
+  // A chunk that belongs to the lecture's ACTIVE dataset version (memory entries
+  // can only reference chunks of the version they are filed under).
+  const { rows: realChunkRows } = await query<{ id: number }>(
+    `SELECT d.chunk_id AS id FROM dataset_version_chunks d JOIN lectures l ON l.active_version_id = d.version_id
+     WHERE l.id = $1 LIMIT 1`, [lectureId]);
   if (realChunkRows.length === 0) {
     const skip: CaseResult = { pass: false, skip: true, detail: 'SKIPPED — lecture has no chunks to reference' };
     return Object.fromEntries(KEYS.map(k => [k, skip]));

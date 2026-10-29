@@ -1,12 +1,11 @@
 import * as XLSX from 'xlsx';
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
-import { query } from '../config/database';
-import { generateEmbedding } from './embedding.service';
-import { updateLectureStatus, updateLectureProgress } from './lecture.service';
 import { logger } from '../utils/logger';
 import { AppError } from '../middleware/errorHandler';
+import type { FileRow } from './dataset-plan';
 
-interface RawRow {
+export interface RawRow {
+  qa_id?: string;
   topic?: string;
   question?: string;
   answer?: string;
@@ -64,6 +63,13 @@ export const SPLIT_SEPARATORS = ['\n\n', '\n', '. ', ' ', ''];
 // and DB on upload — an ingestion-side resource-exhaustion risk, not just a
 // quality one. Truncation here is logged, never silent.
 export const MAX_PIECES_PER_ROW = 20;
+
+// Identifies the chunking settings. Stored on every dataset version so a
+// version built under different settings is distinguishable; a settings change
+// also changes chunk_text (hence content_hash) of any row it affects, which is
+// what triggers re-embedding of exactly those rows.
+export const CHUNKING_CONFIG_VERSION =
+  `rcts:${SPLIT_THRESHOLD_CHARS}/${SPLIT_CHUNK_SIZE}/${SPLIT_CHUNK_OVERLAP}/${MAX_PIECES_PER_ROW}`;
 
 const splitter = new RecursiveCharacterTextSplitter({
   chunkSize: SPLIT_CHUNK_SIZE,
@@ -130,6 +136,7 @@ function normaliseRow(r: Record<string, unknown>): RawRow {
   if (!('answer'     in n) && 'answers'          in n) n['answer']     = n['answers'];
   if (!('llm_name'   in n) && 'model_name'       in n) n['llm_name']   = n['model_name'];
   if (!('start_time' in n) && 'source_reference' in n) n['start_time'] = n['source_reference'];
+  if (!('qa_id'      in n) && 'qaid'             in n) n['qa_id']      = n['qaid'];
   return n as RawRow;
 }
 
@@ -157,107 +164,47 @@ export function parseExcel(buffer: Buffer): RawRow[] {
   return rows;
 }
 
-// Full pipeline: parse → chunk → embed → store
-export async function processDataset(lectureId: number, buffer: Buffer): Promise<void> {
-  logger.info(`[DATASET] 🚀 Starting processing for lecture #${lectureId}`);
-
-  let rows: RawRow[];
-  try {
-    rows = parseExcel(buffer);
-    logger.info(`[DATASET] ✅ Parsed ${rows.length} rows from Excel`);
-  } catch (err) {
-    await updateLectureStatus(lectureId, 'FAILED', (err as Error).message);
-    throw err;
-  }
-
-  // Validate row content
-  const validRows: RawRow[] = [];
+// Validates the parsed rows and converts them to the normalised shape the
+// dataset planner works on. Rows with an empty question or answer are skipped
+// (logged), exactly as before. `sheetRow` is the 1-based spreadsheet row
+// (header = row 1) so error messages can point at the right line.
+export function toFileRows(rows: RawRow[]): FileRow[] {
+  const out: FileRow[] = [];
+  const clean = (v: unknown): string | null => String(v ?? '').trim() || null;
   rows.forEach((row, i) => {
     const q = String(row.question ?? '').trim();
     const a = String(row.answer   ?? '').trim();
     if (!q) { logger.warn(`[DATASET] ⚠️  Skipping row ${i + 2}: empty question`); return; }
     if (!a) { logger.warn(`[DATASET] ⚠️  Skipping row ${i + 2}: empty answer`);   return; }
-    validRows.push({ ...row, question: q, answer: a });
+    out.push({
+      qaId:       clean(row.qa_id),
+      sheetRow:   i + 2,
+      topic:      clean(row.topic),
+      question:   q,
+      answer:     a,
+      start_time: clean(row.start_time),
+      end_time:   clean(row.end_time),
+      keywords:   clean(row.keywords),
+      llm_name:   clean(row.llm_name),
+    });
   });
+  return out;
+}
 
-  if (validRows.length === 0) {
-    await updateLectureStatus(lectureId, 'FAILED', 'All rows had empty question or answer');
-    throw new AppError('No valid rows found in the dataset', 400);
+// Full pipeline: parse → plan against the active dataset → build a new
+// version → embed only what is missing → validate → publish. Kept as a thin
+// wrapper so existing callers (seed-dataset) keep working; the real logic is
+// in dataset-version.service.ts.
+export async function processDataset(
+  lectureId: number,
+  buffer: Buffer,
+  options: { mode?: 'MERGE' | 'REPLACE'; confirmRemovals?: number; filename?: string } = {}
+): Promise<void> {
+  const { prepareDatasetVersion, finishDatasetVersion } = await import('./dataset-version.service');
+  const prepared = await prepareDatasetVersion(lectureId, buffer, options);
+  if (prepared.kind !== 'CREATED') return; // no changes (or dry run): nothing to embed
+  const result = await finishDatasetVersion(prepared.versionId);
+  if (result.outcome === 'FAILED') {
+    throw new AppError(`Dataset update failed: ${result.error ?? 'unknown error'}`, 500);
   }
-
-  // PROCESSING: delete old chunks, insert new ones without embeddings
-  await updateLectureStatus(lectureId, 'PROCESSING');
-  await query('DELETE FROM lecture_qna_chunks WHERE lecture_id = $1', [lectureId]);
-  logger.info(`[DATASET] 🗑️  Cleared old chunks for lecture #${lectureId}`);
-
-  await updateLectureProgress(lectureId, 0, validRows.length);
-  // Each source row can now yield more than one DB row (chunk_index 0..N-1)
-  // when its answer was long enough to split — chunkIds tracks every one of
-  // them, in insertion order, alongside the exact chunkText each was built
-  // from, so the embedding pass below embeds precisely what was stored.
-  const chunkIds: number[] = [];
-  const chunkTexts: string[] = [];
-  const total = validRows.length;
-  // Report progress every 10% of the dataset, whatever its size.
-  const progressStep = Math.max(1, Math.ceil(total / 10));
-  for (let i = 0; i < total; i++) {
-    const row = validRows[i];
-    const pieces = await buildChunkPieces(row);
-    for (const piece of pieces) {
-      const { rows: inserted } = await query<{ id: number }>(
-        `INSERT INTO lecture_qna_chunks
-           (lecture_id, topic, question, answer, chunk_text, chunk_index, start_time, end_time, keywords, llm_name)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-         RETURNING id`,
-        [
-          lectureId,
-          String(row.topic      ?? '').trim() || null,
-          String(row.question   ?? '').trim(),
-          String(row.answer     ?? '').trim(),
-          piece.chunkText,
-          piece.chunkIndex,
-          String(row.start_time ?? '').trim() || null,
-          String(row.end_time   ?? '').trim() || null,
-          String(row.keywords   ?? '').trim() || null,
-          String(row.llm_name   ?? '').trim() || null,
-        ]
-      );
-      chunkIds.push(inserted[0].id);
-      chunkTexts.push(piece.chunkText);
-    }
-    if ((i + 1) % progressStep === 0 || i + 1 === total) {
-      logger.info(`[DATASET] 📥 Inserting chunks: ${i + 1}/${total} rows (${chunkIds.length} chunk(s) so far)`);
-      await updateLectureProgress(lectureId, i + 1);
-    }
-  }
-  logger.info(`[DATASET] ✅ Inserted ${chunkIds.length} chunk(s) from ${total} row(s) for lecture #${lectureId}`);
-
-  // EMBEDDING: generate and store embeddings, one per chunk (not per row)
-  await updateLectureStatus(lectureId, 'EMBEDDING');
-  await updateLectureProgress(lectureId, 0, chunkIds.length);
-
-  let embeddedCount = 0;
-  for (let i = 0; i < chunkIds.length; i++) {
-    try {
-      const embedding = await generateEmbedding(chunkTexts[i]);
-      const vectorLiteral = `[${embedding.join(',')}]`;
-      await query(
-        'UPDATE lecture_qna_chunks SET local_embedding = $1::vector WHERE id = $2',
-        [vectorLiteral, chunkIds[i]]
-      );
-      embeddedCount++;
-      await updateLectureProgress(lectureId, embeddedCount);
-      logger.info(`[DATASET] Embedded chunk ${embeddedCount}/${chunkIds.length} (id=${chunkIds[i]})`);
-    } catch (err) {
-      logger.error(`[DATASET] ❌ Failed to embed chunk ${i + 1} (id=${chunkIds[i]})`, err);
-    }
-  }
-
-  if (embeddedCount === 0) {
-    await updateLectureStatus(lectureId, 'FAILED', 'All embeddings failed — is the embedding server running? python scripts/embedding_server.py');
-    throw new AppError('Embedding generation failed for all chunks', 500);
-  }
-
-  await updateLectureStatus(lectureId, 'READY');
-  logger.info(`[DATASET] 🎉 Lecture #${lectureId} is READY — ${embeddedCount}/${chunkIds.length} chunks embedded`);
 }

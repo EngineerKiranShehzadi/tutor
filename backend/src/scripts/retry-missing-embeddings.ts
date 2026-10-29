@@ -15,7 +15,20 @@ async function main() {
     process.exit(1);
   }
 
-  // Find chunks that are missing embeddings
+  // A lecture with a dataset build in flight is finished by the versioned
+  // pipeline (embeds only what's missing, validates, then publishes it).
+  const { rows: inflight } = await query<{ id: number }>(
+    `SELECT id FROM dataset_versions WHERE lecture_id = $1 AND status IN ('BUILDING','READY_TO_ACTIVATE') ORDER BY id DESC LIMIT 1`,
+    [lectureId]
+  );
+  if (inflight[0]) {
+    const { finishDatasetVersion } = await import('../services/dataset-version.service');
+    const result = await finishDatasetVersion(inflight[0].id);
+    logger.info(`[RETRY] Version id=${inflight[0].id}: ${result.outcome}${result.error ? ' — ' + result.error : ''}`);
+    process.exit(result.outcome === 'ACTIVATED' ? 0 : 1);
+  }
+
+  // Legacy path — find chunks that are missing embeddings
   // local_embedding (1024 dims, BAAI/bge-large-en-v1.5) is the column vector
   // search actually reads. The older `embedding` column (3072 dims, Gemini) is
   // unused — targeting it here meant this script matched every row, generated

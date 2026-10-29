@@ -9,6 +9,17 @@ export const LOCAL_EMBED_URL = process.env.EMBEDDING_SERVER_URL ?? 'http://local
 // model or output dimensionality changes.
 export const EMBEDDING_MODEL_VERSION = 'bge-large-en-v1.5:1024';
 
+// Thrown when the embedding server cannot be reached or reports itself
+// unavailable (502/503/504). Callers that must survive an outage (the dataset
+// pipeline) catch this class to tell "the service is down — wait and retry"
+// apart from "this particular text cannot be embedded".
+export class EmbeddingUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'EmbeddingUnavailableError';
+  }
+}
+
 // Calls the local Python embedding server (BAAI/bge-large-en-v1.5, 1024 dims).
 // isQuery must be true for student questions — BGE prepends a retrieval
 // instruction to queries but not to indexed passages.
@@ -23,7 +34,7 @@ export const generateEmbedding = async (text: string, isQuery = false): Promise<
       signal: AbortSignal.timeout(30_000),
     });
   } catch (err) {
-    throw new Error(
+    throw new EmbeddingUnavailableError(
       `Local embedding server not reachable at ${LOCAL_EMBED_URL}. ` +
       `Start it with: python scripts/embedding_server.py`
     );
@@ -31,6 +42,9 @@ export const generateEmbedding = async (text: string, isQuery = false): Promise<
 
   if (!res.ok) {
     const body = await res.text().catch(() => '');
+    if (res.status === 502 || res.status === 503 || res.status === 504) {
+      throw new EmbeddingUnavailableError(`Embedding server unavailable (${res.status}): ${body}`);
+    }
     throw new Error(`Embedding server error ${res.status}: ${body}`);
   }
 

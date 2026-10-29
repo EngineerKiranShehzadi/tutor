@@ -88,7 +88,11 @@ export const getLectureChunks = async (lectureId: number) => {
     start_time: string | null; end_time: string | null; keywords: string | null;
   }>(
     `SELECT id, topic, question, answer, start_time, end_time, keywords
-     FROM lecture_qna_chunks WHERE lecture_id = $1 ORDER BY id`,
+     FROM lecture_qna_chunks
+     WHERE lecture_id = $1
+       AND id IN (SELECT chunk_id FROM dataset_version_chunks
+                  WHERE version_id = (SELECT active_version_id FROM lectures WHERE id = $1))
+     ORDER BY id`,
     [lectureId]
   );
   logger.info(`[ANALYTICS] lectureChunks: ${rows.length} chunk(s) for lecture #${lectureId}`);
@@ -114,7 +118,8 @@ export const getLectureAgentDetails = async () => {
             l.created_at, l.updated_at,
             (SELECT p.is_active FROM lecture_agent_profiles p WHERE p.lecture_id = l.id) AS profile_is_active
      FROM lectures l
-     LEFT JOIN lecture_qna_chunks c ON c.lecture_id = l.id
+     LEFT JOIN dataset_version_chunks d ON d.version_id = l.active_version_id
+     LEFT JOIN lecture_qna_chunks c ON c.id = d.chunk_id
      GROUP BY l.id ORDER BY l.created_at DESC`
   );
   return rows.map(r => ({
@@ -269,16 +274,18 @@ export const getContentGaps = async () => {
     lecture_id: number; topic: string | null; question: string; keywords: string | null;
   }>(
     `SELECT lecture_id, topic, question, keywords
-     FROM lecture_qna_chunks
-     WHERE lecture_id = ANY($1::int[])`,
+     FROM lecture_qna_chunks c
+     WHERE lecture_id = ANY($1::int[])
+       AND c.id IN (SELECT d.chunk_id FROM dataset_version_chunks d JOIN lectures l ON l.active_version_id = d.version_id WHERE l.id = c.lecture_id)`,
     [lectureIds]
   );
 
   // Get chunk counts per lecture
   const { rows: countRows } = await query<{ lecture_id: number; count: string }>(
     `SELECT lecture_id, COUNT(*) AS count
-     FROM lecture_qna_chunks
+     FROM lecture_qna_chunks c
      WHERE lecture_id = ANY($1::int[])
+       AND c.id IN (SELECT d.chunk_id FROM dataset_version_chunks d JOIN lectures l ON l.active_version_id = d.version_id WHERE l.id = c.lecture_id)
      GROUP BY lecture_id`,
     [lectureIds]
   );

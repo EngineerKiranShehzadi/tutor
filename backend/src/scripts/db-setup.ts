@@ -1,4 +1,4 @@
-import { readFileSync } from 'fs';
+import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import pool from '../config/database';
 
@@ -21,6 +21,14 @@ const run = async () => {
     } else {
       throw err;
     }
+  }
+
+  // Numbered migrations (all idempotent), in order — includes dataset
+  // versioning (006) and its answer-memory binding (007).
+  const migrationsDir = join(__dirname, '../db/migrations');
+  for (const file of readdirSync(migrationsDir).filter(f => /^\d+_.*\.sql$/.test(f)).sort()) {
+    console.log(`Applying ${file}...`);
+    await pool.query(readFileSync(join(migrationsDir, file), 'utf8'));
   }
 
   console.log('✅ Database setup complete.');
