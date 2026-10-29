@@ -191,7 +191,7 @@ export function ForgotPasswordFlow({ onBack }: Props) {
         </button>
         <h2 className="text-xl font-bold mb-1 text-[var(--text)]">Enter OTP</h2>
         <p className="text-sm text-[var(--muted)] mb-6">
-          We sent a 6-digit code to <strong>{email}</strong>. Valid for 5 minutes.
+          We sent a 6-digit code to <strong>{email}</strong>. Valid for 60 seconds.
         </p>
         <form onSubmit={handleOtpSubmit} className="flex flex-col gap-5">
           {/* 5 digit inputs */}

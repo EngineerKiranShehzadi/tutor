@@ -68,7 +68,7 @@ const emailHtml = (userName: string, heading: string, subtext: string, otp: stri
       <div class="otp-box">
         <div class="otp-label">Your Verification Code</div>
         <div class="otp-code">${otp.split('').join(' ')}</div>
-        <div class="expire-badge">⏱ Expires in 5 minutes</div>
+        <div class="expire-badge">⏱ Expires in 60 seconds</div>
       </div>
       <p class="note">${note}</p>
     </div>
@@ -90,7 +90,7 @@ export const sendPasswordResetOtp = async (
     from:    FROM,
     to,
     subject: 'Password Reset OTP — AskAITutor',
-    text:    `Your AskAITutor password reset OTP is: ${otp}. It expires in 5 minutes.`,
+    text:    `Your AskAITutor password reset OTP is: ${otp}. It expires in 60 seconds.`,
     html: emailHtml(
       userName,
       'Password Reset Request',
@@ -113,7 +113,7 @@ export const sendSignupVerificationOtp = async (
     from:    FROM,
     to,
     subject: 'Verify your AskAITutor account',
-    text:    `Your AskAITutor email verification code is: ${otp}. It expires in 5 minutes.`,
+    text:    `Your AskAITutor email verification code is: ${otp}. It expires in 60 seconds.`,
     html: emailHtml(
       userName,
       'Email Verification',

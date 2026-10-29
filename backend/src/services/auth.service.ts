@@ -170,7 +170,7 @@ const issuePasswordResetOtp = async (email: string): Promise<void> => {
   // 6-digit OTP via cryptographically secure random (NIST SP 800-63B: minimum 6 digits)
   const otp = crypto.randomInt(100000, 1000000).toString();
   const codeHash = await bcrypt.hash(otp, 12);
-  const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes (NIST SP 800-63B: max 10 min)
+  const expiresAt = new Date(Date.now() + 60 * 1000); // 60 seconds
 
   // Invalidate all previous unused tokens for this user
   await query(
@@ -315,7 +315,7 @@ export const resetPasswordWithOtp = async (
 const issueEmailVerificationOtp = async (userId: string): Promise<string> => {
   const otp = crypto.randomInt(100000, 1000000).toString();
   const codeHash = await bcrypt.hash(otp, 12);
-  const expiresAt = new Date(Date.now() + 5 * 60_000); // 5 minutes (NIST SP 800-63B: max 10 min)
+  const expiresAt = new Date(Date.now() + 60_000); // 60 seconds
 
   // Invalidate old unused tokens
   await query(

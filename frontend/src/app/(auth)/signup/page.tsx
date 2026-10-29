@@ -42,7 +42,7 @@ const extractMessage = (err: unknown): string => {
 
 export default function SignupPage() {
   const router = useRouter();
-  const { user, isLoading, setUser } = useAuth();
+  const { user, isLoading } = useAuth();
   const [step, setStep] = useState<Step>('form');
   const [pendingEmail, setPendingEmail] = useState('');
   const [signupMessage, setSignupMessage] = useState('');
@@ -121,15 +121,8 @@ export default function SignupPage() {
     const code = digits.join('');
     if (code.length !== 6) { setOtpError('Enter the complete 6-digit code'); return; }
     try {
-      const result = await verifyOtp(pendingEmail, code);
-      localStorage.setItem('accessToken', result.accessToken);
-      // Update the shared auth state too, not just localStorage. AuthProvider
-      // calls getMe only on its first mount, so without this a client-side push
-      // to /courses reaches the dashboard guard with `user` still null and gets
-      // bounced to /login — forcing a brand-new student to sign in again
-      // immediately after verifying. The login page already does this.
-      setUser(result.user);
-      router.push('/courses');
+      await verifyOtp(pendingEmail, code);
+      router.push('/login');
     } catch (err) {
       setOtpError(extractMessage(err));
       setDigits(['', '', '', '', '', '']);
