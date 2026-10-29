@@ -7,6 +7,33 @@ Newest entry at the top.
 
 ---
 
+## 2026-10-29 — Decisions that override two earlier entries below
+
+**Changed by:** Kiran
+**Files:** `backend/src/services/auth.service.ts`,
+`backend/src/services/email.service.ts`,
+`frontend/src/app/(auth)/signup/page.tsx`,
+`frontend/src/components/auth/ForgotPasswordFlow.tsx`
+
+Two decisions were made on review that replace what the entries below say.
+Everything else in this file stands.
+
+### OTP expiry stays at 60 seconds
+
+The 6-digit length is kept. The expiry change to 5 minutes in the
+"Verification code (OTP): length and expiry" entry is **reverted**: codes expire
+after 60 seconds again, in both signup and password reset. The email text and
+the Forgot Password screen say 60 seconds to match.
+
+### After signup, the user logs in
+
+The "Signing up sent you to the login form" entry made verification sign the
+user straight in and go to `/courses`. That is **reverted by choice**: after the
+code is verified the user is sent to `/login` and signs in with the account they
+just created. The signup page no longer stores the token or calls `setUser`.
+
+---
+
 ## 2026-10-29 — User Management could not manage admins
 
 **Changed by:** Laiba
