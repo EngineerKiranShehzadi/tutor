@@ -3,7 +3,6 @@ import Image from 'next/image';
 import { useEffect, useRef, useState } from 'react';
 import { MessageBubble }   from './MessageBubble';
 import { TypingIndicator } from './TypingIndicator';
-import { SuggestionChips } from './SuggestionChips';
 import { ChatInput }       from './ChatInput';
 import { ChatMessage }     from '@/types';
 import { cn } from '@/lib/cn';
@@ -174,9 +173,6 @@ export const ChatDrawer = ({
         {isTyping && <TypingIndicator />}
         <div ref={bottomRef} />
       </div>
-
-      {/* Suggestion chips */}
-      <SuggestionChips onSelect={onSend} />
 
       {/* Input */}
       <ChatInput

@@ -86,7 +86,8 @@ function buildResult(args: {
 // verification itself is turned off.
 async function applyFormatAndPiiGuards(
   effectiveQuery: string,
-  groundedness: OutputGuardrailResult
+  groundedness: OutputGuardrailResult,
+  draftAnswer: string
 ): Promise<OutputGuardrailResult> {
   // Format validation only ever applies to real generated content. When the
   // groundedness stage fell back to its deterministic conservative message
@@ -94,7 +95,11 @@ async function applyFormatAndPiiGuards(
   // that fallback is already safe static copy that was never asked to be a
   // list/table in the first place — reformatting an "I could not find
   // this..." apology would be pointless and could look like fabrication.
-  const isFallbackAnswer = !groundedness.verified && groundedness.reason !== 'VERIFICATION_DISABLED';
+  // A fail-open draft is real generated content (unverified, but not a
+  // static fallback), so it still gets format validation.
+  const isFallbackAnswer = !groundedness.verified
+    && groundedness.reason !== 'VERIFICATION_DISABLED'
+    && groundedness.finalAnswer !== draftAnswer;
 
   let finalAnswer = groundedness.finalAnswer;
   let expectedFormat: ExpectedResponseFormat = 'NATURAL_TEXT';
@@ -181,6 +186,17 @@ async function runGroundednessVerification(params: OutputGuardrailParams): Promi
   });
 
   if (!firstPass.ok) {
+    if (env.ANSWER_VERIFICATION.FAIL_OPEN_ON_VERIFIER_ERROR) {
+      // No verdict was reached — the verifier never said the draft was
+      // wrong, it just couldn't run. The draft was already generated from
+      // retrieved evidence only; keep it. verified stays false so it is
+      // never written to answer memory, and format/PII guards still run.
+      logger.warn(`[OUTPUT-GUARDRAIL] ⚠️  Verifier unavailable (${firstPass.failureReason}) — serving unverified grounded draft (fail-open)`);
+      return buildResult({
+        finalAnswer: params.draftAnswer, verified: false, decision: null,
+        reason: firstPass.failureReason, revisionAttempted: false, revisionSucceeded: false,
+      });
+    }
     logger.warn(`[OUTPUT-GUARDRAIL] ⚠️  Verification failed (${firstPass.failureReason}) — using conservative fallback`);
     return buildResult({
       finalAnswer: conservativeFallback(params), verified: false, decision: null,
@@ -281,7 +297,7 @@ async function runGroundednessVerification(params: OutputGuardrailParams): Promi
 export async function runOutputGuardrail(params: OutputGuardrailParams): Promise<OutputGuardrailResult> {
   const run = async (): Promise<OutputGuardrailResult> => {
     const groundedness = await runGroundednessVerification(params);
-    return applyFormatAndPiiGuards(params.effectiveQuery, groundedness);
+    return applyFormatAndPiiGuards(params.effectiveQuery, groundedness, params.draftAnswer);
   };
 
   const trace = getActiveTrace();

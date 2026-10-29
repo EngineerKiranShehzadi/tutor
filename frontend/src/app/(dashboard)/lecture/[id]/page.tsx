@@ -6,7 +6,6 @@ import { GET_LECTURE, GET_LECTURES } from '@/graphql/lecture.queries';
 import { DBLecture } from '@/types';
 import { MessageBubble }  from '@/components/chat/MessageBubble';
 import { TypingIndicator } from '@/components/chat/TypingIndicator';
-import { SuggestionChips } from '@/components/chat/SuggestionChips';
 import { ChatInput }       from '@/components/chat/ChatInput';
 import { ChatSidebar }     from '@/components/chat/ChatSidebar';
 import { useChat }         from '@/hooks/useChat';
@@ -382,8 +381,6 @@ export default function LecturePage({ params }: Props) {
                 {chat.isTyping && <TypingIndicator />}
                 <div ref={bottomRef} />
               </div>
-
-              <SuggestionChips onSelect={chat.sendMessage} />
 
               <ChatInput
                 onSend={chat.sendMessage}

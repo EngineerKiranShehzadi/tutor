@@ -17,10 +17,3 @@ export const CHANNEL = {
   initials:    'FQ',
   subscribers: '3.05K',
 };
-
-export const AI_SUGGESTIONS = [
-  'What is a zero-shot prompt?',
-  'Give me an example prompt',
-  'Quiz me on this lecture',
-  'Summarize key points',
-];

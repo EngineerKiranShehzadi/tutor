@@ -201,7 +201,7 @@ export const env = {
     ANSWER_VERIFICATION: {
       PROVIDER:    optional('ANSWER_VERIFICATION_LLM_PROVIDER', 'gemini'),
       MODEL:       optional('ANSWER_VERIFICATION_LLM_MODEL', 'gemini-2.5-flash'),
-      TIMEOUT_MS:  parseInt(optional('ANSWER_VERIFICATION_LLM_TIMEOUT_MS', '4000'), 10),
+      TIMEOUT_MS:  parseInt(optional('ANSWER_VERIFICATION_LLM_TIMEOUT_MS', '8000'), 10),
       TEMPERATURE: parseFloat(optional('ANSWER_VERIFICATION_LLM_TEMPERATURE', '0')),
     },
     // Used only when Selective Output Format Validation finds a grounded
@@ -275,6 +275,13 @@ export const env = {
     // generate/verify/revise loop. A higher value is supported but must be
     // an explicit operator choice, never the default.
     MAX_REVISIONS: parseInt(optional('ANSWER_VERIFICATION_MAX_REVISIONS', '1'), 10),
+    // When the verifier itself could not run (timeout / provider error /
+    // unparseable output, even after its one retry) there is no verdict
+    // against the draft — only an absence of one. Default true: serve the
+    // already-generated, evidence-grounded draft (never cached, still
+    // format/PII guarded) instead of replacing it with "not found". Set to
+    // false for strict mode (any verifier failure -> conservative fallback).
+    FAIL_OPEN_ON_VERIFIER_ERROR: optional('ANSWER_VERIFICATION_FAIL_OPEN', 'true') === 'true',
   },
 
   // ── Selective Output Format Validation (post-generation output guardrail) ──

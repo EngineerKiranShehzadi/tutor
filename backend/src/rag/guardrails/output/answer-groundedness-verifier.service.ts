@@ -81,6 +81,17 @@ export interface VerifyAnswerParams {
 // is reported as a typed failure so the caller can fall back conservatively
 // instead of ever silently treating a failure as VERIFIED.
 export async function verifyAnswerGroundedness(params: VerifyAnswerParams): Promise<VerifierOutcome> {
+  // One bounded retry: every failure mode here (timeout, provider hiccup,
+  // truncated/invalid JSON) is transient, and a single blip must not decide
+  // the fate of an otherwise good draft.
+  const first = await verifyOnce(params);
+  if (first.ok) return first;
+  logger.warn(`[ANSWER-VERIFICATION] ⚠️  ${first.failureReason} — retrying once`);
+  await new Promise(res => setTimeout(res, 400));
+  return verifyOnce(params);
+}
+
+async function verifyOnce(params: VerifyAnswerParams): Promise<VerifierOutcome> {
   try {
     const provider = resolveLlmProvider(env.LLM.ANSWER_VERIFICATION.PROVIDER);
     const model = env.LLM.ANSWER_VERIFICATION.MODEL;
