@@ -198,6 +198,8 @@ export async function processDataset(lectureId: number, buffer: Buffer): Promise
   const chunkIds: number[] = [];
   const chunkTexts: string[] = [];
   const total = validRows.length;
+  // Report progress every 10% of the dataset, whatever its size.
+  const progressStep = Math.max(1, Math.ceil(total / 10));
   for (let i = 0; i < total; i++) {
     const row = validRows[i];
     const pieces = await buildChunkPieces(row);
@@ -223,7 +225,7 @@ export async function processDataset(lectureId: number, buffer: Buffer): Promise
       chunkIds.push(inserted[0].id);
       chunkTexts.push(piece.chunkText);
     }
-    if ((i + 1) % 500 === 0 || i + 1 === total) {
+    if ((i + 1) % progressStep === 0 || i + 1 === total) {
       logger.info(`[DATASET] 📥 Inserting chunks: ${i + 1}/${total} rows (${chunkIds.length} chunk(s) so far)`);
       await updateLectureProgress(lectureId, i + 1);
     }

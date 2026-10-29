@@ -9,7 +9,7 @@ const FIELD_CLASS = 'w-full px-4 py-2.5 bg-slate-50 border border-slate-200 roun
 
 export default function CreateLecturePage() {
   const router = useRouter();
-  const [form, setForm] = useState({ title: '', description: '', youtubeUrl: '' });
+  const [form, setForm] = useState({ title: '', description: '', youtubeUrl: '', agentName: '', agentInstructions: '' });
   const [error, setError] = useState('');
 
   const [createLecture, { loading }] = useMutation(CREATE_LECTURE_MUTATION);
@@ -21,6 +21,10 @@ export default function CreateLecturePage() {
       setError('Title and YouTube URL are required.');
       return;
     }
+    if (!form.agentName.trim() || !form.agentInstructions.trim()) {
+      setError('AI agent name and instructions are required.');
+      return;
+    }
     try {
       const { data } = await createLecture({
         variables: {
@@ -28,6 +32,8 @@ export default function CreateLecturePage() {
             title:       form.title.trim(),
             description: form.description.trim() || undefined,
             youtubeUrl:  form.youtubeUrl.trim(),
+            agentName:         form.agentName.trim(),
+            agentInstructions: form.agentInstructions.trim(),
           },
         },
       });
@@ -115,6 +121,41 @@ export default function CreateLecturePage() {
               rows={3}
               className={`${FIELD_CLASS} resize-none`}
             />
+          </div>
+
+          {/* AI agent */}
+          <div className="pt-2 border-t border-slate-100">
+            <p className="text-[12px] font-semibold text-slate-600 uppercase tracking-wide mb-4">AI Agent for this lecture</p>
+            <div className="flex flex-col gap-5">
+              <div>
+                <label className="block text-[12px] font-semibold text-slate-600 uppercase tracking-wide mb-2">
+                  Agent Name <span className="text-red-500 normal-case">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={form.agentName}
+                  onChange={(e) => setForm((f) => ({ ...f, agentName: e.target.value }))}
+                  placeholder="e.g. Nova"
+                  className={FIELD_CLASS}
+                />
+              </div>
+              <div>
+                <label className="block text-[12px] font-semibold text-slate-600 uppercase tracking-wide mb-2">
+                  Agent Instructions <span className="text-red-500 normal-case">*</span>
+                </label>
+                <textarea
+                  value={form.agentInstructions}
+                  onChange={(e) => setForm((f) => ({ ...f, agentInstructions: e.target.value }))}
+                  placeholder="Describe this lecture's scope and how the agent should present answers…"
+                  rows={5}
+                  maxLength={4000}
+                  className={`${FIELD_CLASS} resize-none`}
+                />
+                <p className="text-[11px] text-slate-400 mt-1.5">
+                  {form.agentInstructions.length} / 4000 · The agent goes live once the dataset is uploaded and READY.
+                </p>
+              </div>
+            </div>
           </div>
 
           {/* Error */}

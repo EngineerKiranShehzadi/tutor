@@ -28,21 +28,41 @@ function validateYoutubeUrl(url: string): string {
 }
 
 // ── CREATE ─────────────────────────────────────────────────────
+const MAX_AGENT_INSTRUCTIONS_CHARS = 4000;
+
 export const createLecture = async (input: {
   title: string;
   description?: string;
   youtubeUrl: string;
+  agentName: string;
+  agentInstructions: string;
 }): Promise<Lecture> => {
   const { title, description, youtubeUrl } = input;
+  const agentName = input.agentName?.trim() ?? '';
+  const agentInstructions = input.agentInstructions?.trim() ?? '';
   if (!title.trim()) throw new AppError('Lecture title is required', 400);
+  if (!agentName) throw new AppError('AI agent name is required', 400);
+  if (!agentInstructions) throw new AppError('AI agent instructions are required', 400);
+  // Mirrors lecture_agent_profiles_instructions_max_length (migration 005).
+  if (agentInstructions.length > MAX_AGENT_INSTRUCTIONS_CHARS) {
+    throw new AppError(`AI agent instructions must be at most ${MAX_AGENT_INSTRUCTIONS_CHARS} characters`, 400);
+  }
 
   const videoId = validateYoutubeUrl(youtubeUrl);
 
+  // One statement, so the lecture and its agent profile are created
+  // atomically — a lecture can never exist without its profile.
   const { rows } = await query<Lecture>(
-    `INSERT INTO lectures (title, description, youtube_url, youtube_video_id)
-     VALUES ($1, $2, $3, $4)
-     RETURNING *`,
-    [title.trim(), description?.trim() ?? null, youtubeUrl.trim(), videoId]
+    `WITH new_lecture AS (
+       INSERT INTO lectures (title, description, youtube_url, youtube_video_id)
+       VALUES ($1, $2, $3, $4)
+       RETURNING *
+     ), new_profile AS (
+       INSERT INTO lecture_agent_profiles (lecture_id, agent_name, instructions)
+       SELECT id, $5, $6 FROM new_lecture
+     )
+     SELECT * FROM new_lecture`,
+    [title.trim(), description?.trim() ?? null, youtubeUrl.trim(), videoId, agentName, agentInstructions]
   );
 
   const lecture = rows[0];

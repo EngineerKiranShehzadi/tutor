@@ -73,7 +73,7 @@ export const lectureResolvers = {
   Mutation: {
     createLecture: (
       _: unknown,
-      { input }: { input: { title: string; description?: string; youtubeUrl: string } },
+      { input }: { input: { title: string; description?: string; youtubeUrl: string; agentName: string; agentInstructions: string } },
       ctx: GraphQLContext
     ) =>
       wrap(async () => {
