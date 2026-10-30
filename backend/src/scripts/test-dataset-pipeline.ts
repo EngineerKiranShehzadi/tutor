@@ -31,7 +31,7 @@ import { buildChunkPieces } from '../services/chunk.service';
 import { matchRows, FileRow, ActiveQa, QaFields } from '../services/dataset-plan';
 import {
   prepareDatasetVersion, finishDatasetVersion, resumePendingVersions, rollbackDataset, exportActiveDataset,
-  listDatasetVersions, RemovalConfirmationRequired, getLectureReadiness,
+  listDatasetVersions, RemovalConfirmationRequired, getLectureReadiness, validateVersion,
 } from '../services/dataset-version.service';
 import { searchChunks } from '../services/vector-search.service';
 import { lookupAnswerMemory, writeAnswerMemory } from '../services/rag-answer-memory.service';
@@ -705,6 +705,93 @@ const run = async () => {
     const rs = await getLectureReadiness(Lc);
     check('17d. A chunk embedded by a different model version → not ready (stale model)',
       !rs.ready && /^STALE_EMBEDDING_MODEL: 1\//.test(rs.reason), `readiness=${JSON.stringify(rs)}`);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 18. Model-consistent MERGE: carried-over Q&As never bring an old model into a new version
+  // ─────────────────────────────────────────────────────────────────────
+  {
+    const modelCounts = async (lectureId: number) => (await query<{ m: string | null; n: string }>(
+      `SELECT c.embedding_model_version AS m, COUNT(*) AS n
+       FROM lectures l JOIN dataset_version_chunks d ON d.version_id = l.active_version_id JOIN lecture_qna_chunks c ON c.id = d.chunk_id
+       WHERE l.id = $1 GROUP BY 1`, [lectureId])).rows.map(r => `${r.m}:${r.n}`).join(',');
+
+    // (a) model changed, then a PARTIAL merge (2 of 6 rows in the file)
+    const La = await newLecture('18a model change + partial merge');
+    embedder.reset();
+    const pa = await prepareDatasetVersion(La, makeXlsx(baseRows(6)));
+    if (pa.kind === 'CREATED') await fin(pa.versionId);
+    const oldActive = (await lectureState(La)).active_version_id!;
+    const before = await activeChunks(La);
+    const qaIdsBefore = [...new Set(before.map(c => c.qa_id))].sort();
+    await query(`UPDATE lecture_qna_chunks SET embedding_model_version = 'old-model:768' WHERE lecture_id = $1`, [La]);
+    const dry = await prepareDatasetVersion(La, makeXlsx(baseRows(6).slice(0, 2)), { dryRun: true });
+    embedder.reset();
+    const pa2 = await prepareDatasetVersion(La, makeXlsx(baseRows(6).slice(0, 2)));
+    if (pa2.kind === 'CREATED') await fin(pa2.versionId);
+    const after = await activeChunks(La);
+    const qaIdsAfter = [...new Set(after.map(c => c.qa_id))].sort();
+    const mc = await modelCounts(La);
+    const oldRowsUntouched = await countOne(
+      `SELECT COUNT(*) n FROM lecture_qna_chunks c JOIN dataset_version_chunks d ON d.chunk_id = c.id
+       WHERE d.version_id = $1 AND c.embedding_model_version = 'old-model:768' AND c.local_embedding IS NOT NULL`, [oldActive]);
+    check('18a. Model change + partial MERGE → every chunk of the new active version is on the current model; carried Q&As keep their qa_id; old version rows untouched',
+      dry.kind === 'DRY_RUN' && dry.preview.reembeddedForModel === 4 && dry.preview.carriedOver === 0
+        && pa2.kind === 'CREATED' && pa2.preview.reembeddedForModel === 4
+        && mc === `${EMBEDDING_MODEL_VERSION}:${after.length}` && after.length === before.length
+        && JSON.stringify(qaIdsAfter) === JSON.stringify(qaIdsBefore)
+        && embedder.calls.length === after.length && oldRowsUntouched === before.length,
+      `models=${mc} reembeddedForModel=${pa2.kind === 'CREATED' ? pa2.preview.reembeddedForModel : '?'} qaIdsKept=${JSON.stringify(qaIdsAfter) === JSON.stringify(qaIdsBefore)} embedCalls=${embedder.calls.length}/${after.length} oldRowsUntouched=${oldRowsUntouched}/${before.length}`);
+
+    // a MERGE whose only work is re-embedding for the model change is not a NOOP
+    await query(`UPDATE lecture_qna_chunks SET embedding_model_version = 'old-model:768'
+                 WHERE id IN (SELECT d.chunk_id FROM dataset_version_chunks d JOIN lectures l ON l.active_version_id = d.version_id
+                              WHERE l.id = $1 AND d.qa_id = $2)`, [La, after[after.length - 1].qa_id]);
+    const lastQa = after[after.length - 1].qa_id;
+    embedder.reset();
+    const missingOnly = await prepareDatasetVersion(La, makeXlsx(baseRows(6).slice(0, 2)));
+    if (missingOnly.kind === 'CREATED') await fin(missingOnly.versionId);
+    check('18a2. A MERGE whose only work is re-embedding a carried Q&A for the model change is not a NOOP, and fixes just that Q&A',
+      missingOnly.kind === 'CREATED' && missingOnly.preview.added === 0 && missingOnly.preview.updated === 0
+        && missingOnly.preview.reembeddedForModel === 1 && missingOnly.preview.carriedOver === 3
+        && (await modelCounts(La)) === `${EMBEDDING_MODEL_VERSION}:${after.length}`,
+      `kind=${missingOnly.kind} reembeddedForModel=${missingOnly.kind === 'CREATED' ? missingOnly.preview.reembeddedForModel : '?'} (stale qa ${lastQa}) embedCalls=${embedder.calls.length}`);
+
+    // (b) validateVersion rejects a version holding one old-model chunk
+    const Lb = await newLecture('18b validate model');
+    embedder.reset();
+    const pb = await prepareDatasetVersion(Lb, makeXlsx(baseRows(4)));
+    if (pb.kind === 'CREATED') await fin(pb.versionId);
+    const vb = (await lectureState(Lb)).active_version_id!;
+    const okProblems = await validateVersion(vb);
+    await query(`UPDATE lecture_qna_chunks SET embedding_model_version = 'old-model:768'
+                 WHERE id = (SELECT MIN(chunk_id) FROM dataset_version_chunks WHERE version_id = $1)`, [vb]);
+    const badProblems = await validateVersion(vb);
+    check('18b. validateVersion rejects a version with one old-model chunk (and accepts it before)',
+      okProblems.length === 0 && badProblems.some(x => /different model/.test(x)),
+      `before=${JSON.stringify(okProblems)} after=${JSON.stringify(badProblems)}`);
+
+    // (c) no model change: partial MERGE still carries over, carried Q&As are not embedded
+    const Lc2 = await newLecture('18c no model change');
+    embedder.reset();
+    const pc = await prepareDatasetVersion(Lc2, makeXlsx(baseRows(6)));
+    if (pc.kind === 'CREATED') await fin(pc.versionId);
+    const beforeC = await activeChunks(Lc2);
+    const edited = baseRows(6).slice(0, 1); edited[0] = { ...edited[0], answer: 'Concept 1 was edited for the 18c test.' };
+    embedder.reset();
+    const pc2 = await prepareDatasetVersion(Lc2, makeXlsx(edited));
+    if (pc2.kind === 'CREATED') await fin(pc2.versionId);
+    const afterC = await activeChunks(Lc2);
+    const carriedIds = new Set(beforeC.filter(c => c.question !== edited[0].question).map(c => c.id));
+    const carriedStill = afterC.filter(c => carriedIds.has(c.id)).length;
+    const carriedTexts = new Set((await query<{ chunk_text: string }>(
+      'SELECT chunk_text FROM lecture_qna_chunks WHERE id = ANY($1::int[])', [[...carriedIds]])).rows.map(r => r.chunk_text));
+    check('18c. Without a model change a partial MERGE still carries Q&As over as the same rows, and embeds none of them',
+      pc2.kind === 'CREATED' && pc2.preview.carriedOver === 5 && pc2.preview.reembeddedForModel === 0
+        && carriedStill === carriedIds.size && afterC.length === beforeC.length
+        && embedder.calls.every(t => !carriedTexts.has(t)) && embedder.calls.length > 0 && embedder.calls.length <= 2
+        && (await modelCounts(Lc2)) === `${EMBEDDING_MODEL_VERSION}:${afterC.length}`,
+      `carried=${pc2.kind === 'CREATED' ? pc2.preview.carriedOver : '?'} sameRowsKept=${carriedStill}/${carriedIds.size} embedCalls=${embedder.calls.length} (edited row only)`);
   }
 
   // ─────────────────────────────────────────────────────────────────────

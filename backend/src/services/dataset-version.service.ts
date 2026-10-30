@@ -49,6 +49,9 @@ export interface UpdatePreview {
   unchanged: number;
   // MERGE: existing Q&As missing from the file, kept as they are.
   carriedOver: number;
+  // MERGE: carried-over Q&As that could not keep their old vectors (missing, or
+  // made by another embedding model) and are embedded fresh as new rows.
+  reembeddedForModel: number;
   // REPLACE: existing Q&As missing from the file, dropped from the new version.
   removed: number;
   removedSamples: { qaId: string; question: string }[];
@@ -216,7 +219,29 @@ const planUpdate = async (
   }
 
   const missing = activeQas.filter(q => !matchedQaIds.has(q.qaId));
-  const carriedQaIds = mode === 'MERGE' ? missing.map(q => q.qaId) : [];
+  // MERGE carries missing Q&As over as memberships of their existing chunk rows —
+  // but only if every piece still has a vector from the CURRENT model. Otherwise
+  // the version would mix models, so all of that Q&A's pieces are embedded fresh
+  // as NEW rows (same qa_id / fields / chunk_text); the active version's rows are
+  // never touched.
+  const carriedQaIds: string[] = [];
+  let reembeddedForModel = 0;
+  if (mode === 'MERGE') {
+    for (const q of missing) {
+      const pieces = oldByQa.get(q.qaId)!;
+      if (pieces.every(c => c.has_embedding && c.embedding_model_version === EMBEDDING_MODEL_VERSION)) {
+        carriedQaIds.push(q.qaId);
+        continue;
+      }
+      reembeddedForModel++;
+      for (const c of pieces) {
+        newChunks.push({
+          qaId: q.qaId, chunkIndex: c.chunk_index, fields: c, chunkText: c.chunk_text,
+          contentHash: c.content_hash ?? sha256(c.chunk_text), copyFromChunkId: null,
+        });
+      }
+    }
+  }
   const removedList = mode === 'REPLACE' ? missing : [];
 
   const preview: UpdatePreview = {
@@ -224,6 +249,7 @@ const planUpdate = async (
     rowsInFile: fileRows.length,
     added, updated, unchanged,
     carriedOver: carriedQaIds.length,
+    reembeddedForModel,
     removed: removedList.length,
     removedSamples: removedList.slice(0, 10).map(q => ({ qaId: q.qaId, question: q.fields.question })),
     chunksToEmbed: newChunks.filter(c => c.copyFromChunkId === null).length,
@@ -380,7 +406,7 @@ export async function prepareDatasetVersion(
   if (opts.dryRun) return { kind: 'DRY_RUN', preview: p };
   if (p.removed > 0 && opts.confirmRemovals !== p.removed) throw new RemovalConfirmationRequired(p);
 
-  if (p.added === 0 && p.updated === 0 && p.removed === 0) {
+  if (p.added === 0 && p.updated === 0 && p.removed === 0 && p.reembeddedForModel === 0) {
     logger.info(`[DATASET] ✅ Lecture #${lectureId}: uploaded file matches the active dataset — nothing to do`);
     return { kind: 'NOOP', preview: p };
   }
@@ -436,18 +462,21 @@ const failVersion = async (v: VersionRow, message: string): Promise<FinishResult
 export const validateVersion = async (versionId: number): Promise<string[]> => {
   const problems: string[] = [];
 
-  const { rows: cnt } = await query<{ members: string; no_vec: string; bad_dims: string; bad_vec: string }>(
+  const { rows: cnt } = await query<{ members: string; no_vec: string; bad_dims: string; bad_vec: string; wrong_model: string }>(
     `SELECT COUNT(*) AS members,
+            COUNT(*) FILTER (WHERE c.embedding_model_version IS DISTINCT FROM v.embedding_model_version) AS wrong_model,
             COUNT(*) FILTER (WHERE c.local_embedding IS NULL) AS no_vec,
             COUNT(*) FILTER (WHERE c.local_embedding IS NOT NULL AND vector_dims(c.local_embedding) <> ${EXPECTED_DIMS}) AS bad_dims,
             COUNT(*) FILTER (WHERE c.local_embedding IS NOT NULL AND NOT ((c.local_embedding <#> c.local_embedding) < 0)) AS bad_vec
      FROM dataset_version_chunks d JOIN lecture_qna_chunks c ON c.id = d.chunk_id
+     JOIN dataset_versions v ON v.id = d.version_id
      WHERE d.version_id = $1`,
     [versionId]
   );
   const c = cnt[0];
   if (Number(c.members) === 0) problems.push('version contains no chunks');
   if (Number(c.no_vec) > 0) problems.push(`${c.no_vec} chunk(s) have no embedding`);
+  if (Number(c.wrong_model) > 0) problems.push(`${c.wrong_model} chunk(s) were embedded with a different model than the version's`);
   if (Number(c.bad_dims) > 0) problems.push(`${c.bad_dims} chunk(s) have a vector of the wrong dimension`);
   if (Number(c.bad_vec) > 0) problems.push(`${c.bad_vec} chunk(s) have an empty/invalid vector`);
 
