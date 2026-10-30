@@ -1,0 +1,28 @@
+# Phoenix (trace viewer) for production. See docs/OBSERVABILITY.md.
+# Run from this directory so ./.env is picked up:
+#   cd deploy/observability && cp .env.example .env && docker compose up -d
+services:
+  phoenix:
+    # Pinned to the version tested with the backend (@arizeai/phoenix-client 7.1.1). Test any upgrade locally first.
+    image: arizephoenix/phoenix:version-20.27.0
+    restart: unless-stopped
+    ports:
+      # Loopback only. Never "6006:6006" or 0.0.0.0 — Phoenix must not be publicly reachable.
+      # 6006 serves both the UI and the OTLP/HTTP endpoint (/v1/traces) the backend uses.
+      - "127.0.0.1:6006:6006"
+      # gRPC OTLP (4317) is intentionally not published: the backend exports over HTTP.
+    environment:
+      # Dedicated Neon database/project for Phoenix. NEVER the app database.
+      PHOENIX_SQL_DATABASE_URL: ${PHOENIX_SQL_DATABASE_URL:?set PHOENIX_SQL_DATABASE_URL in .env}
+      PHOENIX_ENABLE_AUTH: "True"
+      PHOENIX_SECRET: ${PHOENIX_SECRET:?set PHOENIX_SECRET in .env}
+      PHOENIX_USE_SECURE_COOKIES: "True"
+      PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD: ${PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD:?set PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD in .env}
+      PHOENIX_DEFAULT_RETENTION_POLICY_DAYS: "30"
+    healthcheck:
+      # The image is distroless (no curl/wget/sh); use its bundled python.
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:6006/healthz', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
