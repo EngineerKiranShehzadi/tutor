@@ -1,4 +1,4 @@
-import { randomUUID } from 'crypto';
+import { randomBytes, randomUUID } from 'crypto';
 import { AsyncLocalStorage } from 'async_hooks';
 import { logger } from '../utils/logger';
 import { spanKindFor, OpenInferenceSpanKind } from './otel-semconv';
@@ -17,6 +17,19 @@ export function classifyErrorCode(err: unknown): string {
   if (msg.includes('invalid input syntax') || msg.includes('violates') || msg.includes('constraint')) return 'DB_CONSTRAINT_ERROR';
   if (msg.includes('econnrefused') || msg.includes('connection')) return 'CONNECTION_ERROR';
   return 'UNKNOWN_ERROR';
+}
+
+// OTel trace ID format: 32 lowercase hex chars, not all zeros. The same ID is
+// used by our in-process trace, the [TRACE] log line, requestId/trace.id
+// attributes and (via phoenix.ts's idGenerator) the Phoenix trace itself.
+const TRACE_ID_PATTERN = /^[0-9a-f]{32}$/;
+
+export function isValidTraceId(id: unknown): id is string {
+  return typeof id === 'string' && TRACE_ID_PATTERN.test(id) && /[1-9a-f]/.test(id);
+}
+
+function generateTraceId(): string {
+  return randomBytes(16).toString('hex');
 }
 
 function generateSpanId(): string {
@@ -62,7 +75,7 @@ export class RequestTrace {
 
   constructor(rootName: string, traceId?: string) {
     this.rootName = rootName;
-    this.traceId = traceId ?? randomUUID();
+    this.traceId = traceId ?? generateTraceId();
     this.rootSpanId = generateSpanId();
     this.startedAtMs = Date.now();
     this.startedAtHr = process.hrtime.bigint();

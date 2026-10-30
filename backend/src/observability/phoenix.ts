@@ -1,7 +1,9 @@
+import { randomBytes } from 'crypto';
 import { env } from '../config/env';
 import { logger } from '../utils/logger';
 import { OPENINFERENCE_SPAN_KIND, ATTR } from './otel-semconv';
 import { sanitizeAttributes, sanitizeValue, isContentCaptureEnabled } from './sanitize';
+import { isValidTraceId } from './tracer';
 import type { FinishedTrace, FinishedSpan } from './types';
 
 // Optional, best-effort export of our own internal traces to Phoenix over
@@ -16,6 +18,32 @@ import type { FinishedTrace, FinishedSpan } from './types';
 // directly under root (the old bug), we walk the actual parent/child tree
 // and only ever start a child span once its real parent's OTel Span object
 // exists, so Phoenix receives the genuine pipeline shape.
+
+// Makes Phoenix use OUR trace/span IDs instead of generating unrelated ones,
+// so a [TRACE] log line or a chat message's requestId can be matched to its
+// Phoenix trace. OTel's Tracer.startSpan() is synchronous and asks the
+// generator for IDs inside that call, so export code sets the pending slot
+// immediately before each startSpan() and nothing can interleave. A slot is
+// consumed once; anything unset (or invalid) falls back to a random ID.
+let pendingTraceId: string | null = null;
+let pendingSpanId: string | null = null;
+
+const SPAN_ID_PATTERN = /^[0-9a-f]{16}$/;
+const isValidSpanId = (id: unknown): id is string =>
+  typeof id === 'string' && SPAN_ID_PATTERN.test(id) && /[1-9a-f]/.test(id);
+
+const ourIdGenerator = {
+  generateTraceId(): string {
+    const id = pendingTraceId ?? randomBytes(16).toString('hex');
+    pendingTraceId = null;
+    return id;
+  },
+  generateSpanId(): string {
+    const id = pendingSpanId ?? randomBytes(8).toString('hex');
+    pendingSpanId = null;
+    return id;
+  },
+};
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let tracerProvider: any = null;
@@ -51,6 +79,7 @@ async function getOtelTracer() {
         'openinference.project.name': env.OBSERVABILITY.PHOENIX_PROJECT_NAME,
       }),
       spanProcessors: [new BatchSpanProcessor(exporter)],
+      idGenerator: ourIdGenerator,
     });
     tracerProvider = provider;
     logger.info(`[PHOENIX] Exporter initialized -> ${env.OBSERVABILITY.PHOENIX_ENDPOINT}`);
@@ -139,7 +168,16 @@ async function exportTrace(trace: FinishedTrace): Promise<void> {
 
     const rootStart = trace.startedAt;
     const rootEnd = trace.startedAt + trace.durationMs;
-    const rootSpan = tracer.startSpan(trace.rootName, { startTime: rootStart });
+    // Invalid IDs (e.g. hand-built traces in tests) fall back to random ones.
+    pendingTraceId = isValidTraceId(trace.traceId) ? trace.traceId : null;
+    pendingSpanId = isValidSpanId(trace.rootSpanId) ? trace.rootSpanId : null;
+    let rootSpan;
+    try {
+      rootSpan = tracer.startSpan(trace.rootName, { startTime: rootStart });
+    } finally {
+      pendingTraceId = null;
+      pendingSpanId = null;
+    }
     rootSpan.setAttribute('trace.id', trace.traceId);
     rootSpan.setAttribute(OPENINFERENCE_SPAN_KIND, 'CHAIN');
     if (trace.attributes.sessionId !== undefined && trace.attributes.sessionId !== null) {
@@ -183,7 +221,13 @@ async function exportTrace(trace: FinishedTrace): Promise<void> {
       }
       visiting.add(span.spanId);
 
-      const childSpan = tracer.startSpan(span.name, { startTime: span.startedAt }, parentCtx);
+      pendingSpanId = isValidSpanId(span.spanId) ? span.spanId : null;
+      let childSpan;
+      try {
+        childSpan = tracer.startSpan(span.name, { startTime: span.startedAt }, parentCtx);
+      } finally {
+        pendingSpanId = null;
+      }
       childSpan.setAttribute(OPENINFERENCE_SPAN_KIND, span.kind);
       setSafeAttributes(childSpan, span.metadata);
       if (span.errorCode) childSpan.setAttribute('error.code', span.errorCode);
