@@ -2,7 +2,21 @@ import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import pool from '../config/database';
 
+const dbHost = (): string => {
+  const url = process.env.DATABASE_URL;
+  if (url) {
+    try { return new URL(url).hostname; } catch { return '(unparseable DATABASE_URL)'; }
+  }
+  return process.env.DB_HOST || 'localhost';
+};
+
 const run = async () => {
+  const host = dbHost();
+  console.log(`Target database host: ${host}`);
+  if (!/^(localhost|127\.0\.0\.1)$/.test(host) && process.env.ALLOW_REMOTE_DB_SETUP !== '1') {
+    throw new Error(`refusing to run db:setup against non-local host "${host}" (set ALLOW_REMOTE_DB_SETUP=1 to override)`);
+  }
+
   const schemaPath = join(__dirname, '../db/schema.sql');
   const migratePath = join(__dirname, '../db/migrate.sql');
 
