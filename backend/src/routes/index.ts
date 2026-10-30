@@ -2,6 +2,7 @@ import { Router } from 'express';
 import authRoutes    from './auth.routes';
 import datasetRoutes from './dataset.routes';
 import observabilityRoutes from './observability.routes';
+import monitorRoutes from './monitor.routes';
 import chatRoutes    from './chat.routes';
 import { logger }    from '../utils/logger';
 import { checkLiveness, checkReadiness } from '../observability/health.service';
@@ -10,6 +11,7 @@ const router = Router();
 
 router.use('/auth',     authRoutes);
 router.use('/datasets', datasetRoutes);
+router.use('/observability/monitor', monitorRoutes);
 router.use('/observability', observabilityRoutes);
 router.use('/chat',     chatRoutes);
 

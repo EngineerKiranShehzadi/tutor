@@ -1,4 +1,5 @@
 'use client';
+// Frozen: no new features here; new monitoring work goes to /admin/monitor.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AdminPageHero } from '@/components/admin/AdminPageHero';
@@ -98,9 +99,16 @@ export default function TraceDetailPage({ params }: { params: { traceId: string 
         subtitle={`Trace ${traceId}`}
         badge={summary.status}
         action={
-          <button onClick={() => navigator.clipboard.writeText(traceId)} className="text-[13px] font-semibold bg-white/10 hover:bg-white/20 text-white border border-white/20 rounded-lg px-3.5 py-2 transition-colors">
-            <i className="far fa-copy mr-1.5" /> Copy trace ID
-          </button>
+          <div className="flex items-center gap-2">
+            {detail.phoenixTraceUrl && (
+              <a href={detail.phoenixTraceUrl} target="_blank" rel="noopener noreferrer" className="text-[13px] font-semibold bg-white/10 hover:bg-white/20 text-white border border-white/20 rounded-lg px-3.5 py-2 transition-colors">
+                <i className="fas fa-arrow-up-right-from-square mr-1.5" /> Open in Phoenix
+              </a>
+            )}
+            <button onClick={() => navigator.clipboard.writeText(traceId)} className="text-[13px] font-semibold bg-white/10 hover:bg-white/20 text-white border border-white/20 rounded-lg px-3.5 py-2 transition-colors">
+              <i className="far fa-copy mr-1.5" /> Copy trace ID
+            </button>
+          </div>
         }
       />
 

@@ -12,10 +12,43 @@ const required = (key: string): string => {
 const optional = (key: string, fallback: string): string =>
   process.env[key] ?? fallback;
 
+export interface LlmPrice { inputPer1M: number; outputPer1M: number }
+
+// LLM_PRICING_JSON: {"<model>":{"inputPer1M":<usd>,"outputPer1M":<usd>}}.
+// Malformed JSON or entries are ignored (never throw at boot); a model with
+// no valid entry simply gets est_cost_usd = NULL in rag_request_log.
+const parseLlmPricing = (raw: string): Record<string, LlmPrice> => {
+  const out: Record<string, LlmPrice> = {};
+  if (!raw.trim()) return out;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, { inputPer1M?: unknown; outputPer1M?: unknown }>;
+    for (const [model, p] of Object.entries(parsed ?? {})) {
+      if (
+        typeof p?.inputPer1M === 'number' && Number.isFinite(p.inputPer1M) && p.inputPer1M >= 0 &&
+        typeof p?.outputPer1M === 'number' && Number.isFinite(p.outputPer1M) && p.outputPer1M >= 0
+      ) {
+        out[model] = { inputPer1M: p.inputPer1M, outputPer1M: p.outputPer1M };
+      }
+    }
+  } catch {
+    // ignore — see comment above
+  }
+  return out;
+};
+
 export const env = {
   NODE_ENV:      optional('NODE_ENV', 'development'),
   PORT:          parseInt(optional('PORT', '5000'), 10),
   FRONTEND_URL:  optional('FRONTEND_URL', 'http://localhost:3000'),
+  // Upper bound for a graceful shutdown (SIGTERM/SIGINT): finishing in-flight
+  // requests, flushing traces to Phoenix and closing the DB pool. If it is
+  // not done by then, the process exits with code 1. See server.ts.
+  SHUTDOWN_TIMEOUT_MS: parseInt(optional('SHUTDOWN_TIMEOUT_MS', '10000'), 10),
+
+  // Production only: also write logs/error.log and logs/combined.log (10 MB
+  // size rotation, 5 files). Off by default — production logs go to the
+  // console as JSON. See utils/logger.ts.
+  LOG_TO_FILE: optional('LOG_TO_FILE', 'false') === 'true',
 
   // Dataset pipeline (dataset-version.service.ts). How long to wait before
   // retrying a build that is paused because the embedding service is down.
@@ -100,12 +133,15 @@ export const env = {
     // PHOENIX_ENABLED is also true.
     ENABLED: optional('OBSERVABILITY_ENABLED', 'false') === 'true',
     SAMPLE_RATE: parseFloat(optional('OBSERVABILITY_SAMPLE_RATE', '1')),
+    // Traces slower than this are always exported to Phoenix, whatever
+    // SAMPLE_RATE says (see observability/sampling.ts).
+    SLOW_TRACE_MS: parseInt(optional('OBSERVABILITY_SLOW_TRACE_MS', '10000'), 10),
     // Opt-in content capture (truncated question/answer/chunk previews on
     // spans and in admin trace detail). Independent of NODE_ENV — operators
     // decide per-environment; see MAX_CONTENT_LENGTH for the truncation cap.
     CAPTURE_CONTENT: optional('OBSERVABILITY_CAPTURE_CONTENT', 'false') === 'true',
     MAX_CONTENT_LENGTH: parseInt(optional('OBSERVABILITY_MAX_CONTENT_LENGTH', '20000'), 10),
-    RETENTION_DAYS: parseInt(optional('OBSERVABILITY_RETENTION_DAYS', '30'), 10),
+    RETENTION_DAYS: parseInt(optional('OBSERVABILITY_RETENTION_DAYS', '90'), 10),
 
     PHOENIX_ENABLED:  optional('PHOENIX_ENABLED', 'false') === 'true',
     // OTLP trace-ingestion endpoint (export path). PHOENIX_OTLP_ENDPOINT is
@@ -118,16 +154,35 @@ export const env = {
     // which are the OTLP ingest path, not the server root.
     PHOENIX_BASE_URL:    optional('PHOENIX_BASE_URL', 'http://localhost:6006'),
     PHOENIX_PROJECT_NAME: optional('PHOENIX_PROJECT_NAME', 'askaitutor-rag'),
+    // Phoenix URL an admin opens in their browser (may differ from
+    // PHOENIX_BASE_URL, the backend-to-Phoenix URL). Empty = no trace links
+    // in /monitor/attention. Trailing slash stripped.
+    PHOENIX_PUBLIC_URL: optional('PHOENIX_PUBLIC_URL', '').trim().replace(/\/+$/, ''),
     // Optional bearer auth for both the OTLP exporter and the read-back
     // client. Never sent to the frontend — see observability.routes.ts.
     PHOENIX_API_KEY: optional('PHOENIX_API_KEY', ''),
     PHOENIX_QUERY_TIMEOUT_MS: parseInt(optional('PHOENIX_QUERY_TIMEOUT_MS', '10000'), 10),
     PHOENIX_OVERVIEW_CACHE_TTL_MS: parseInt(optional('PHOENIX_OVERVIEW_CACHE_TTL_MS', '15000'), 10),
 
-    ALERTS_ENABLED: optional('OBSERVABILITY_ALERTS_ENABLED', 'true') === 'true',
-    ALERT_ERROR_RATE_PERCENT:         parseFloat(optional('ALERT_ERROR_RATE_PERCENT', '10')),
-    ALERT_P95_LATENCY_MS:             parseInt(optional('ALERT_P95_LATENCY_MS', '5000'), 10),
-    ALERT_NOT_FOUND_RATE_PERCENT:     parseFloat(optional('ALERT_NOT_FOUND_RATE_PERCENT', '30')),
+    // One rag_request_log row per askLectureAgent call (see
+    // observability/request-log.service.ts). Postgres-only; independent of
+    // Phoenix. A failed write only logs a warning.
+    REQUEST_LOG_ENABLED: optional('REQUEST_LOG_ENABLED', 'true') === 'true',
+    // Per-model USD prices used to fill rag_request_log.est_cost_usd. Unknown
+    // model or missing token counts -> NULL, never a guess.
+    LLM_PRICING: parseLlmPricing(optional('LLM_PRICING_JSON', '')),
+
+    ALERTS_ENABLED: optional('OBSERVABILITY_ALERTS_ENABLED', 'false') === 'true',
+    // Email alert rules (observability/alerts.service.ts). Rates are 0..1.
+    ALERT_CHECK_INTERVAL_MS: parseInt(optional('ALERT_CHECK_INTERVAL_MS', '300000'), 10),
+    ALERT_WINDOW_MINUTES:    parseInt(optional('ALERT_WINDOW_MINUTES', '15'), 10),
+    ALERT_MIN_REQUESTS:      parseInt(optional('ALERT_MIN_REQUESTS', '20'), 10),
+    ALERT_COOLDOWN_MINUTES:  parseInt(optional('ALERT_COOLDOWN_MINUTES', '60'), 10),
+    ALERT_ERROR_RATE:        parseFloat(optional('ALERT_ERROR_RATE', '0.05')),
+    ALERT_NOT_FOUND_RATE:    parseFloat(optional('ALERT_NOT_FOUND_RATE', '0.40')),
+    ALERT_P95_MS:            parseInt(optional('ALERT_P95_MS', '15000'), 10),
+    // Comma-separated; empty = every user with role ADMIN.
+    ALERT_EMAILS: optional('ALERT_EMAILS', '').split(',').map(e => e.trim()).filter(Boolean),
     ALERT_CONSECUTIVE_HEALTH_FAILURES: parseInt(optional('ALERT_CONSECUTIVE_HEALTH_FAILURES', '3'), 10),
   },
 

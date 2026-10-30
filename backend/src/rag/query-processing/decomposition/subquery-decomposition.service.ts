@@ -3,6 +3,7 @@ import { resolveLlmProvider } from '../../../llm/llm-provider.resolver';
 import { withLlmDiagnostic, extractLlmUsage } from '../../../llm/llm-observability.service';
 import { classifyErrorCode } from '../../../observability/tracer';
 import { logger } from '../../../utils/logger';
+import { logSafeText } from '../../../observability/sanitize';
 import { detectCompoundQueryCandidate } from './compound-query.detector';
 import { buildDecompositionSystemPrompt, DECOMPOSITION_RESPONSE_SCHEMA } from './subquery-decomposition.prompt';
 import type { RawDecompositionDecision, SubqueryDecompositionResult } from './subquery-decomposition.types';
@@ -123,7 +124,7 @@ export const decomposeQuery = async (
       return { mode: 'DIRECT', effectiveQuery, subqueries: [], reason: 'LLM_DECIDED_DIRECT', llmUsed: true };
     }
 
-    logger.info(`[QUERY-DECOMPOSITION] 🔀 "${effectiveQuery.slice(0, 60)}" -> ${decision.subqueries.length} subqueries`);
+    logger.info(`[QUERY-DECOMPOSITION] 🔀 "${logSafeText(effectiveQuery, 60)}" -> ${decision.subqueries.length} subqueries`);
     return { mode: 'DECOMPOSED', effectiveQuery, subqueries: decision.subqueries, reason: 'LLM_DECIDED_DECOMPOSE', llmUsed: true };
   } catch (err) {
     const errorCode = classifyErrorCode(err);

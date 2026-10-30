@@ -11,7 +11,7 @@ import { SIMILARITY_THRESHOLD } from './vector-search.service';
 import { ANSWER_PROMPT_VERSION } from './llm-gemini.service';
 import { RequestTrace, recordTrace } from '../observability/tracer';
 import { ATTR } from '../observability/otel-semconv';
-import { isContentCaptureEnabled, truncateContent } from '../observability/sanitize';
+import { isContentCaptureEnabled, truncateContent, logSafeText } from '../observability/sanitize';
 import type { FinishedTrace, NotFoundReason, SafeMetadata } from '../observability/types';
 import { OBSERVABILITY_SCHEMA_VERSION } from '../observability/types';
 import { runInputGuardrails, REJECTION_MESSAGE_BY_REASON } from '../rag/guardrails/input/input-guardrail.service';
@@ -216,14 +216,15 @@ export const saveChatEntry = async (params: {
   answer:         string;
   sourceChunkIds: number[];
   sessionId:      number;
+  traceId?:       string;
 }): Promise<number> => {
-  const { studentId, lectureId, question, answer, sourceChunkIds, sessionId } = params;
+  const { studentId, lectureId, question, answer, sourceChunkIds, sessionId, traceId } = params;
 
   const { rows } = await query<{ id: number }>(
-    `INSERT INTO chat_history (student_id, lecture_id, question, answer, source_chunk_ids, session_id)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO chat_history (student_id, lecture_id, question, answer, source_chunk_ids, session_id, trace_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING id`,
-    [studentId, lectureId, question, answer, sourceChunkIds, sessionId]
+    [studentId, lectureId, question, answer, sourceChunkIds, sessionId, traceId ?? null]
   );
   logger.info(`[CHAT] ✅ Saved chat entry #${rows[0].id} for session #${sessionId}`);
   return rows[0].id;
@@ -485,7 +486,7 @@ export const askLectureAgent = async (
         a => ({ answerLength: a.length })
       );
       await trace.span('save-chat-entry', async () => {
-        await saveChatEntry({ studentId, lectureId, question, answer, sourceChunkIds: [], sessionId });
+        await saveChatEntry({ studentId, lectureId, question, answer, sourceChunkIds: [], sessionId, traceId: trace.traceId });
         await touchSession(studentId, sessionId, question);
       }, () => ({ sourceChunkCount: 0 }));
       logger.info(`[CHAT] ✅ Greeting answered for session #${sessionId}`);
@@ -523,7 +524,7 @@ export const askLectureAgent = async (
         const reason: NotFoundReason = allChunks.length === 0 ? 'EMPTY_LECTURE' : 'SUMMARY_CONTENT_EMPTY';
         logger.warn(`[CHAT] ⚠️  No summary available for lecture #${lectureId} (${allChunks.length} chunk(s) found)`);
         await trace.span('save-chat-entry', async () => {
-          await saveChatEntry({ studentId, lectureId, question, answer: summaryUnavailable, sourceChunkIds: [], sessionId });
+          await saveChatEntry({ studentId, lectureId, question, answer: summaryUnavailable, sourceChunkIds: [], sessionId, traceId: trace.traceId });
           await touchSession(studentId, sessionId, question);
         }, () => ({ sourceChunkCount: 0 }));
         finishTrace('SUCCESS', { responseStatus: 'NOT_FOUND', notFoundReason: reason, memoryResult: 'NOT_ATTEMPTED' });
@@ -532,7 +533,7 @@ export const askLectureAgent = async (
 
       const chunkIds = allChunks.map(c => c.id);
       await trace.span('save-chat-entry', async () => {
-        await saveChatEntry({ studentId, lectureId, question, answer: summary, sourceChunkIds: chunkIds, sessionId });
+        await saveChatEntry({ studentId, lectureId, question, answer: summary, sourceChunkIds: chunkIds, sessionId, traceId: trace.traceId });
         await touchSession(studentId, sessionId, question);
       }, () => ({ sourceChunkCount: chunkIds.length }));
       logger.info(`[CHAT] ✅ Summary answered for session #${sessionId} (${allChunks.length} chunk(s))`);
@@ -562,7 +563,7 @@ export const askLectureAgent = async (
       );
       retrievalQuery = rewritten.query;
       if (rewritten.wasRewritten) {
-        logger.info(`[CHAT] ✏️  Using rewritten retrieval query: "${retrievalQuery.slice(0, 80)}"`);
+        logger.info(`[CHAT] ✏️  Using rewritten retrieval query: "${logSafeText(retrievalQuery, 80)}"`);
       }
       trace.setAttributes({ rewriteAttempted: rewritten.attempted, rewriteSucceeded: rewritten.wasRewritten, rewriteFallbackUsed: rewritten.attempted && !rewritten.wasRewritten });
     }
@@ -607,6 +608,7 @@ export const askLectureAgent = async (
             answer: memoryResult.hit!.answer,
             sourceChunkIds: memoryResult.hit!.sourceChunkIds,
             sessionId,
+            traceId: trace.traceId,
           });
           await touchSession(studentId, sessionId, question);
         }, () => ({ sourceChunkCount: memoryResult.hit!.sourceChunkIds.length }));
@@ -647,7 +649,7 @@ export const askLectureAgent = async (
     );
     trace.setAttributes({ decompositionMode: decomposition.mode, decompositionReason: decomposition.reason });
     if (decomposition.mode === 'DECOMPOSED') {
-      logger.info(`[CHAT] 🔀 Decomposed into ${decomposition.subqueries.length} subquery(ies): ${decomposition.subqueries.map(s => `"${s.slice(0, 50)}"`).join(', ')}`);
+      logger.info(`[CHAT] 🔀 Decomposed into ${decomposition.subqueries.length} subquery(ies): ${decomposition.subqueries.map(s => `"${logSafeText(s, 50)}"`).join(', ')}`);
     }
 
     // 5/6. Retrieval — DIRECT reuses the existing single-query embed ->
@@ -685,7 +687,7 @@ export const askLectureAgent = async (
       if (decomposedResult.selectedChunks.length === 0) {
         logger.warn(`[CHAT] ⚠️  No subquery produced qualifying evidence — returning not-found message`);
         await trace.span('save-chat-entry', async () => {
-          await saveChatEntry({ studentId, lectureId, question, answer: LECTURE_NOT_FOUND_MESSAGE, sourceChunkIds: [], sessionId });
+          await saveChatEntry({ studentId, lectureId, question, answer: LECTURE_NOT_FOUND_MESSAGE, sourceChunkIds: [], sessionId, traceId: trace.traceId });
           await touchSession(studentId, sessionId, question);
         }, () => ({ sourceChunkCount: 0 }));
         finishTrace('SUCCESS', {
@@ -745,7 +747,7 @@ export const askLectureAgent = async (
       if (precomputedEmbedding) {
         questionEmbedding = precomputedEmbedding;
       } else {
-        logger.info(`[CHAT] 🔍 Embedding: "${retrievalQuery.slice(0, 60)}..."`);
+        logger.info(`[CHAT] 🔍 Embedding: "${logSafeText(retrievalQuery, 60)}"`);
         currentStage = 'generate-query-embedding';
         questionEmbedding = await trace.span(
           'generate-query-embedding',
@@ -780,7 +782,7 @@ export const askLectureAgent = async (
       if (candidates.length === 0) {
         logger.warn(`[CHAT] ⚠️  No relevant chunks found — returning not-found message`);
         await trace.span('save-chat-entry', async () => {
-          await saveChatEntry({ studentId, lectureId, question, answer: LECTURE_NOT_FOUND_MESSAGE, sourceChunkIds: [], sessionId });
+          await saveChatEntry({ studentId, lectureId, question, answer: LECTURE_NOT_FOUND_MESSAGE, sourceChunkIds: [], sessionId, traceId: trace.traceId });
           await touchSession(studentId, sessionId, question);
         }, () => ({ sourceChunkCount: 0 }));
         finishTrace('SUCCESS', { responseStatus: 'NOT_FOUND', notFoundReason: 'NO_VECTOR_CANDIDATES', memoryResult: memoryResultAttr, candidateCount: 0 });
@@ -835,7 +837,7 @@ export const askLectureAgent = async (
       if (chunks.length === 0) {
         logger.warn(`[CHAT] ⚠️  All candidates fell below the relevance floor — returning not-found message`);
         await trace.span('save-chat-entry', async () => {
-          await saveChatEntry({ studentId, lectureId, question, answer: LECTURE_NOT_FOUND_MESSAGE, sourceChunkIds: [], sessionId });
+          await saveChatEntry({ studentId, lectureId, question, answer: LECTURE_NOT_FOUND_MESSAGE, sourceChunkIds: [], sessionId, traceId: trace.traceId });
           await touchSession(studentId, sessionId, question);
         }, () => ({ sourceChunkCount: 0 }));
         finishTrace('SUCCESS', {
@@ -915,7 +917,7 @@ export const askLectureAgent = async (
     const chunkIds = chunks.map((c: QnaChunk) => c.id);
     currentStage = 'save-chat-entry';
     const savedEntryId = await trace.span('save-chat-entry', async () => {
-      const id = await saveChatEntry({ studentId, lectureId, question, answer, sourceChunkIds: chunkIds, sessionId });
+      const id = await saveChatEntry({ studentId, lectureId, question, answer, sourceChunkIds: chunkIds, sessionId, traceId: trace.traceId });
       await touchSession(studentId, sessionId, question);
       return id;
     }, () => ({ sourceChunkCount: chunkIds.length }));

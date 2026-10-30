@@ -1,6 +1,7 @@
 import nodemailer from 'nodemailer';
 import { env } from '../config/env';
 import { logger } from '../utils/logger';
+import { query } from '../config/database';
 
 const transporter = nodemailer.createTransport({
   host:   env.EMAIL.HOST,
@@ -124,6 +125,32 @@ export const sendSignupVerificationOtp = async (
   });
 
   logger.info(`Signup verification OTP email sent to ${to}`);
+};
+
+// ── ADMIN ALERT EMAIL ─────────────────────────────────
+// Recipients: ALERT_EMAILS if set, otherwise every ADMIN user. Callers must
+// keep student data out of `lines`. Throws if nobody could be notified, so the
+// caller does not record the alert as sent.
+export const sendAdminAlertEmail = async (subject: string, lines: string[]): Promise<void> => {
+  let to = env.OBSERVABILITY.ALERT_EMAILS;
+  if (to.length === 0) {
+    const { rows } = await query<{ email: string }>(`SELECT email FROM users WHERE role = 'ADMIN'`);
+    to = rows.map(r => r.email);
+  }
+  if (to.length === 0) throw new Error('No alert recipients (set ALERT_EMAILS or create an ADMIN user)');
+
+  const link = `${env.FRONTEND_URL}/admin/monitor`;
+  await transporter.sendMail({
+    from:    FROM,
+    to,
+    subject: `[AskAITutor] ${subject}`,
+    text:    [...lines, '', `Monitor: ${link}`].join('\n'),
+    html:    `<div style="font-family:Arial,sans-serif;font-size:14px;color:#1e293b">${lines
+      .map(l => `<p style="margin:0 0 8px">${l.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</p>`)
+      .join('')}<p><a href="${link}">Open the monitor dashboard</a></p></div>`,
+  });
+
+  logger.info(`Admin alert email sent to ${to.length} recipient(s): ${subject}`);
 };
 
 // ── TRANSPORT VERIFY ──────────────────────────────────

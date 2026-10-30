@@ -1,4 +1,5 @@
 'use client';
+// Frozen: no new features here; new monitoring work goes to /admin/monitor.
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';

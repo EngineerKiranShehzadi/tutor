@@ -1,7 +1,10 @@
+import { randomBytes } from 'crypto';
 import { env } from '../config/env';
 import { logger } from '../utils/logger';
 import { OPENINFERENCE_SPAN_KIND, ATTR } from './otel-semconv';
 import { sanitizeAttributes, sanitizeValue, isContentCaptureEnabled } from './sanitize';
+import { isValidTraceId } from './tracer';
+import { decideTraceExport } from './sampling';
 import type { FinishedTrace, FinishedSpan } from './types';
 
 // Optional, best-effort export of our own internal traces to Phoenix over
@@ -16,6 +19,32 @@ import type { FinishedTrace, FinishedSpan } from './types';
 // directly under root (the old bug), we walk the actual parent/child tree
 // and only ever start a child span once its real parent's OTel Span object
 // exists, so Phoenix receives the genuine pipeline shape.
+
+// Makes Phoenix use OUR trace/span IDs instead of generating unrelated ones,
+// so a [TRACE] log line or a chat message's requestId can be matched to its
+// Phoenix trace. OTel's Tracer.startSpan() is synchronous and asks the
+// generator for IDs inside that call, so export code sets the pending slot
+// immediately before each startSpan() and nothing can interleave. A slot is
+// consumed once; anything unset (or invalid) falls back to a random ID.
+let pendingTraceId: string | null = null;
+let pendingSpanId: string | null = null;
+
+const SPAN_ID_PATTERN = /^[0-9a-f]{16}$/;
+const isValidSpanId = (id: unknown): id is string =>
+  typeof id === 'string' && SPAN_ID_PATTERN.test(id) && /[1-9a-f]/.test(id);
+
+const ourIdGenerator = {
+  generateTraceId(): string {
+    const id = pendingTraceId ?? randomBytes(16).toString('hex');
+    pendingTraceId = null;
+    return id;
+  },
+  generateSpanId(): string {
+    const id = pendingSpanId ?? randomBytes(8).toString('hex');
+    pendingSpanId = null;
+    return id;
+  },
+};
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let tracerProvider: any = null;
@@ -51,6 +80,7 @@ async function getOtelTracer() {
         'openinference.project.name': env.OBSERVABILITY.PHOENIX_PROJECT_NAME,
       }),
       spanProcessors: [new BatchSpanProcessor(exporter)],
+      idGenerator: ourIdGenerator,
     });
     tracerProvider = provider;
     logger.info(`[PHOENIX] Exporter initialized -> ${env.OBSERVABILITY.PHOENIX_ENDPOINT}`);
@@ -79,18 +109,80 @@ function setSafeAttributes(
   }
 }
 
-export async function exportTraceToPhoenix(trace: FinishedTrace): Promise<void> {
-  if (!env.OBSERVABILITY.ENABLED || !env.OBSERVABILITY.PHOENIX_ENABLED) return;
-  if (env.OBSERVABILITY.SAMPLE_RATE < 1 && Math.random() > env.OBSERVABILITY.SAMPLE_RATE) return;
+// Exports that have started but not yet handed their spans to the
+// BatchSpanProcessor. recordTrace() is fire-and-forget, so at shutdown a
+// just-finished request's export may still be loading the OTel modules;
+// shutdownPhoenixExporter() waits for these before flushing.
+const pendingExports = new Set<Promise<boolean>>();
+
+// Resolves true only when the trace was actually handed to the exporter;
+// false when disabled, sampled out, unavailable or failed.
+export function exportTraceToPhoenix(trace: FinishedTrace): Promise<boolean> {
+  const p = exportTrace(trace);
+  pendingExports.add(p);
+  void p.finally(() => pendingExports.delete(p));
+  return p;
+}
+
+// Flushes buffered spans to Phoenix and shuts the exporter down. Called once
+// from the SIGTERM/SIGINT handler in server.ts. Never throws; returns as soon
+// as `timeoutMs` has passed even if Phoenix is slow or unreachable.
+export async function shutdownPhoenixExporter(timeoutMs = 5000): Promise<void> {
+  if (!tracerProvider && pendingExports.size === 0) return;
+
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<'timeout'>(resolve => {
+    timer = setTimeout(() => resolve('timeout'), timeoutMs);
+    timer.unref();
+  });
+
+  const flush = (async () => {
+    await Promise.allSettled([...pendingExports]);
+    if (!tracerProvider) return;
+    await tracerProvider.forceFlush();
+    await tracerProvider.shutdown();
+  })();
+
+  try {
+    const outcome = await Promise.race([flush.then(() => 'done' as const), timeout]);
+    if (outcome === 'timeout') {
+      logger.warn(`[PHOENIX] Shutdown flush did not finish within ${timeoutMs}ms — some traces may be lost`);
+    } else {
+      logger.info('[PHOENIX] Exporter flushed and shut down');
+    }
+  } catch (err) {
+    logger.warn(`[PHOENIX] Shutdown flush failed (non-fatal): ${(err as Error).message}`);
+  } finally {
+    if (timer) clearTimeout(timer);
+    // If the race timed out, a late rejection from `flush` must not surface
+    // as an unhandled rejection.
+    flush.catch(() => undefined);
+  }
+}
+
+async function exportTrace(trace: FinishedTrace): Promise<boolean> {
+  if (!env.OBSERVABILITY.ENABLED || !env.OBSERVABILITY.PHOENIX_ENABLED) return false;
+  const decision = decideTraceExport(trace, env.OBSERVABILITY.SAMPLE_RATE);
+  logger.debug(`[PHOENIX] Export decision for trace ${trace.traceId}: ${decision.reason}`);
+  if (!decision.export) return false;
 
   try {
     const { trace: otelTrace, context: otelContext, SpanStatusCode } = await import('@opentelemetry/api');
     const tracer = await getOtelTracer();
-    if (!tracer) return;
+    if (!tracer) return false;
 
     const rootStart = trace.startedAt;
     const rootEnd = trace.startedAt + trace.durationMs;
-    const rootSpan = tracer.startSpan(trace.rootName, { startTime: rootStart });
+    // Invalid IDs (e.g. hand-built traces in tests) fall back to random ones.
+    pendingTraceId = isValidTraceId(trace.traceId) ? trace.traceId : null;
+    pendingSpanId = isValidSpanId(trace.rootSpanId) ? trace.rootSpanId : null;
+    let rootSpan;
+    try {
+      rootSpan = tracer.startSpan(trace.rootName, { startTime: rootStart });
+    } finally {
+      pendingTraceId = null;
+      pendingSpanId = null;
+    }
     rootSpan.setAttribute('trace.id', trace.traceId);
     rootSpan.setAttribute(OPENINFERENCE_SPAN_KIND, 'CHAIN');
     if (trace.attributes.sessionId !== undefined && trace.attributes.sessionId !== null) {
@@ -134,7 +226,13 @@ export async function exportTraceToPhoenix(trace: FinishedTrace): Promise<void> 
       }
       visiting.add(span.spanId);
 
-      const childSpan = tracer.startSpan(span.name, { startTime: span.startedAt }, parentCtx);
+      pendingSpanId = isValidSpanId(span.spanId) ? span.spanId : null;
+      let childSpan;
+      try {
+        childSpan = tracer.startSpan(span.name, { startTime: span.startedAt }, parentCtx);
+      } finally {
+        pendingSpanId = null;
+      }
       childSpan.setAttribute(OPENINFERENCE_SPAN_KIND, span.kind);
       setSafeAttributes(childSpan, span.metadata);
       if (span.errorCode) childSpan.setAttribute('error.code', span.errorCode);
@@ -173,7 +271,9 @@ export async function exportTraceToPhoenix(trace: FinishedTrace): Promise<void> 
     }
 
     rootSpan.end(rootEnd);
+    return true;
   } catch (err) {
     logger.warn(`[PHOENIX] Trace export failed (non-fatal): ${(err as Error).message}`);
+    return false;
   }
 }

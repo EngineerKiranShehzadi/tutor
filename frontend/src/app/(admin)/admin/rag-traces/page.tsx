@@ -1,5 +1,7 @@
 'use client';
+// Frozen: no new features here; new monitoring work goes to /admin/monitor.
 import { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   AreaChart, Area, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Cell,
@@ -118,6 +120,14 @@ export default function ObservabilityOverviewPage() {
 
   return (
     <div className="max-w-[1500px]">
+      <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3 text-[13px] text-indigo-900">
+        <i className="fas fa-circle-info text-indigo-500" />
+        <span>
+          For day-to-day monitoring use{' '}
+          <Link href="/admin/monitor" className="font-semibold text-indigo-700 underline">AI Tutor Monitor</Link>.
+          {' '}These pages show deep technical detail for engineers.
+        </span>
+      </div>
       <ObservabilityHeader
         subtitle="Live RAG pipeline monitoring — sourced from Phoenix, rendered in our own admin theme."
         onRefresh={refresh}

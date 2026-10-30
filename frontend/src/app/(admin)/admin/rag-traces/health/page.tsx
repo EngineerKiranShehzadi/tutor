@@ -1,4 +1,5 @@
 'use client';
+// Frozen: no new features here; new monitoring work goes to /admin/monitor.
 import { useCallback, useEffect, useState } from 'react';
 import { ObservabilityHeader } from '@/components/observability/ObservabilityHeader';
 import { ObservabilityTabs } from '@/components/observability/ObservabilityTabs';

@@ -1,6 +1,6 @@
-import { randomUUID } from 'crypto';
-import { AsyncLocalStorage } from 'async_hooks';
+import { randomBytes, randomUUID } from 'crypto';
 import { logger } from '../utils/logger';
+import { spanContextStorage } from './trace-context';
 import { spanKindFor, OpenInferenceSpanKind } from './otel-semconv';
 import type { FinishedSpan, FinishedTrace, SafeMetadata, SpanStatus, SpanEvent } from './types';
 
@@ -19,6 +19,19 @@ export function classifyErrorCode(err: unknown): string {
   return 'UNKNOWN_ERROR';
 }
 
+// OTel trace ID format: 32 lowercase hex chars, not all zeros. The same ID is
+// used by our in-process trace, the [TRACE] log line, requestId/trace.id
+// attributes and (via phoenix.ts's idGenerator) the Phoenix trace itself.
+const TRACE_ID_PATTERN = /^[0-9a-f]{32}$/;
+
+export function isValidTraceId(id: unknown): id is string {
+  return typeof id === 'string' && TRACE_ID_PATTERN.test(id) && /[1-9a-f]/.test(id);
+}
+
+function generateTraceId(): string {
+  return randomBytes(16).toString('hex');
+}
+
 function generateSpanId(): string {
   // 16 hex chars — same width as a real OTel span ID, so it reads naturally
   // next to Phoenix-native IDs in logs/UI even though it isn't one itself
@@ -26,19 +39,13 @@ function generateSpanId(): string {
   return randomUUID().replace(/-/g, '').slice(0, 16);
 }
 
-interface ActiveSpanContext {
-  trace: RequestTrace;
-  parentSpanId: string;
-}
-
 // Lets a deeply-nested service call (query-router, llm-gemini, etc.) find
 // "the current request's trace and current parent span" without the trace
 // object being threaded through every function signature in the pipeline.
-// AsyncLocalStorage correctly propagates across every await in the chain,
-// so a `trace.span()` call made from inside another `trace.span()`'s fn —
-// no matter how many modules deep — automatically becomes a real child.
-const spanContextStorage = new AsyncLocalStorage<ActiveSpanContext>();
-
+// AsyncLocalStorage (see trace-context.ts) correctly propagates across every
+// await in the chain, so a `trace.span()` call made from inside another
+// `trace.span()`'s fn — no matter how many modules deep — automatically
+// becomes a real child.
 export function getActiveTrace(): RequestTrace | null {
   return spanContextStorage.getStore()?.trace ?? null;
 }
@@ -62,7 +69,7 @@ export class RequestTrace {
 
   constructor(rootName: string, traceId?: string) {
     this.rootName = rootName;
-    this.traceId = traceId ?? randomUUID();
+    this.traceId = traceId ?? generateTraceId();
     this.rootSpanId = generateSpanId();
     this.startedAtMs = Date.now();
     this.startedAtHr = process.hrtime.bigint();
@@ -212,13 +219,29 @@ function safeCall<T>(fn: () => T, fallback: T): T {
 // if it can be avoided — chat.service.ts fires this after building the
 // response). Phase 1: Phoenix export + a concise log line.
 export async function recordTrace(trace: FinishedTrace): Promise<void> {
+  // Each step is independent: a failure in one must never skip the next.
   try {
     logger.info(
       `[TRACE] ${trace.rootName} id=${trace.traceId} status=${trace.status} durationMs=${trace.durationMs.toFixed(1)} spans=${trace.spans.length} route=${trace.attributes.route ?? 'n/a'}`
     );
-    const { exportTraceToPhoenix } = await import('./phoenix');
-    await exportTraceToPhoenix(trace);
   } catch (err) {
-    logger.warn(`[OBSERVABILITY] recordTrace failed (non-fatal): ${(err as Error).message}`);
+    logger.warn(`[OBSERVABILITY] recordTrace log line failed (non-fatal): ${(err as Error).message}`);
+  }
+
+  let exported = false;
+  try {
+    const { exportTraceToPhoenix } = await import('./phoenix');
+    exported = await exportTraceToPhoenix(trace);
+  } catch (err) {
+    exported = false;
+    logger.warn(`[OBSERVABILITY] recordTrace Phoenix export failed (non-fatal): ${(err as Error).message}`);
+  }
+
+  try {
+    // Dynamic like phoenix above: request-log.service imports isValidTraceId from this file.
+    const { buildRequestLogRow, writeRequestLog } = await import('./request-log.service');
+    await writeRequestLog(buildRequestLogRow(trace, exported));
+  } catch (err) {
+    logger.warn(`[OBSERVABILITY] recordTrace request-log write failed (non-fatal): ${(err as Error).message}`);
   }
 }
