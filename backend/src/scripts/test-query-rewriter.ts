@@ -24,6 +24,9 @@ import {
   AskLectureAgentDeps,
 } from '../services/chat.service';
 import { QnaChunk } from '../types';
+import { assertThrowawayDb } from './test-db-guard-lib';
+
+assertThrowawayDb('test-query-rewriter');
 
 if (!env.GEMINI_API_KEY) {
   console.error('GEMINI_API_KEY is not configured.');

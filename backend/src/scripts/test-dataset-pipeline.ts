@@ -7,8 +7,8 @@
  * membership, activation, rollback, retention, answer-memory binding, vector
  * search — is the real code path.
  *
- * SAFETY: refuses to run unless DATABASE_URL is a local database whose name
- * contains "test"/"pipe". It never touches Neon.
+ * SAFETY: refuses to run unless the target database is local and its name
+ * contains "test"/"pipe" (shared guard: test-db-guard-lib.ts). It never touches Neon.
  *
  * Usage:
  *   DATABASE_URL=postgresql://postgres:test@localhost:55432/askai_pipe \
@@ -19,11 +19,9 @@ import { spawn } from 'child_process';
 import * as XLSX from 'xlsx';
 import { join } from 'path';
 
-const dbUrl = process.env.DATABASE_URL ?? '';
-if (!/(localhost|127\.0\.0\.1)/.test(dbUrl) || !/(test|pipe)/i.test(dbUrl.split('/').pop() ?? '')) {
-  console.error('Refusing to run: DATABASE_URL must point at a LOCAL database whose name contains "test" or "pipe".');
-  process.exit(2);
-}
+import { assertThrowawayDb } from './test-db-guard-lib';
+
+assertThrowawayDb('test-dataset-pipeline');
 
 import pool, { query } from '../config/database';
 import { EMBEDDING_MODEL_VERSION, EmbeddingUnavailableError } from '../services/embedding.service';

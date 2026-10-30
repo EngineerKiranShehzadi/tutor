@@ -8,6 +8,7 @@ import { createHash, randomBytes } from 'crypto';
 import * as XLSX from 'xlsx';
 import { query } from '../config/database';
 import { prepareDatasetVersion, finishDatasetVersion } from '../services/dataset-version.service';
+import { assertThrowawayDb } from './test-db-guard-lib';
 
 const EMBED_DIMS = 1024;
 
@@ -16,6 +17,7 @@ export type FixtureRole = 'STUDENT' | 'ADMIN';
 const uniq = (): string => `${Date.now()}-${randomBytes(4).toString('hex')}`;
 
 export async function createTestUser(role: FixtureRole): Promise<string> {
+  assertThrowawayDb('test-fixtures');
   const { rows } = await query<{ id: string }>(
     `INSERT INTO users (name, email, password_hash, is_verified, role)
      VALUES ($1, $2, 'x', TRUE, $3) RETURNING id`,
@@ -46,6 +48,7 @@ const fakeEmbed = async (text: string): Promise<number[]> => {
  * active dataset version whose chunks are all embedded with the current model.
  */
 export async function createReadyLecture(chunkCount = 3): Promise<number> {
+  assertThrowawayDb('test-fixtures');
   const { rows } = await query<{ id: number }>(
     `INSERT INTO lectures (title, youtube_url, youtube_video_id)
      VALUES ($1, 'https://youtu.be/xxxxxxxxxxx', 'xxxxxxxxxxx') RETURNING id`,

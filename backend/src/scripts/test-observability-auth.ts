@@ -18,6 +18,9 @@
 import { createApp } from '../app';
 import { generateAccessToken } from '../utils/jwt';
 import { createTestUser, deleteTestUsers } from './test-fixtures';
+import { assertThrowawayDb } from './test-db-guard-lib';
+
+assertThrowawayDb('test-observability-auth');
 
 // Own users, created in main() and removed at the end, so the cases never depend on
 // (or skip for lack of) existing STUDENT/ADMIN rows.

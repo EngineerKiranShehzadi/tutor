@@ -40,6 +40,7 @@
  */
 import { spawnSync } from 'child_process';
 import * as path from 'path';
+import { assertThrowawayDb } from './test-db-guard-lib';
 
 const BACKEND_ROOT = path.join(__dirname, '..', '..');
 const TS_NODE_BIN = path.join(BACKEND_ROOT, 'node_modules', '.bin', 'ts-node');
@@ -57,6 +58,7 @@ const SUITES: Suite[] = [
   { name: 'observability-overview-metrics', script: 'src/scripts/test-observability-overview-metrics.ts' },
   { name: 'request-log', script: 'src/scripts/test-request-log.ts' },
   { name: 'llm-thinking', script: 'src/scripts/test-llm-thinking.ts' },
+  { name: 'db-guard', script: 'src/scripts/test-db-guard.ts' },
   { name: 'retrieval-providers', script: 'src/scripts/test-retrieval-providers.ts' },
   { name: 'sampling', script: 'src/scripts/test-sampling.ts' },
   { name: 'monitor', script: 'src/scripts/test-monitor.ts' },
@@ -68,6 +70,8 @@ const SUITES: Suite[] = [
 ];
 
 function main(): void {
+  // Several suites write to the database; never let them run against a real one.
+  assertThrowawayDb('npm test');
   for (const suite of SUITES) {
     console.log(`\n=== ${suite.name} (npm run test:${suite.name}) ===`);
     const result = spawnSync(TS_NODE_BIN, ['--transpile-only', suite.script], {

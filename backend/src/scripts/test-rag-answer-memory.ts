@@ -40,6 +40,9 @@ import {
   AskLectureAgentDeps,
   LECTURE_NOT_FOUND_MESSAGE,
 } from '../services/chat.service';
+import { assertThrowawayDb } from './test-db-guard-lib';
+
+assertThrowawayDb('test-rag-answer-memory');
 
 if (!env.GEMINI_API_KEY) {
   console.error('GEMINI_API_KEY is not configured.');

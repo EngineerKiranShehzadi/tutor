@@ -31,6 +31,9 @@ import { withGeminiDiagnostic } from '../observability/gemini-diagnostics';
 import type { FinishedTrace } from '../observability/types';
 import type { OutputGuardrailResult } from '../rag/guardrails/output/answer-verification.types';
 import type { OutputGuardrailParams } from '../rag/guardrails/output/output-guardrail.service';
+import { assertThrowawayDb } from './test-db-guard-lib';
+
+assertThrowawayDb('test-observability');
 
 if (!env.GEMINI_API_KEY) {
   console.error('GEMINI_API_KEY is not configured.');
