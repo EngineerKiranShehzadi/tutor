@@ -125,6 +125,14 @@ const check = (name: string, pass: boolean, detail: string) => {
 const expectReject = async (p: Promise<unknown>): Promise<{ rejected: boolean; message: string; err?: unknown }> =>
   p.then(() => ({ rejected: false, message: '' }), e => ({ rejected: true, message: (e as Error).message, err: e }));
 
+// A fresh DB has no users; chat_history / answer memory need a real student_id.
+const createStudent = async (): Promise<string> =>
+  (await query<{ id: string }>(
+    `INSERT INTO users (name, email, password_hash, is_verified, role)
+     VALUES ('Pipeline Test Student', $1, 'x', TRUE, 'STUDENT') RETURNING id`,
+    [`pipeline-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.test`],
+  )).rows[0].id;
+
 const TSNODE = join(__dirname, '../../node_modules/.bin/ts-node');
 
 // ── worker mode (used by the restart-resume scenario) ───────────────────
@@ -420,7 +428,7 @@ const run = async () => {
   // 8. Rollback, and answer memory bound to the version
   // ─────────────────────────────────────────────────────────────────────
   {
-    const student = (await query<{ id: string }>(`SELECT id FROM users LIMIT 1`)).rows[0]?.id;
+    const student = await createStudent();
     const verList = await versionRows(L);
     const activeNow = (await lectureState(L)).active_version_id!;
     const prevId = verList.filter(v => v.status === 'SUPERSEDED').sort((a, b) => b.version_no - a.version_no)[0]?.id;
@@ -467,7 +475,7 @@ const run = async () => {
   // 9. Retention: active + 1 previous only; chat source references survive
   // ─────────────────────────────────────────────────────────────────────
   {
-    const student = (await query<{ id: string }>(`SELECT id FROM users LIMIT 1`)).rows[0]?.id;
+    const student = await createStudent();
     // reference one chunk of the CURRENT active version from chat history, then push 2 more versions
     const cur = await activeChunks(L);
     const referenced = cur.find(c => c.answer.startsWith('Concept 1 has been CORRECTED'))!;
