@@ -77,7 +77,22 @@ ALTER TABLE lecture_qna_chunks ADD COLUMN IF NOT EXISTS llm_name TEXT;
 ALTER TABLE lecture_qna_chunks ADD COLUMN IF NOT EXISTS local_embedding vector(1024);
 -- Switching retrieval models: old vectors are a different dimension/space and
 -- must be discarded, then every lecture re-embedded via scripts/embed_local.py.
-ALTER TABLE lecture_qna_chunks ALTER COLUMN local_embedding TYPE vector(1024) USING NULL;
+-- Guarded: an unconditional USING NULL here wiped all embeddings on every db:setup run (incident 2026-10-30).
+DO $$
+DECLARE
+  current_type text;
+BEGIN
+  SELECT format_type(a.atttypid, a.atttypmod) INTO current_type
+  FROM pg_attribute a
+  WHERE a.attrelid = 'lecture_qna_chunks'::regclass
+    AND a.attname = 'local_embedding'
+    AND NOT a.attisdropped;
+
+  IF current_type IS NOT NULL AND current_type <> 'vector(1024)' THEN
+    ALTER TABLE lecture_qna_chunks ALTER COLUMN local_embedding TYPE vector(1024) USING NULL;
+  END IF;
+END
+$$;
 
 CREATE INDEX IF NOT EXISTS idx_chunks_lecture_id
   ON lecture_qna_chunks(lecture_id);
