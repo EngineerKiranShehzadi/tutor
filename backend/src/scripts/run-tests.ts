@@ -55,6 +55,7 @@ const SUITES: Suite[] = [
   { name: 'observability-auth', script: 'src/scripts/test-observability-auth.ts' },
   { name: 'observability-capabilities', script: 'src/scripts/test-observability-capabilities.ts' },
   { name: 'observability-overview-metrics', script: 'src/scripts/test-observability-overview-metrics.ts' },
+  { name: 'request-log', script: 'src/scripts/test-request-log.ts' },
 ];
 
 function main(): void {

@@ -224,7 +224,10 @@ export async function recordTrace(trace: FinishedTrace): Promise<void> {
       `[TRACE] ${trace.rootName} id=${trace.traceId} status=${trace.status} durationMs=${trace.durationMs.toFixed(1)} spans=${trace.spans.length} route=${trace.attributes.route ?? 'n/a'}`
     );
     const { exportTraceToPhoenix } = await import('./phoenix');
-    await exportTraceToPhoenix(trace);
+    const exported = await exportTraceToPhoenix(trace);
+    // Dynamic like phoenix above: request-log.service imports isValidTraceId from this file.
+    const { buildRequestLogRow, writeRequestLog } = await import('./request-log.service');
+    await writeRequestLog(buildRequestLogRow(trace, exported));
   } catch (err) {
     logger.warn(`[OBSERVABILITY] recordTrace failed (non-fatal): ${(err as Error).message}`);
   }

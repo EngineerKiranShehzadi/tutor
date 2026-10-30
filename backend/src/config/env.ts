@@ -12,6 +12,30 @@ const required = (key: string): string => {
 const optional = (key: string, fallback: string): string =>
   process.env[key] ?? fallback;
 
+export interface LlmPrice { inputPer1M: number; outputPer1M: number }
+
+// LLM_PRICING_JSON: {"<model>":{"inputPer1M":<usd>,"outputPer1M":<usd>}}.
+// Malformed JSON or entries are ignored (never throw at boot); a model with
+// no valid entry simply gets est_cost_usd = NULL in rag_request_log.
+const parseLlmPricing = (raw: string): Record<string, LlmPrice> => {
+  const out: Record<string, LlmPrice> = {};
+  if (!raw.trim()) return out;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, { inputPer1M?: unknown; outputPer1M?: unknown }>;
+    for (const [model, p] of Object.entries(parsed ?? {})) {
+      if (
+        typeof p?.inputPer1M === 'number' && Number.isFinite(p.inputPer1M) && p.inputPer1M >= 0 &&
+        typeof p?.outputPer1M === 'number' && Number.isFinite(p.outputPer1M) && p.outputPer1M >= 0
+      ) {
+        out[model] = { inputPer1M: p.inputPer1M, outputPer1M: p.outputPer1M };
+      }
+    }
+  } catch {
+    // ignore — see comment above
+  }
+  return out;
+};
+
 export const env = {
   NODE_ENV:      optional('NODE_ENV', 'development'),
   PORT:          parseInt(optional('PORT', '5000'), 10),
@@ -127,6 +151,14 @@ export const env = {
     PHOENIX_API_KEY: optional('PHOENIX_API_KEY', ''),
     PHOENIX_QUERY_TIMEOUT_MS: parseInt(optional('PHOENIX_QUERY_TIMEOUT_MS', '10000'), 10),
     PHOENIX_OVERVIEW_CACHE_TTL_MS: parseInt(optional('PHOENIX_OVERVIEW_CACHE_TTL_MS', '15000'), 10),
+
+    // One rag_request_log row per askLectureAgent call (see
+    // observability/request-log.service.ts). Postgres-only; independent of
+    // Phoenix. A failed write only logs a warning.
+    REQUEST_LOG_ENABLED: optional('REQUEST_LOG_ENABLED', 'true') === 'true',
+    // Per-model USD prices used to fill rag_request_log.est_cost_usd. Unknown
+    // model or missing token counts -> NULL, never a guess.
+    LLM_PRICING: parseLlmPricing(optional('LLM_PRICING_JSON', '')),
 
     ALERTS_ENABLED: optional('OBSERVABILITY_ALERTS_ENABLED', 'true') === 'true',
     ALERT_ERROR_RATE_PERCENT:         parseFloat(optional('ALERT_ERROR_RATE_PERCENT', '10')),

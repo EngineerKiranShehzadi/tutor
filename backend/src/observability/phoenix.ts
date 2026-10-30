@@ -112,9 +112,11 @@ function setSafeAttributes(
 // BatchSpanProcessor. recordTrace() is fire-and-forget, so at shutdown a
 // just-finished request's export may still be loading the OTel modules;
 // shutdownPhoenixExporter() waits for these before flushing.
-const pendingExports = new Set<Promise<void>>();
+const pendingExports = new Set<Promise<boolean>>();
 
-export function exportTraceToPhoenix(trace: FinishedTrace): Promise<void> {
+// Resolves true only when the trace was actually handed to the exporter;
+// false when disabled, sampled out, unavailable or failed.
+export function exportTraceToPhoenix(trace: FinishedTrace): Promise<boolean> {
   const p = exportTrace(trace);
   pendingExports.add(p);
   void p.finally(() => pendingExports.delete(p));
@@ -157,14 +159,14 @@ export async function shutdownPhoenixExporter(timeoutMs = 5000): Promise<void> {
   }
 }
 
-async function exportTrace(trace: FinishedTrace): Promise<void> {
-  if (!env.OBSERVABILITY.ENABLED || !env.OBSERVABILITY.PHOENIX_ENABLED) return;
-  if (env.OBSERVABILITY.SAMPLE_RATE < 1 && Math.random() > env.OBSERVABILITY.SAMPLE_RATE) return;
+async function exportTrace(trace: FinishedTrace): Promise<boolean> {
+  if (!env.OBSERVABILITY.ENABLED || !env.OBSERVABILITY.PHOENIX_ENABLED) return false;
+  if (env.OBSERVABILITY.SAMPLE_RATE < 1 && Math.random() > env.OBSERVABILITY.SAMPLE_RATE) return false;
 
   try {
     const { trace: otelTrace, context: otelContext, SpanStatusCode } = await import('@opentelemetry/api');
     const tracer = await getOtelTracer();
-    if (!tracer) return;
+    if (!tracer) return false;
 
     const rootStart = trace.startedAt;
     const rootEnd = trace.startedAt + trace.durationMs;
@@ -266,7 +268,9 @@ async function exportTrace(trace: FinishedTrace): Promise<void> {
     }
 
     rootSpan.end(rootEnd);
+    return true;
   } catch (err) {
     logger.warn(`[PHOENIX] Trace export failed (non-fatal): ${(err as Error).message}`);
+    return false;
   }
 }

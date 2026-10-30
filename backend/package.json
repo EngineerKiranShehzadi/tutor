@@ -30,6 +30,7 @@
     "test:observability-auth": "ts-node --transpile-only src/scripts/test-observability-auth.ts",
     "test:observability-capabilities": "ts-node --transpile-only src/scripts/test-observability-capabilities.ts",
     "test:observability-overview-metrics": "ts-node --transpile-only src/scripts/test-observability-overview-metrics.ts",
+    "test:request-log": "ts-node --transpile-only src/scripts/test-request-log.ts",
     "test:dataset-pipeline": "ts-node --transpile-only src/scripts/test-dataset-pipeline.ts",
     "e2e:up": "bash e2e/up.sh",
     "e2e:browser": "node e2e/browser-e2e.js",
