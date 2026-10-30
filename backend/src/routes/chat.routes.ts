@@ -4,6 +4,7 @@ import { AuthenticatedRequest, QnaChunk } from '../types';
 import { AppError } from '../middleware/errorHandler';
 import { askLectureAgent } from '../services/chat.service';
 import { logger } from '../utils/logger';
+import { logSafeText } from '../observability/sanitize';
 
 const router = Router();
 
@@ -69,7 +70,7 @@ router.post('/ask-stream', protect, async (req: AuthenticatedRequest, res: Respo
     if (!clientGone && !res.writableEnded) res.write(': keep-alive\n\n');
   }, HEARTBEAT_MS);
 
-  logger.info(`[CHAT-STREAM] "${student.email}" → session #${sessionId}: "${question.slice(0, 80)}"`);
+  logger.info(`[CHAT-STREAM] "${student.email}" → session #${sessionId}: "${logSafeText(question, 80)}"`);
 
   try {
     const { answer, sources } = await askLectureAgent({

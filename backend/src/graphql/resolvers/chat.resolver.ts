@@ -17,6 +17,7 @@ import {
 } from '../../services/chat.service';
 import { AppError } from '../../middleware/errorHandler';
 import { logger } from '../../utils/logger';
+import { logSafeText } from '../../observability/sanitize';
 
 function getStudent(ctx: GraphQLContext) {
   const user = (ctx.req as AuthenticatedRequest).user;
@@ -174,7 +175,7 @@ export const chatResolvers = {
         if (!input.question.trim()) {
           throw new GraphQLError('Question cannot be empty', { extensions: { code: 'BAD_REQUEST' } });
         }
-        logger.info(`[CHAT] "${student.email}" → session #${input.sessionId}: "${input.question.slice(0, 80)}"`);
+        logger.info(`[CHAT] "${student.email}" → session #${input.sessionId}: "${logSafeText(input.question, 80)}"`);
         const { answer, sources } = await askLectureAgent({
           studentId: student.id,
           lectureId: input.lectureId,

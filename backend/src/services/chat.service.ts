@@ -10,7 +10,7 @@ import { SIMILARITY_THRESHOLD } from './vector-search.service';
 import { ANSWER_PROMPT_VERSION } from './llm-gemini.service';
 import { RequestTrace, recordTrace } from '../observability/tracer';
 import { ATTR } from '../observability/otel-semconv';
-import { isContentCaptureEnabled, truncateContent } from '../observability/sanitize';
+import { isContentCaptureEnabled, truncateContent, logSafeText } from '../observability/sanitize';
 import type { FinishedTrace, NotFoundReason, SafeMetadata } from '../observability/types';
 import { OBSERVABILITY_SCHEMA_VERSION } from '../observability/types';
 import { runInputGuardrails, REJECTION_MESSAGE_BY_REASON } from '../rag/guardrails/input/input-guardrail.service';
@@ -549,7 +549,7 @@ export const askLectureAgent = async (
       );
       retrievalQuery = rewritten.query;
       if (rewritten.wasRewritten) {
-        logger.info(`[CHAT] ✏️  Using rewritten retrieval query: "${retrievalQuery.slice(0, 80)}"`);
+        logger.info(`[CHAT] ✏️  Using rewritten retrieval query: "${logSafeText(retrievalQuery, 80)}"`);
       }
       trace.setAttributes({ rewriteAttempted: rewritten.attempted, rewriteSucceeded: rewritten.wasRewritten, rewriteFallbackUsed: rewritten.attempted && !rewritten.wasRewritten });
     }
@@ -634,7 +634,7 @@ export const askLectureAgent = async (
     );
     trace.setAttributes({ decompositionMode: decomposition.mode, decompositionReason: decomposition.reason });
     if (decomposition.mode === 'DECOMPOSED') {
-      logger.info(`[CHAT] 🔀 Decomposed into ${decomposition.subqueries.length} subquery(ies): ${decomposition.subqueries.map(s => `"${s.slice(0, 50)}"`).join(', ')}`);
+      logger.info(`[CHAT] 🔀 Decomposed into ${decomposition.subqueries.length} subquery(ies): ${decomposition.subqueries.map(s => `"${logSafeText(s, 50)}"`).join(', ')}`);
     }
 
     // 5/6. Retrieval — DIRECT reuses the existing single-query embed ->
@@ -732,7 +732,7 @@ export const askLectureAgent = async (
       if (precomputedEmbedding) {
         questionEmbedding = precomputedEmbedding;
       } else {
-        logger.info(`[CHAT] 🔍 Embedding: "${retrievalQuery.slice(0, 60)}..."`);
+        logger.info(`[CHAT] 🔍 Embedding: "${logSafeText(retrievalQuery, 60)}"`);
         currentStage = 'generate-query-embedding';
         questionEmbedding = await trace.span(
           'generate-query-embedding',

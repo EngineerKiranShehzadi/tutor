@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { env } from '../config/env';
 
 // Recursive redaction/truncation for anything that might end up on a Phoenix
@@ -62,6 +63,17 @@ export function truncateContent(value: string, maxLength = env.OBSERVABILITY.MAX
 
 export function isContentCaptureEnabled(): boolean {
   return env.OBSERVABILITY.CAPTURE_CONTENT;
+}
+
+// For log lines that would otherwise interpolate student text (question,
+// rewritten query, subquery, prompt, answer). With content capture on, the
+// text itself (truncated to maxLength); otherwise only its length and the
+// first 8 hex chars of its sha256 — enough to tell two requests apart in the
+// logs without ever writing the text itself.
+export function logSafeText(text: string, maxLength = 80): string {
+  const s = String(text ?? '');
+  if (isContentCaptureEnabled()) return truncateContent(s, maxLength).value;
+  return `[len=${s.length} sha=${createHash('sha256').update(s).digest('hex').slice(0, 8)}]`;
 }
 
 // Recursively redacts denylisted keys / secret-shaped values and truncates

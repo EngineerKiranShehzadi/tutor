@@ -4,6 +4,7 @@ import { withLlmDiagnostic, extractLlmUsage } from '../llm/llm-observability.ser
 import type { LlmSchema } from '../llm/llm.types';
 import { type ConversationTurn } from './llm-gemini.service';
 import { logger } from '../utils/logger';
+import { logSafeText } from '../observability/sanitize';
 
 // Only rewrite when the latest question actually depends on prior context —
 // avoids an extra Gemini round-trip on every single message.
@@ -167,7 +168,7 @@ export const resolveRetrievalQuery = async (
       return { query: question, wasRewritten: false, attempted: true };
     }
 
-    logger.info(`[QUERY-REWRITE] ✏️  "${question.slice(0, 60)}" -> "${rewritten.slice(0, 80)}"`);
+    logger.info(`[QUERY-REWRITE] ✏️  "${logSafeText(question, 60)}" -> "${logSafeText(rewritten, 80)}"`);
     return { query: rewritten, wasRewritten: true, attempted: true };
   } catch (err) {
     logger.warn(`[QUERY-REWRITE] ⚠️  Unexpected error resolving retrieval query, falling back: ${(err as Error).message}`);

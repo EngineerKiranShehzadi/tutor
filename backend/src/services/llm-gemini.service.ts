@@ -1,6 +1,7 @@
 import { AppError } from '../middleware/errorHandler';
 import { QnaChunk, LectureAgentProfile } from '../types';
 import { logger } from '../utils/logger';
+import { logSafeText } from '../observability/sanitize';
 import { env } from '../config/env';
 import { resolveLlmProvider } from '../llm/llm-provider.resolver';
 import { withLlmDiagnostic, extractLlmUsage } from '../llm/llm-observability.service';
@@ -100,7 +101,7 @@ Lecture: "${lectureTitle}"
 
 Student Question: ${question}`;
 
-  logger.info(`[LLM] 🤖 No lecture chunks — generating from general knowledge: "${question.slice(0, 60)}..."`);
+  logger.info(`[LLM] 🤖 No lecture chunks — generating from general knowledge: "${logSafeText(question, 60)}"`);
 
   try {
     const result = await generateContent({
@@ -185,7 +186,7 @@ ${historyBlock ? `\n${historyBlock}` : ''}
 Current Student Question:
 ${question}${uncoveredBlock}`;
 
-  logger.info(`[LLM] 🤖 Sending prompt to Gemini (${chunks.length} chunks, question="${question.slice(0, 60)}...")`);
+  logger.info(`[LLM] 🤖 Sending prompt to Gemini (${chunks.length} chunks, question="${logSafeText(question, 60)}")`);
 
   let streamedAny = false;
 
