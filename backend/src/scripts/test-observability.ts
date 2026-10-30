@@ -28,6 +28,8 @@ import {
 import { checkLiveness, checkReadiness } from '../observability/health.service';
 import { withGeminiDiagnostic } from '../observability/gemini-diagnostics';
 import type { FinishedTrace } from '../observability/types';
+import type { OutputGuardrailResult } from '../rag/guardrails/output/answer-verification.types';
+import type { OutputGuardrailParams } from '../rag/guardrails/output/output-guardrail.service';
 
 if (!env.GEMINI_API_KEY) {
   console.error('GEMINI_API_KEY is not configured.');
@@ -54,6 +56,41 @@ const fakeChunk = (id: number, lectureId: number, overrides: Partial<QnaChunk> =
 
 const spanNames = (t: FinishedTrace) => t.spans.map(s => s.name);
 
+// The readiness check's Gemini probe (countTokens) is a real provider call.
+// Force the documented config-only path so nothing in this suite reaches
+// Gemini. env is `as const` at compile time only; the cast keeps this
+// assignment type-checked without `any`.
+(env.HEALTH as { GEMINI_CHECK_ENABLED: boolean }).GEMINI_CHECK_ENABLED = false;
+
+// Pass-through stub: the draft is returned untouched, as if verification
+// passed and no format/PII handling applied. Never calls a verifier LLM.
+const stubOutputGuardrail = async (params: OutputGuardrailParams): Promise<OutputGuardrailResult> => ({
+  finalAnswer: params.draftAnswer,
+  verified: true,
+  decision: 'VERIFIED',
+  reason: 'VERIFIED',
+  revisionAttempted: false,
+  revisionSucceeded: false,
+  unsupportedClaimCount: 0,
+  missingAspectCount: 0,
+  expectedFormat: 'NATURAL_TEXT',
+  formatValidationRequired: false,
+  formatValid: true,
+  formatRepairAttempted: false,
+  formatRepairSucceeded: false,
+  piiDetected: false,
+  piiCategories: [],
+});
+
+// Every other stage that can reach a real LLM provider by default (input
+// guardrail's injection classifier fallback, query decomposition, greeting
+// generation). Applied to every traced request so no case can hit Gemini.
+const noLlmDeps: AskLectureAgentDeps = {
+  runInputGuardrails: async question => ({ action: 'ALLOW', sanitizedInput: question, metadata: {} }),
+  decomposeQuery: async effectiveQuery => ({ mode: 'DIRECT', effectiveQuery, subqueries: [], reason: 'NOT_COMPOUND', llmUsed: false }),
+  generateGreeting: async () => 'Hello (stubbed greeting).',
+};
+
 // ── Shared harness ────────────────────────────────────────────────────
 
 async function withTrace(
@@ -64,7 +101,7 @@ async function withTrace(
   let captured: FinishedTrace | null = null;
   const result = await askLectureAgent(
     { studentId: ctx.studentId, lectureId: ctx.lectureId, question, sessionId: ctx.sessionId },
-    { ...extraDeps, onTraceComplete: t => { captured = t; } }
+    { ...noLlmDeps, ...extraDeps, onTraceComplete: t => { captured = t; } }
   );
   if (!captured) throw new Error('onTraceComplete was never called');
   return { trace: captured, result };
@@ -91,6 +128,7 @@ async function runTracingChecks(): Promise<Record<string, CaseResult>> {
     searchChunks: async () => [fakeChunk(1, lectureId, { similarity: 0.91 })],
     rerankChunks: async (_q, c) => c.map(x => ({ ...x, rerankScore: 0.9 })),
     generateAnswer: async () => 'DISTINCTIVE_ANSWER_TOKEN_ZR7',
+    runOutputGuardrail: stubOutputGuardrail,
     lookupAnswerMemory: async () => ({ hit: null, embedding: [0.1], datasetVersionId: 1, lookupFailed: false }),
     writeAnswerMemory: async () => {},
   };
@@ -104,7 +142,7 @@ async function runTracingChecks(): Promise<Record<string, CaseResult>> {
     {
       const { trace } = await withTrace('OBSTEST DISTINCTIVE_QUESTION_TOKEN_XY9 fact question', factDeps, ctx);
       const names = spanNames(trace);
-      const expected = ['load-session-history', 'classify-query-route', 'exact-memory-lookup', 'vector-search', 'rerank-candidates', 'generate-grounded-answer', 'save-chat-entry', 'write-answer-memory'];
+      const expected = ['input-guardrail', 'load-session-history', 'classify-query-route', 'exact-memory-lookup', 'decompose-query', 'vector-search', 'rerank-candidates', 'generate-grounded-answer', 'save-chat-entry', 'write-answer-memory'];
       results['1'] = { pass: trace.rootName === 'ask-lecture-agent' && typeof trace.traceId === 'string' && trace.traceId.length > 0 && trace.status === 'SUCCESS', detail: `root="${trace.rootName}" status=${trace.status}` };
       results['2'] = { pass: JSON.stringify(names) === JSON.stringify(expected), detail: `spans=${JSON.stringify(names)}` };
     }
@@ -169,7 +207,7 @@ async function runTracingChecks(): Promise<Record<string, CaseResult>> {
     {
       const result = await askLectureAgent(
         { studentId, lectureId, question: 'OBSTEST observability failure question', sessionId: session.id },
-        { ...factDeps, onTraceComplete: () => { throw new Error('simulated observability failure'); } }
+        { ...noLlmDeps, ...factDeps, onTraceComplete: () => { throw new Error('simulated observability failure'); } }
       );
       results['7'] = { pass: result.answer === 'DISTINCTIVE_ANSWER_TOKEN_ZR7', detail: `answer="${result.answer}"` };
     }
