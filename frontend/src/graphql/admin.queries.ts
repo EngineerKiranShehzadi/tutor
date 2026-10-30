@@ -38,6 +38,7 @@ export const GET_LECTURE_AGENT_DETAILS = gql`
       updatedAt
       agentProfileStatus
       chatReady
+      notReadyReason
     }
   }
 `;

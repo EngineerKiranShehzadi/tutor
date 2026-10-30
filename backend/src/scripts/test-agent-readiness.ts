@@ -31,6 +31,8 @@ import {
   getQuestionsPerLecture,
 } from '../services/analytics.service';
 import { getAgentProfileByLectureId } from '../services/lecture-agent-profile.service';
+import { getLectureReadiness } from '../services/dataset-version.service';
+import { EMBEDDING_MODEL_VERSION } from '../services/embedding.service';
 
 interface CaseResult { pass: boolean; skip?: boolean; detail?: string }
 interface Case { label: string; run: () => Promise<CaseResult> }
@@ -66,7 +68,8 @@ cases.push({
   run: async () => {
     const out = await withPoolQuery(async (text) => {
       if (/FROM users/.test(text)) return { rows: [{ count: '10' }], rowCount: 1 };
-      if (/COUNT\(\*\) FROM lectures l/.test(text)) return { rows: [{ count: '1' }], rowCount: 1 };
+      if (/\$1::int IS NULL/.test(text)) return { rows: [{ id: 1, active_version_id: 5, total: '3', missing_embedding: '0', wrong_model: '0' }], rowCount: 1 };
+      if (/SELECT l\.id FROM lectures l/.test(text)) return { rows: [{ id: 1 }], rowCount: 1 };
       if (/FROM lectures$/.test(text.trim())) return { rows: [{ count: '7' }], rowCount: 1 };
       if (/FROM student_questions/.test(text)) return { rows: [{ count: '95' }], rowCount: 1 };
       return { rows: [{ count: '0' }], rowCount: 1 };
@@ -78,7 +81,7 @@ cases.push({
 });
 
 cases.push({
-  label: 'M3. Agent details map profile state: no row = MISSING, false = INACTIVE, true = ACTIVE; chatReady only for READY + ACTIVE',
+  label: 'M3. Agent details map profile state (MISSING/INACTIVE/ACTIVE); chatReady only for READY + ACTIVE + dataset ready; reason shown otherwise',
   run: async () => {
     const d = new Date('2026-10-11T00:00:00Z');
     const rows = [
@@ -86,11 +89,21 @@ cases.push({
       { id: 2, title: 'ready+missing',  status: 'READY',      chunk_count: '5', created_at: d, updated_at: d, profile_is_active: null },
       { id: 3, title: 'ready+inactive', status: 'READY',      chunk_count: '5', created_at: d, updated_at: d, profile_is_active: false },
       { id: 4, title: 'nodata+active',  status: 'NO_DATASET', chunk_count: '0', created_at: d, updated_at: d, profile_is_active: true },
+      { id: 5, title: 'ready+active, unembedded', status: 'READY', chunk_count: '5', created_at: d, updated_at: d, profile_is_active: true },
     ];
-    const out = await withPoolQuery(async () => ({ rows, rowCount: rows.length }), () => getLectureAgentDetails());
+    const ok = (id: number) => ({ id, active_version_id: id, total: '5', missing_embedding: '0', wrong_model: '0' });
+    const readinessRows = [ok(1), ok(2), ok(3), ok(4), { ...ok(5), missing_embedding: '2' }];
+    const out = await withPoolQuery(async (text) => {
+      const r = /\$1::int IS NULL/.test(text) ? readinessRows : rows;
+      return { rows: r, rowCount: r.length };
+    }, () => getLectureAgentDetails());
     const got = out.map(r => `${r.id}:${r.agentProfileStatus}:${r.chatReady}`).join(' ');
     const base = out.every(r => typeof r.chunkCount === 'number' && typeof r.createdAt === 'string' && typeof r.status === 'string');
-    return { pass: got === '1:ACTIVE:true 2:MISSING:false 3:INACTIVE:false 4:ACTIVE:false' && base, detail: got };
+    const reason5 = out.find(r => r.id === 5)?.notReadyReason ?? '';
+    const reason1 = out.find(r => r.id === 1)?.notReadyReason;
+    return { pass: got === '1:ACTIVE:true 2:MISSING:false 3:INACTIVE:false 4:ACTIVE:false 5:ACTIVE:false' && base
+        && /^MISSING_EMBEDDINGS/.test(reason5) && reason1 === null,
+      detail: `${got} | #5 reason=${reason5}` };
   },
 });
 
@@ -141,13 +154,14 @@ async function startScratch(): Promise<Scratch | null> {
 
 // lecture key -> [status, profile: 'active' | 'inactive' | 'none', chunks]
 const FIXTURE: Record<string, [string, 'active' | 'inactive' | 'none', number]> = {
-  readyActive:     ['READY',      'active',   0],
+  readyActive:     ['READY',      'active',   2],
   readyNoProfile:  ['READY',      'none',     0],
   readyInactive:   ['READY',      'inactive', 0],
   noDatasetActive: ['NO_DATASET', 'active',   0],
   processingActive:['PROCESSING', 'active',   0],
   failedNoProfile: ['FAILED',     'none',     0],
   readyActive2:    ['READY',      'active',   3],   // has chunks: the join must not multiply the count
+  // (readyActive also has embedded chunks: READY + profile alone is no longer enough, the dataset must be ready too)
 };
 
 async function withScratch(fn: (s: Scratch, ids: Record<string, number>) => Promise<CaseResult>): Promise<CaseResult> {
@@ -169,14 +183,15 @@ async function withScratch(fn: (s: Scratch, ids: Record<string, number>) => Prom
       }
       if (chunks > 0) {
         // Chunk counts are of the lecture's ACTIVE dataset version, so give the
-        // chunk-bearing fixture lecture a published version holding its chunks.
+        // chunk-bearing fixture lecture a published version holding its embedded chunks.
         const { rows: v } = await scratch.client.query(
           `INSERT INTO dataset_versions (lecture_id, version_no, status, embedding_model_version, chunking_config_version)
            VALUES ($1, 1, 'ACTIVE', 'test', 'test') RETURNING id`, [ids[key]]);
         for (let i = 0; i < chunks; i++) {
           const { rows: c } = await scratch.client.query(
-            `INSERT INTO lecture_qna_chunks (lecture_id, question, answer, chunk_text, qa_id) VALUES ($1, $2, 'a', 'c', $3) RETURNING id`,
-            [ids[key], `q${i}`, `qa_${key}_${i}`]
+            `INSERT INTO lecture_qna_chunks (lecture_id, question, answer, chunk_text, qa_id, local_embedding, embedding_model_version)
+             VALUES ($1, $2, 'a', 'c', $3, $4::vector, $5) RETURNING id`,
+            [ids[key], `q${i}`, `qa_${key}_${i}`, `[${new Array(1024).fill(0.5).join(',')}]`, EMBEDDING_MODEL_VERSION]
           );
           await scratch.client.query(
             `INSERT INTO dataset_version_chunks (version_id, chunk_id, qa_id, chunk_index) VALUES ($1, $2, $3, 0)`,
@@ -229,6 +244,29 @@ cases.push({
     const withChunks = details.find(d => d.id === ids.readyActive2)!;
     const summary = await getAnalyticsSummary();
     return { pass: withChunks.chunkCount === 3 && summary.readyAgents === 2, detail: `chunks=${withChunks.chunkCount}, readyAgents=${summary.readyAgents}` };
+  }),
+});
+
+cases.push({
+  label: 'R. Real SQL: getLectureReadiness — READY-by-status lectures without an active version / with an unembedded or stale chunk are not ready, with a reason; list == chat gate',
+  run: () => withScratch(async (s, ids) => {
+    // readyActive2 loses one embedding; readyActive keeps a chunk from an older model.
+    await s.client.query(`UPDATE lecture_qna_chunks SET local_embedding = NULL WHERE id = (SELECT MIN(id) FROM lecture_qna_chunks WHERE lecture_id = $1)`, [ids.readyActive2]);
+    await s.client.query(`UPDATE lecture_qna_chunks SET embedding_model_version = 'old-model' WHERE id = (SELECT MIN(id) FROM lecture_qna_chunks WHERE lecture_id = $1)`, [ids.readyActive]);
+    const noVersion = await getLectureReadiness(ids.readyNoProfile);
+    const unembedded = await getLectureReadiness(ids.readyActive2);
+    const stale = await getLectureReadiness(ids.readyActive);
+    const missing = await getLectureReadiness(999999);
+    const details = await getLectureAgentDetails();
+    const summary = await getAnalyticsSummary();
+    const d2 = details.find(d => d.id === ids.readyActive2)!;
+    const pass = !noVersion.ready && /^NO_ACTIVE_VERSION/.test(noVersion.reason)
+      && !unembedded.ready && /^MISSING_EMBEDDINGS: 1\/3/.test(unembedded.reason)
+      && !stale.ready && /^STALE_EMBEDDING_MODEL: 1\/2/.test(stale.reason)
+      && !missing.ready && missing.reason === 'LECTURE_NOT_FOUND'
+      && !d2.chatReady && d2.notReadyReason === unembedded.reason
+      && summary.readyAgents === 0 && details.every(d => !d.chatReady);
+    return { pass, detail: `${noVersion.reason} | ${unembedded.reason} | ${stale.reason} | readyAgents=${summary.readyAgents}` };
   }),
 });
 

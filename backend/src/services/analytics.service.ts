@@ -1,5 +1,6 @@
 import { query } from '../config/database';
 import { logger } from '../utils/logger';
+import { getAllLectureReadiness } from './dataset-version.service';
 
 export const getAnalyticsSummary = async () => {
   const [students, lectures, questions, readyAgents] = await Promise.all([
@@ -7,11 +8,14 @@ export const getAnalyticsSummary = async () => {
     query<{ count: string }>(`SELECT COUNT(*) FROM lectures`),
     query<{ count: string }>(`SELECT COUNT(*) FROM student_questions`),
     // Operationally ready agent = exactly the lectures chat will serve:
-    // dataset processed (status READY) AND an active agent profile. EXISTS is
+    // dataset processed (status READY), an active agent profile AND a fully
+    // embedded active dataset version (getLectureReadiness). EXISTS is
     // a semi-join, so a lecture can never be counted twice. lecture.status
     // itself is unchanged and keeps meaning "dataset processed".
-    query<{ count: string }>(
-      `SELECT COUNT(*) FROM lectures l
+    // Ids only; the dataset-readiness half of the definition is applied below
+    // with the same getAllLectureReadiness() the agent list uses.
+    query<{ id: number }>(
+      `SELECT l.id FROM lectures l
        WHERE l.status = 'READY'
          AND EXISTS (
            SELECT 1 FROM lecture_agent_profiles p
@@ -20,11 +24,12 @@ export const getAnalyticsSummary = async () => {
     ),
   ]);
 
+  const readiness = await getAllLectureReadiness();
   const summary = {
     totalStudents:  parseInt(students.rows[0].count),
     totalLectures:  parseInt(lectures.rows[0].count),
     totalQuestions: parseInt(questions.rows[0].count),
-    readyAgents:    parseInt(readyAgents.rows[0].count),
+    readyAgents:    readyAgents.rows.filter(r => readiness.get(r.id)?.ready).length,
   };
 
   logger.info(`[ANALYTICS] Summary: ${JSON.stringify(summary)}`);
@@ -122,6 +127,7 @@ export const getLectureAgentDetails = async () => {
      LEFT JOIN lecture_qna_chunks c ON c.id = d.chunk_id
      GROUP BY l.id ORDER BY l.created_at DESC`
   );
+  const readiness = await getAllLectureReadiness();
   return rows.map(r => ({
     id:         r.id,
     title:      r.title,
@@ -134,7 +140,11 @@ export const getLectureAgentDetails = async () => {
     agentProfileStatus: r.profile_is_active === null ? 'MISSING' : r.profile_is_active ? 'ACTIVE' : 'INACTIVE',
     // Same condition as the readyAgents metric and as askLectureAgent's gate:
     // dataset processed AND an active agent profile.
-    chatReady: r.status === 'READY' && r.profile_is_active === true,
+    // plus a fully embedded active dataset version (getLectureReadiness).
+    chatReady: r.status === 'READY' && r.profile_is_active === true && (readiness.get(r.id)?.ready ?? false),
+    // Why the dataset is not ready (null when it is) — shown for lectures that
+    // are READY by status but cannot serve chat.
+    notReadyReason: readiness.get(r.id)?.ready ? null : (readiness.get(r.id)?.reason ?? 'LECTURE_NOT_FOUND'),
   }));
 };
 

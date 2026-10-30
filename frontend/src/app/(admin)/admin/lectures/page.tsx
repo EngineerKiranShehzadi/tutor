@@ -30,8 +30,8 @@ export default function AdminLectures() {
   const [deleteLecture, { loading: deleting }] = useMutation(DELETE_LECTURE_MUTATION);
   // Operational readiness (dataset READY + active agent profile) per lecture.
   const { data: agentData, loading: agentLoading } = useQuery(GET_LECTURE_AGENT_DETAILS, { fetchPolicy: 'network-only' });
-  const agentById = new Map<number, { chatReady: boolean; agentProfileStatus: string }>(
-    (agentData?.lectureAgentDetails ?? []).map((a: { id: number; chatReady: boolean; agentProfileStatus: string }) => [a.id, a])
+  const agentById = new Map<number, { chatReady: boolean; agentProfileStatus: string; notReadyReason: string | null }>(
+    (agentData?.lectureAgentDetails ?? []).map((a: { id: number; chatReady: boolean; agentProfileStatus: string; notReadyReason: string | null }) => [a.id, a])
   );
 
   const [search,      setSearch]      = useState('');
@@ -186,6 +186,11 @@ export default function AdminLectures() {
                     {/* Title + video id */}
                     <div className="flex-1 min-w-0">
                       <p className="text-[15px] font-semibold text-slate-800 truncate leading-snug">{lec.title}</p>
+                      {agentNotReady && agentById.get(Number(lec.id))?.notReadyReason && (
+                        <p className="text-[11px] text-amber-700 mt-0.5 truncate" title={agentById.get(Number(lec.id))?.notReadyReason ?? ''}>
+                          {agentById.get(Number(lec.id))?.notReadyReason}
+                        </p>
+                      )}
                       {lec.youtubeVideoId && (
                         <p className="text-[11px] text-slate-400 font-mono mt-0.5 truncate">{lec.youtubeVideoId}</p>
                       )}

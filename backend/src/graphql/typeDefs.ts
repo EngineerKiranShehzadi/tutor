@@ -167,9 +167,12 @@ export const typeDefs = `#graphql
     updatedAt:  String!
     # Operational readiness (additive): status is dataset processing only.
     # agentProfileStatus: ACTIVE | INACTIVE | MISSING.
-    # chatReady: status READY AND an active agent profile (what chat will serve).
+    # chatReady: status READY AND an active agent profile AND a fully embedded
+    # active dataset version (what chat will serve).
+    # notReadyReason: why the dataset is not ready (null when it is).
     agentProfileStatus: String!
     chatReady:          Boolean!
+    notReadyReason:     String
   }
 
   # ── Student Journey ───────────────────────────────────
