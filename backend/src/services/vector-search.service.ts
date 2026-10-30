@@ -1,8 +1,9 @@
 import { query } from '../config/database';
 import { QnaChunk } from '../types';
 import { logger } from '../utils/logger';
+import { env } from '../config/env';
 
-export const SIMILARITY_THRESHOLD = 0.55;
+export const SIMILARITY_THRESHOLD = env.RETRIEVAL.VECTOR_SIMILARITY_THRESHOLD;
 
 // Searches only the specified lecture's chunks using pgvector cosine similarity,
 // and only those in the lecture's ACTIVE dataset version — chunks of a version

@@ -32,6 +32,7 @@
     "test:observability-capabilities": "ts-node --transpile-only src/scripts/test-observability-capabilities.ts",
     "test:observability-overview-metrics": "ts-node --transpile-only src/scripts/test-observability-overview-metrics.ts",
     "test:request-log": "ts-node --transpile-only src/scripts/test-request-log.ts",
+    "test:retrieval-providers": "ts-node --transpile-only src/scripts/test-retrieval-providers.ts",
     "test:llm-thinking": "ts-node --transpile-only src/scripts/test-llm-thinking.ts",
     "test:sampling": "ts-node --transpile-only src/scripts/test-sampling.ts",
     "test:monitor": "ts-node --transpile-only src/scripts/test-monitor.ts",

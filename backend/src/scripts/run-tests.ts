@@ -57,6 +57,7 @@ const SUITES: Suite[] = [
   { name: 'observability-overview-metrics', script: 'src/scripts/test-observability-overview-metrics.ts' },
   { name: 'request-log', script: 'src/scripts/test-request-log.ts' },
   { name: 'llm-thinking', script: 'src/scripts/test-llm-thinking.ts' },
+  { name: 'retrieval-providers', script: 'src/scripts/test-retrieval-providers.ts' },
   { name: 'sampling', script: 'src/scripts/test-sampling.ts' },
   { name: 'monitor', script: 'src/scripts/test-monitor.ts' },
   { name: 'alerts', script: 'src/scripts/test-alerts.ts' },

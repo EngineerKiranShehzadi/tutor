@@ -18,6 +18,16 @@ const nonNegativeInt = (key: string, fallback: number): number => {
   return Number.isFinite(n) && n >= 0 ? n : fallback;
 };
 
+// Provider names fall back to the default when unset OR blank.
+const providerName = (key: string, fallback: string): string =>
+  (process.env[key] ?? '').trim() || fallback;
+
+// A finite number from env; unset, blank or unparseable falls back.
+const finiteFloat = (key: string, fallback: number): number => {
+  const n = parseFloat(process.env[key] ?? '');
+  return Number.isFinite(n) ? n : fallback;
+};
+
 // Per-task thinking effort (off|minimal|low|medium|high). An unrecognised
 // value falls back to the task's default rather than failing boot.
 const THINKING_LEVELS: readonly LlmThinking[] = ['off', 'minimal', 'low', 'medium', 'high'];
@@ -331,6 +341,20 @@ export const env = {
   // Runs before query-router.service.ts — see rag/guardrails/input/
   // input-guardrail.service.ts. Application-level limits, deliberately
   // independent of whatever context window the configured model supports.
+  // Retrieval backends and cut-offs. Provider names are resolved only by
+  // embedding/embedding-provider.resolver.ts and rerank/rerank-provider.
+  // resolver.ts. Changing the embedding provider/model changes
+  // EMBEDDING_MODEL_VERSION, which invalidates stored vectors and cached
+  // answers — re-embed first.
+  RETRIEVAL: {
+    EMBEDDING_PROVIDER: providerName('EMBEDDING_PROVIDER', 'local-http'),
+    RERANK_PROVIDER:    providerName('RERANK_PROVIDER', 'local-http'),
+    // Minimum cosine similarity for a chunk to survive vector search.
+    VECTOR_SIMILARITY_THRESHOLD: finiteFloat('VECTOR_SIMILARITY_THRESHOLD', 0.55),
+    // Minimum reranker score for a chunk to be used as context.
+    RERANK_MIN_SCORE: finiteFloat('RERANK_MIN_SCORE', 0.5),
+  },
+
   CHAT: {
     // How many prior turns of the session are passed to the router, rewriter
     // and answer prompt as follow-up context. 0 disables history.

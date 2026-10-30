@@ -1,15 +1,16 @@
 import { QnaChunk } from '../types';
 import { logger } from '../utils/logger';
+import { env } from '../config/env';
+import { resolveRerankProvider } from '../rerank/rerank-provider.resolver';
 
-export const LOCAL_RERANK_URL = process.env.RERANK_SERVER_URL ?? 'http://localhost:5001/rerank';
+const provider = resolveRerankProvider(env.RETRIEVAL.RERANK_PROVIDER);
 
-// Identifies which cross-encoder model produced a rerank score. The local
-// rerank server exposes no model-metadata endpoint, so this is a
-// manually-maintained constant — bump it if the server's model changes.
-export const RERANKER_MODEL_VERSION = 'bge-reranker-large';
+// Identifies which cross-encoder model produced a rerank score; comes from
+// the active rerank provider.
+export const RERANKER_MODEL_VERSION = provider.modelVersion;
 
-// Calls the local Python cross-encoder (BAAI/bge-reranker-large) to reorder
-// candidate chunks by precise query-chunk relevance, then returns the top N.
+// Asks the active rerank provider to score candidate chunks by precise
+// query-chunk relevance, then returns the top N best-first.
 export const rerankChunks = async (
   question: string,
   candidates: QnaChunk[],
@@ -17,33 +18,13 @@ export const rerankChunks = async (
 ): Promise<QnaChunk[]> => {
   if (candidates.length === 0) return [];
 
-  let res: Response;
-  try {
-    res = await fetch(LOCAL_RERANK_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        query: question,
-        candidates: candidates.map(c => ({ id: c.id, text: c.chunk_text })),
-      }),
-      signal: AbortSignal.timeout(30_000),
-    });
-  } catch (err) {
-    throw new Error(
-      `Local rerank server not reachable at ${LOCAL_RERANK_URL}. ` +
-      `Start it with: python3 scripts/embedding_server.py`
-    );
-  }
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`Rerank server error ${res.status}: ${body}`);
-  }
-
-  const data = (await res.json()) as { results: { id: number; score: number }[] };
+  const scores = await provider.rerank(
+    question,
+    candidates.map(c => ({ id: c.id, text: c.chunk_text }))
+  );
   const byId = new Map(candidates.map(c => [c.id, c]));
   const reranked: QnaChunk[] = [];
-  for (const r of data.results.slice(0, topN)) {
+  for (const r of scores.slice(0, topN)) {
     const chunk = byId.get(r.id);
     if (chunk) reranked.push({ ...chunk, rerankScore: r.score });
   }
@@ -52,7 +33,7 @@ export const rerankChunks = async (
   return reranked;
 };
 
-export const DEFAULT_MIN_RERANK_SCORE = 0.5;
+export const DEFAULT_MIN_RERANK_SCORE = env.RETRIEVAL.RERANK_MIN_SCORE;
 
 function normalizeAnswer(answer: string): string {
   return answer.trim().toLowerCase().replace(/\s+/g, ' ');
