@@ -5,6 +5,15 @@ Usage: python scripts/embed_local.py [LECTURE_ID]
 """
 import os
 import sys
+
+if "--legacy" not in sys.argv:
+    print("DEPRECATED: scripts/embed_local.py bypasses dataset versions, embeds orphan chunks")
+    print("and does not record the embedding model version.")
+    print("Use instead:  npm run seed:retry -- <lectureId>   (run from backend/)")
+    print("Pass --legacy only if you really need the old behaviour.")
+    sys.exit(1)
+sys.argv.remove("--legacy")
+
 import psycopg2
 from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
