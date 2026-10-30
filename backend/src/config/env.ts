@@ -28,6 +28,11 @@ const finiteFloat = (key: string, fallback: number): number => {
   return Number.isFinite(n) ? n : fallback;
 };
 
+const positiveInt = (key: string, fallback: number): number => {
+  const n = parseInt(process.env[key] ?? '', 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+};
+
 // Per-task thinking effort (off|minimal|low|medium|high). An unrecognised
 // value falls back to the task's default rather than failing boot.
 const THINKING_LEVELS: readonly LlmThinking[] = ['off', 'minimal', 'low', 'medium', 'high'];
@@ -320,6 +325,9 @@ export const env = {
       THINKING: thinking('ANSWER_VERIFICATION_THINKING', 'off'),
       TIMEOUT_MS:  parseInt(optional('ANSWER_VERIFICATION_LLM_TIMEOUT_MS', '8000'), 10),
       TEMPERATURE: parseFloat(optional('ANSWER_VERIFICATION_LLM_TEMPERATURE', '0')),
+      // Output cap for the verdict call. Thinking tokens count against it, and
+      // Gemini 3.x cannot switch thinking off, so raise this there.
+      MAX_OUTPUT_TOKENS: positiveInt('ANSWER_VERIFICATION_MAX_OUTPUT_TOKENS', 500),
     },
     // Used only when Selective Output Format Validation finds a grounded
     // answer that doesn't structurally match an explicitly requested

@@ -103,16 +103,16 @@ async function verifyOnce(params: VerifyAnswerParams): Promise<VerifierOutcome> 
         operationType: 'ANSWER_VERIFICATION',
         provider: provider.name,
         model,
-        invocationParams: { temperature: env.LLM.ANSWER_VERIFICATION.TEMPERATURE, maxOutputTokens: 500, timeoutMs },
+        invocationParams: { temperature: env.LLM.ANSWER_VERIFICATION.TEMPERATURE, maxOutputTokens: env.LLM.ANSWER_VERIFICATION.MAX_OUTPUT_TOKENS, timeoutMs },
       },
       () => provider.generate({
         model,
         userPrompt: buildVerifierUserPrompt(params),
         systemPrompt: buildGroundednessSystemPrompt(),
         temperature: env.LLM.ANSWER_VERIFICATION.TEMPERATURE,
-        maxOutputTokens: 500,
+        maxOutputTokens: env.LLM.ANSWER_VERIFICATION.MAX_OUTPUT_TOKENS,
         // The verdict is a small JSON object; with thinking on, Gemini can
-        // spend the whole 500-token cap thinking and return truncated JSON.
+        // spend the whole output cap thinking and return truncated JSON.
         thinking: env.LLM.ANSWER_VERIFICATION.THINKING,
         responseSchema: GROUNDEDNESS_RESPONSE_SCHEMA,
         timeoutMs,

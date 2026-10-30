@@ -86,6 +86,14 @@ async function main() {
     return childJson(code, { RERANK_MIN_SCORE: '0.3' }).out === '[1,2]' && childJson(code, {}).out === '[1]';
   } });
 
+  // ── verifier output cap ─────────────────────────────────────────
+  const CAP = `console.log(require('../config/env').env.LLM.ANSWER_VERIFICATION.MAX_OUTPUT_TOKENS)`;
+  cases.push({ label: 'ANSWER_VERIFICATION_MAX_OUTPUT_TOKENS: default 500, env honored, invalid/0 fall back', run: () =>
+    childJson(CAP, { ANSWER_VERIFICATION_MAX_OUTPUT_TOKENS: '' }).out === '500'
+    && childJson(CAP, { ANSWER_VERIFICATION_MAX_OUTPUT_TOKENS: '1500' }).out === '1500'
+    && childJson(CAP, { ANSWER_VERIFICATION_MAX_OUTPUT_TOKENS: 'x' }).out === '500'
+    && childJson(CAP, { ANSWER_VERIFICATION_MAX_OUTPUT_TOKENS: '0' }).out === '500' });
+
   // ── local-http adapters behave as before ────────────────────────
   cases.push({ label: 'embedding: 503 and unreachable -> EmbeddingUnavailableError; 500 -> plain error', run: async () => {
     stub(() => json({}, 503));
@@ -105,7 +113,7 @@ async function main() {
     const batch = await emb.generateEmbeddingsBatch(['p']);
     const empty = await emb.generateEmbeddingsBatch([]);
     stub(() => json({ embeddings: [[1, 2, 3]] }));
-    const bad = await emb.generateEmbeddingsBatch(['p']).catch(e => e as Error);
+    const bad = await emb.generateEmbeddingsBatch(['p']).catch(e => e as Error) as Error;
     return calls.length === 2 && JSON.stringify(calls[0].body) === '{"text":"hello","is_query":true}'
       && JSON.stringify(calls[1].body) === '{"texts":["p"]}' && batch[0].length === 1024 && empty.length === 0
       && bad instanceof Error && /3-dim vector at index 0; expected 1024/.test(bad.message);
@@ -122,9 +130,9 @@ async function main() {
   } });
   cases.push({ label: 'rerank: server error and unreachable surface as errors', run: async () => {
     stub(() => json({}, 500));
-    const a = await rr.rerankChunks('q', [{ id: 1, chunk_text: 'x' }] as never[]).catch(e => e as Error);
+    const a = await rr.rerankChunks('q', [{ id: 1, chunk_text: 'x' }] as never[]).catch(e => e as Error) as Error;
     stub(() => { throw new TypeError('fetch failed'); });
-    const b = await rr.rerankChunks('q', [{ id: 1, chunk_text: 'x' }] as never[]).catch(e => e as Error);
+    const b = await rr.rerankChunks('q', [{ id: 1, chunk_text: 'x' }] as never[]).catch(e => e as Error) as Error;
     return /Rerank server error 500/.test(a.message) && /not reachable/.test(b.message);
   } });
 
