@@ -77,6 +77,33 @@ export const ATTENTION_REASON_LABELS: Record<string, string> = {
   slow: 'Slow',
 };
 
+// Specific one-line explanation shown next to the reason chips in the
+// attention table. Written as the whole sentence, not a name.
+export const ATTENTION_NOT_FOUND_LABELS: Record<string, string> = {
+  EMPTY_LECTURE: 'Not found — the lecture has no content',
+  SUMMARY_CONTENT_EMPTY: 'Not found — nothing to summarize',
+  NO_VECTOR_CANDIDATES: 'Not found — no matching content',
+  ALL_CANDIDATES_BELOW_RERANK_FLOOR: 'Not found — matches were too weak',
+};
+
+export const ATTENTION_ERROR_LABELS: Record<string, string> = {
+  TIMEOUT: 'Answer timed out',
+  SERVICE_UNREACHABLE: 'A service could not be reached',
+  SERVICE_UNAVAILABLE: 'AI service busy',
+  RATE_LIMITED: 'AI service rate limit',
+  DB_CONSTRAINT_ERROR: 'Database rejected the data',
+  CONNECTION_ERROR: 'Connection lost',
+  EXTENSION_NOT_INSTALLED: 'Database extension missing',
+  NOT_CONFIGURED: 'Setup is incomplete',
+  UNKNOWN_ERROR: 'Unknown problem',
+};
+
+export const ATTENTION_VERIFIER_LABELS: Record<string, string> = {
+  REVISE: 'Answer changed by verifier',
+  UNSUPPORTED_CLAIM: 'Answer had a claim not in the lecture',
+  UNSUPPORTED_CLAIMS: 'Answer had claims not in the lecture',
+};
+
 // /health/ready component keys.
 export const COMPONENT_LABELS: Record<string, string> = {
   database: 'Database',
@@ -106,3 +133,27 @@ export const stageLabel = (c?: string | null) => pick(STAGE_LABELS, c, GENERIC.s
 export const verifierReasonLabel = (c?: string | null) => pick(VERIFIER_REASON_LABELS, c, GENERIC.verifierReason);
 export const attentionReasonLabel = (c?: string | null) => pick(ATTENTION_REASON_LABELS, c, GENERIC.attentionReason);
 export const componentLabel = (c?: string | null) => pick(COMPONENT_LABELS, c, GENERIC.component);
+
+// One specific label per cause on an attention row (error code, outcome,
+// verifier result). Never returns a raw code.
+export function attentionDetailLabels(row: {
+  responseStatus?: string | null;
+  notFoundReason?: string | null;
+  errorCode?: string | null;
+  answerVerificationReason?: string | null;
+}): string[] {
+  const out: string[] = [];
+  if (row.errorCode) out.push(pick(ATTENTION_ERROR_LABELS, row.errorCode, GENERIC.errorCode));
+  if (row.responseStatus === 'NOT_FOUND') {
+    out.push(pick(ATTENTION_NOT_FOUND_LABELS, row.notFoundReason, 'Not found in lecture'));
+  } else if (row.responseStatus === 'GUARDRAIL_REJECTED') {
+    out.push('Rejected by safety check');
+  } else if (row.responseStatus === 'LECTURE_NOT_READY') {
+    out.push('Lecture not ready yet');
+  } else if (row.responseStatus === 'ERROR' && !row.errorCode) {
+    out.push('Something went wrong');
+  }
+  const v = row.answerVerificationReason;
+  if (v && v !== 'VERIFIED') out.push(pick(ATTENTION_VERIFIER_LABELS, v, GENERIC.verifierReason));
+  return out;
+}

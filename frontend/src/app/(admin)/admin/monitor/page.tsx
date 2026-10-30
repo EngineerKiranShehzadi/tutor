@@ -6,6 +6,10 @@ import { useAutoRefresh } from '@/components/observability/useAutoRefresh';
 import { StatusBanner } from '@/components/monitor/StatusBanner';
 import { WindowToggle } from '@/components/monitor/WindowToggle';
 import { SummaryCard, type Change } from '@/components/monitor/SummaryCard';
+import { TrendChart } from '@/components/monitor/TrendChart';
+import { AttentionTable } from '@/components/monitor/AttentionTable';
+import { LectureTable } from '@/components/monitor/LectureTable';
+import { StageChart } from '@/components/monitor/StageChart';
 import {
   monitorApi, isCanceled, MONITOR_WINDOWS,
   type MonitorSummary, type MonitorWindow, type PeriodSummary, type ReadinessResult,
@@ -49,6 +53,9 @@ function MonitorContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const controllerRef = useRef<AbortController | null>(null);
+  // Bumped on every manual / automatic refresh so the sections below refetch
+  // on their own; a window change refetches them via their own key.
+  const [tick, setTick] = useState(0);
 
   const load = useCallback(async () => {
     controllerRef.current?.abort();
@@ -73,7 +80,7 @@ function MonitorContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [windowKey]);
 
-  const { setAutoRefresh, refresh, lastRefreshedAt, setLastRefreshedAt } = useAutoRefresh(() => { void load(); });
+  const { setAutoRefresh, refresh, lastRefreshedAt, setLastRefreshedAt } = useAutoRefresh(() => { setTick((t) => t + 1); void load(); });
 
   useEffect(() => { setAutoRefresh(REFRESH_MS); }, [setAutoRefresh]);
 
@@ -95,7 +102,7 @@ function MonitorContent() {
   const cardsLoading = loading || !cur || !prev;
 
   return (
-    <div className="max-w-[1500px]">
+    <div className="max-w-[1500px] min-w-0">
       <AdminPageHero
         icon="fas fa-heart-pulse"
         iconGradient="from-emerald-500 to-teal-600"
@@ -136,7 +143,7 @@ function MonitorContent() {
               accent="indigo"
               tooltip="How many questions students asked in this period."
               value={cur ? cur.totalRequests.toLocaleString() : null}
-              change={cur && prev ? relChange(cur.totalRequests, prev.totalRequests, 'up') : null}
+              change={cur && prev ? relChange(cur.totalRequests, prev.totalRequests, 'neutral') : null}
             />
             <SummaryCard
               loading={cardsLoading}
@@ -193,6 +200,15 @@ function MonitorContent() {
           )}
         </>
       )}
+
+      <div className="mt-5 space-y-5 min-w-0">
+        <TrendChart windowKey={windowKey} tick={tick} />
+        <AttentionTable tick={tick} />
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 min-w-0">
+          <LectureTable windowKey={windowKey} tick={tick} />
+          <StageChart windowKey={windowKey} tick={tick} />
+        </div>
+      </div>
     </div>
   );
 }

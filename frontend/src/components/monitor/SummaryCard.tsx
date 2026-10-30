@@ -2,11 +2,12 @@
 import { useId } from 'react';
 
 // "up" = value went up. `goodWhen` says which direction is good for this
-// metric (more answers = good, more not-found = bad).
+// metric (more answers = good, more not-found = bad); 'neutral' = neither
+// (e.g. number of questions asked).
 export interface Change {
   direction: 'up' | 'down' | 'same';
   text: string; // e.g. "12%" or "3 pt"
-  goodWhen: 'up' | 'down';
+  goodWhen: 'up' | 'down' | 'neutral';
 }
 
 interface SummaryCardProps {
@@ -32,9 +33,11 @@ const ACCENTS: Record<SummaryCardProps['accent'], string> = {
 function ChangeLine({ change }: { change: Change | null }) {
   if (!change) return <span className="text-[12px] text-slate-400">No previous period to compare</span>;
   if (change.direction === 'same') return <span className="text-[12px] font-semibold text-slate-400">→ Same as previous period</span>;
-  const good = change.direction === change.goodWhen;
+  const tone = change.goodWhen === 'neutral'
+    ? 'text-slate-500'
+    : change.direction === change.goodWhen ? 'text-emerald-600' : 'text-red-600';
   return (
-    <span className={`text-[12px] font-bold ${good ? 'text-emerald-600' : 'text-red-600'}`}>
+    <span className={`text-[12px] font-bold ${tone}`}>
       {change.direction === 'up' ? '▲' : '▼'} {change.text}
       <span className="font-medium text-slate-400"> vs previous period</span>
     </span>
