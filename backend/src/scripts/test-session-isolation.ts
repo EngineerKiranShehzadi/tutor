@@ -83,6 +83,8 @@ async function inWorld<T>(world: World, fn: () => Promise<T>): Promise<T> {
 
     // The request pins itself to the lecture's active dataset version once, up front.
     if (t.includes('SELECT active_version_id FROM lectures')) { rec('active-version'); return ok([{ active_version_id: 1 }]); }
+    // Dataset readiness gate (getLectureReadiness): not under test here; the fake lecture is fully ready.
+    if (/\$1::int IS NULL OR l\.id = \$1/.test(t)) return ok([{ id: params[0], active_version_id: 1, total: '1', missing_embedding: '0', wrong_model: '0' }]);
     if (/^SELECT \* FROM lectures WHERE id = \$1/.test(t)) { rec('lecture-load'); return ok(world.lectures.filter(l => l.id === params[0])); }
     if (/FROM lecture_agent_profiles WHERE lecture_id = \$1/.test(t)) { rec('profile-load'); return ok(world.profiles.filter(p => p.lecture_id === params[0])); }
     if (/^SELECT 1 AS ok FROM chat_sessions WHERE id = \$1 AND student_id = \$2 AND lecture_id = \$3$/.test(t)) {

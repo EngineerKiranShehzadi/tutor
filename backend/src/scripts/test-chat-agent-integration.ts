@@ -107,6 +107,12 @@ async function inWorld<T>(world: World, fn: () => Promise<T>): Promise<T> {
     const rec = (kind: string) => world.stmts.push({ kind, text: t, params });
     const ok = (rows: unknown[] = [], rowCount = rows.length) => ({ rows, rowCount });
 
+    // Dataset readiness (getLectureReadiness): these tests are about agent selection, so
+    // every lecture the fake serves has a fully embedded active version. Not recorded as a
+    // statement — it is the gate itself that is tested in test-dataset-pipeline.ts (17a-d).
+    if (/\$1::int IS NULL OR l\.id = \$1/.test(t)) {
+      return ok([{ id: params[0], active_version_id: 1, total: '1', missing_embedding: '0', wrong_model: '0' }]);
+    }
     if (/^SELECT \* FROM lectures WHERE id = \$1/.test(t)) {
       rec('lecture-load');
       return ok(world.lectures.filter(l => l.id === params[0]));

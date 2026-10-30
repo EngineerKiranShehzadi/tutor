@@ -805,3 +805,54 @@ export async function exportActiveDataset(lectureId: number): Promise<Buffer> {
   XLSX.utils.book_append_sheet(wb, sheet, 'dataset');
   return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
 }
+
+// ── Readiness: the one definition of "this lecture can answer from its dataset" ──
+
+export interface LectureReadiness { ready: boolean; reason: string }
+
+interface ReadinessRow {
+  id: number;
+  active_version_id: number | null;
+  total: string;
+  missing_embedding: string;
+  wrong_model: string;
+}
+
+const READINESS_SQL = `
+  SELECT l.id, l.active_version_id,
+         COUNT(d.chunk_id)                                                      AS total,
+         COUNT(d.chunk_id) FILTER (WHERE c.local_embedding IS NULL)             AS missing_embedding,
+         COUNT(d.chunk_id) FILTER (WHERE c.local_embedding IS NOT NULL
+                                     AND c.embedding_model_version IS DISTINCT FROM $2) AS wrong_model
+  FROM lectures l
+  LEFT JOIN dataset_version_chunks d ON d.version_id = l.active_version_id
+  LEFT JOIN lecture_qna_chunks c ON c.id = d.chunk_id
+  WHERE ($1::int IS NULL OR l.id = $1)
+  GROUP BY l.id`;
+
+const toReadiness = (r: ReadinessRow): LectureReadiness => {
+  if (r.active_version_id === null) return { ready: false, reason: 'NO_ACTIVE_VERSION: lecture has no active dataset version' };
+  const total = Number(r.total);
+  if (total === 0) return { ready: false, reason: `EMPTY_ACTIVE_VERSION: active version ${r.active_version_id} has no chunks` };
+  const missing = Number(r.missing_embedding);
+  if (missing > 0) return { ready: false, reason: `MISSING_EMBEDDINGS: ${missing}/${total} chunk(s) of active version ${r.active_version_id} have no embedding` };
+  const wrong = Number(r.wrong_model);
+  if (wrong > 0) return { ready: false, reason: `STALE_EMBEDDING_MODEL: ${wrong}/${total} chunk(s) of active version ${r.active_version_id} are not ${EMBEDDING_MODEL_VERSION}` };
+  return { ready: true, reason: `OK: ${total} chunk(s) embedded with ${EMBEDDING_MODEL_VERSION}` };
+};
+
+/** Readiness of every lecture, keyed by lecture id, in a single query. */
+export async function getAllLectureReadiness(): Promise<Map<number, LectureReadiness>> {
+  const { rows } = await query<ReadinessRow>(READINESS_SQL, [null, EMBEDDING_MODEL_VERSION]);
+  return new Map(rows.map(r => [r.id, toReadiness(r)]));
+}
+
+/**
+ * Ready only if the lecture has an active dataset version AND every chunk in it
+ * has a local_embedding produced by the current EMBEDDING_MODEL_VERSION.
+ * (lecture.status and the agent profile are separate gates.)
+ */
+export async function getLectureReadiness(lectureId: number): Promise<LectureReadiness> {
+  const { rows } = await query<ReadinessRow>(READINESS_SQL, [lectureId, EMBEDDING_MODEL_VERSION]);
+  return rows[0] ? toReadiness(rows[0]) : { ready: false, reason: 'LECTURE_NOT_FOUND' };
+}

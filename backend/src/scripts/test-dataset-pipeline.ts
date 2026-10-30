@@ -31,10 +31,11 @@ import { buildChunkPieces } from '../services/chunk.service';
 import { matchRows, FileRow, ActiveQa, QaFields } from '../services/dataset-plan';
 import {
   prepareDatasetVersion, finishDatasetVersion, resumePendingVersions, rollbackDataset, exportActiveDataset,
-  listDatasetVersions, RemovalConfirmationRequired,
+  listDatasetVersions, RemovalConfirmationRequired, getLectureReadiness,
 } from '../services/dataset-version.service';
 import { searchChunks } from '../services/vector-search.service';
 import { lookupAnswerMemory, writeAnswerMemory } from '../services/rag-answer-memory.service';
+import { askLectureAgent } from '../services/chat.service';
 
 // ── helpers ─────────────────────────────────────────────────────────────
 
@@ -652,6 +653,58 @@ const run = async () => {
       nowActive !== pinned && step1[0]?.answer === baseRows()[1].answer && step2Pinned[0]?.answer === baseRows()[1].answer && step2PinnedNew.length === 0
         && freshOld.length === 0 && freshNew[0]?.answer === 'Concept 2 now says something different.',
       `pinnedBefore=${step1[0]?.answer === baseRows()[1].answer} pinnedAfterPublish=old:${step2Pinned[0]?.answer === baseRows()[1].answer}/seesNew:${step2PinnedNew.length > 0} newRequest=sees old:${freshOld.length > 0}/sees new:${freshNew.length > 0}`);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 17. One readiness definition, enforced by chat's gate
+  // ─────────────────────────────────────────────────────────────────────
+  {
+    const student = await createStudent();
+    const ask = async (lectureId: number) => {
+      try {
+        await askLectureAgent({ studentId: student, lectureId, question: 'What does test concept number 1 mean?', sessionId: 0 });
+        return { threw: false, status: 0, message: '' };
+      } catch (e) {
+        const err = e as { statusCode?: number; message: string };
+        return { threw: true, status: err.statusCode ?? 0, message: err.message };
+      }
+    };
+    const notReadyMsg = /not ready for this lecture/;
+
+    // (a) READY by status, but no active version
+    const La = await newLecture('17a status READY, no active version');
+    await query(`UPDATE lectures SET status = 'READY' WHERE id = $1`, [La]);
+    const ra = await getLectureReadiness(La);
+    const aa = await ask(La);
+    check('17a. READY lecture with active_version_id NULL → not ready, chat answers LECTURE_NOT_READY (not NOT_FOUND)',
+      !ra.ready && /^NO_ACTIVE_VERSION/.test(ra.reason) && aa.threw && aa.status === 400 && notReadyMsg.test(aa.message),
+      `readiness=${JSON.stringify(ra)} chat=${aa.status}:${aa.message}`);
+
+    // (c) healthy lecture built by the real pipeline
+    const Lc = await newLecture('17c healthy');
+    const pc = await prepareDatasetVersion(Lc, makeXlsx(baseRows(6)));
+    if (pc.kind === 'CREATED') await fin(pc.versionId);
+    const rc = await getLectureReadiness(Lc);
+    check('17c. Healthy lecture (active version, every chunk embedded with the current model) → ready',
+      rc.ready && (await lectureState(Lc)).status === 'READY', `readiness=${JSON.stringify(rc)}`);
+
+    // (b) same lecture, one chunk of the active version loses its embedding
+    await query(`UPDATE lecture_qna_chunks SET local_embedding = NULL
+                 WHERE id = (SELECT MIN(c.id) FROM lecture_qna_chunks c JOIN dataset_version_chunks d ON d.chunk_id = c.id
+                             WHERE d.version_id = (SELECT active_version_id FROM lectures WHERE id = $1))`, [Lc]);
+    const rb = await getLectureReadiness(Lc);
+    const ab = await ask(Lc);
+    check('17b. READY lecture whose active version has a chunk with NULL local_embedding → not ready, chat answers LECTURE_NOT_READY',
+      (await lectureState(Lc)).status === 'READY' && !rb.ready && /^MISSING_EMBEDDINGS: 1\//.test(rb.reason)
+        && ab.threw && ab.status === 400 && notReadyMsg.test(ab.message),
+      `readiness=${JSON.stringify(rb)} chat=${ab.status}:${ab.message}`);
+
+    // a chunk embedded by a different model also makes it not ready
+    await query(`UPDATE lecture_qna_chunks SET local_embedding = $2::vector WHERE local_embedding IS NULL AND lecture_id = $1`, [Lc, `[${vecFor('x').join(',')}]`]);
+    await query(`UPDATE lecture_qna_chunks SET embedding_model_version = 'old-model' WHERE id = (SELECT MIN(id) FROM lecture_qna_chunks WHERE lecture_id = $1)`, [Lc]);
+    const rs = await getLectureReadiness(Lc);
+    check('17d. A chunk embedded by a different model version → not ready (stale model)',
+      !rs.ready && /^STALE_EMBEDDING_MODEL: 1\//.test(rs.reason), `readiness=${JSON.stringify(rs)}`);
   }
 
   // ─────────────────────────────────────────────────────────────────────

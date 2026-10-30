@@ -3,6 +3,7 @@ import { env } from '../config/env';
 import { AppError } from '../middleware/errorHandler';
 import { ChatHistoryEntry, QnaChunk, LectureAgentProfile } from '../types';
 import { getLectureById } from './lecture.service';
+import { getLectureReadiness, LectureReadiness } from './dataset-version.service';
 import { logger } from '../utils/logger';
 import { EMBEDDING_MODEL_VERSION } from './embedding.service';
 import { RERANKER_MODEL_VERSION, DEFAULT_MIN_RERANK_SCORE } from './rerank.service';
@@ -53,6 +54,8 @@ export interface AskLectureAgentDeps {
   // Resolves the lecture's agent profile by lecture_id only (see
   // lecture-agent-profile.service.ts). Defaults to the real service.
   getAgentProfile?:        (lectureId: number) => Promise<AgentProfileLookup>;
+  // Dataset readiness (active version fully embedded). Defaults to the real service.
+  getLectureReadiness?:    (lectureId: number) => Promise<LectureReadiness>;
   resolveRetrievalQuery?:  (question: string, history: ConversationTurn[]) => Promise<RetrievalQueryResult>;
   classifyRoute?:          (question: string) => Promise<RouteClassification>;
   generateGreeting?:       (message: string, lectureTitle: string, history?: ConversationTurn[]) => Promise<string>;
@@ -307,6 +310,16 @@ export const askLectureAgent = async (
     const lecture = await getLectureById(lectureId);
     if (lecture.status !== 'READY') {
       logger.warn(`[CHAT] ⚠️  Lecture #${lectureId} not READY (status=${lecture.status})`);
+      finishTrace('ERROR', { responseStatus: 'LECTURE_NOT_READY' });
+      throw new AppError('AI tutor is not ready for this lecture yet. Please wait for processing.', 400);
+    }
+
+    // 1-bis. Dataset readiness: an active version whose every chunk is embedded
+    // with the current model. A lecture that is READY by status but fails this
+    // would only ever answer "not found", so reject it as not ready instead.
+    const readiness = await (deps.getLectureReadiness ?? getLectureReadiness)(lectureId);
+    if (!readiness.ready) {
+      logger.warn(`[CHAT] ⚠️  Lecture #${lectureId} dataset not ready: ${readiness.reason}`);
       finishTrace('ERROR', { responseStatus: 'LECTURE_NOT_READY' });
       throw new AppError('AI tutor is not ready for this lecture yet. Please wait for processing.', 400);
     }
