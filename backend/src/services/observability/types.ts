@@ -112,6 +112,7 @@ export interface TraceDetail {
   criticalPath: CriticalPathItem[];
   annotations: Annotation[];
   notes: Note[];
+  phoenixTraceUrl: string | null;
   raw: { trace: unknown; spans: unknown[] };
 }
 

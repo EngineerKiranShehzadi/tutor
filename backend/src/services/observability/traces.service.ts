@@ -9,6 +9,7 @@ import {
 } from './normalize';
 import { getTraceAnnotationsFor, getTraceNotesFor } from './annotations.service';
 import { sanitizeValue } from '../../observability/sanitize';
+import { buildPhoenixTraceUrl } from './phoenix-links';
 import type { TraceSummary, TraceDetail } from './types';
 
 export interface TraceListFilters {
@@ -154,6 +155,7 @@ export async function getTraceDetail(traceId: string): Promise<TraceDetail> {
     criticalPath,
     annotations,
     notes,
+    phoenixTraceUrl: await buildPhoenixTraceUrl(traceId),
     // Debug/"Raw Data" tab in the admin UI, labeled "(sanitized)" — must
     // actually pass through the sanitizer like every other read-path value
     // (see sanitize.ts's header comment: phoenix.ts on export,

@@ -14,7 +14,8 @@ const NAV = [
   { href: '/admin/content-gaps',  icon: 'fas fa-magnifying-glass-chart', label: 'Content Gaps' },
   { href: '/admin/users',         icon: 'fas fa-users-gear',      label: 'User Mgmt'          },
   { href: '/admin/agents',        icon: 'fas fa-robot',           label: 'AI Agents'          },
-  { href: '/admin/rag-traces',    icon: 'fas fa-timeline',        label: 'RAG Observability'  },
+  { href: '/admin/monitor',       icon: 'fas fa-heart-pulse',     label: 'AI Tutor Monitor'   },
+  { href: '/admin/rag-traces',    icon: 'fas fa-timeline',        label: 'Advanced traces'    },
   { href: '/admin/settings',      icon: 'fas fa-user-shield',     label: 'Admin Profile'      },
 ];
 
