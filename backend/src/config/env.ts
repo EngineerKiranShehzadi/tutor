@@ -136,7 +136,7 @@ export const env = {
     // decide per-environment; see MAX_CONTENT_LENGTH for the truncation cap.
     CAPTURE_CONTENT: optional('OBSERVABILITY_CAPTURE_CONTENT', 'false') === 'true',
     MAX_CONTENT_LENGTH: parseInt(optional('OBSERVABILITY_MAX_CONTENT_LENGTH', '20000'), 10),
-    RETENTION_DAYS: parseInt(optional('OBSERVABILITY_RETENTION_DAYS', '30'), 10),
+    RETENTION_DAYS: parseInt(optional('OBSERVABILITY_RETENTION_DAYS', '90'), 10),
 
     PHOENIX_ENABLED:  optional('PHOENIX_ENABLED', 'false') === 'true',
     // OTLP trace-ingestion endpoint (export path). PHOENIX_OTLP_ENDPOINT is
@@ -163,10 +163,17 @@ export const env = {
     // model or missing token counts -> NULL, never a guess.
     LLM_PRICING: parseLlmPricing(optional('LLM_PRICING_JSON', '')),
 
-    ALERTS_ENABLED: optional('OBSERVABILITY_ALERTS_ENABLED', 'true') === 'true',
-    ALERT_ERROR_RATE_PERCENT:         parseFloat(optional('ALERT_ERROR_RATE_PERCENT', '10')),
-    ALERT_P95_LATENCY_MS:             parseInt(optional('ALERT_P95_LATENCY_MS', '5000'), 10),
-    ALERT_NOT_FOUND_RATE_PERCENT:     parseFloat(optional('ALERT_NOT_FOUND_RATE_PERCENT', '30')),
+    ALERTS_ENABLED: optional('OBSERVABILITY_ALERTS_ENABLED', 'false') === 'true',
+    // Email alert rules (observability/alerts.service.ts). Rates are 0..1.
+    ALERT_CHECK_INTERVAL_MS: parseInt(optional('ALERT_CHECK_INTERVAL_MS', '300000'), 10),
+    ALERT_WINDOW_MINUTES:    parseInt(optional('ALERT_WINDOW_MINUTES', '15'), 10),
+    ALERT_MIN_REQUESTS:      parseInt(optional('ALERT_MIN_REQUESTS', '20'), 10),
+    ALERT_COOLDOWN_MINUTES:  parseInt(optional('ALERT_COOLDOWN_MINUTES', '60'), 10),
+    ALERT_ERROR_RATE:        parseFloat(optional('ALERT_ERROR_RATE', '0.05')),
+    ALERT_NOT_FOUND_RATE:    parseFloat(optional('ALERT_NOT_FOUND_RATE', '0.40')),
+    ALERT_P95_MS:            parseInt(optional('ALERT_P95_MS', '15000'), 10),
+    // Comma-separated; empty = every user with role ADMIN.
+    ALERT_EMAILS: optional('ALERT_EMAILS', '').split(',').map(e => e.trim()).filter(Boolean),
     ALERT_CONSECUTIVE_HEALTH_FAILURES: parseInt(optional('ALERT_CONSECUTIVE_HEALTH_FAILURES', '3'), 10),
   },
 

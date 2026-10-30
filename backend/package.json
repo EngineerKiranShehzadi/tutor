@@ -34,6 +34,7 @@
     "test:request-log": "ts-node --transpile-only src/scripts/test-request-log.ts",
     "test:sampling": "ts-node --transpile-only src/scripts/test-sampling.ts",
     "test:monitor": "ts-node --transpile-only src/scripts/test-monitor.ts",
+    "test:alerts": "ts-node --transpile-only src/scripts/test-alerts.ts",
     "test:dataset-pipeline": "ts-node --transpile-only src/scripts/test-dataset-pipeline.ts",
     "e2e:up": "bash e2e/up.sh",
     "e2e:browser": "node e2e/browser-e2e.js",

@@ -4,6 +4,7 @@ import { verifyEmailTransport } from './services/email.service';
 import { env } from './config/env';
 import { logger } from './utils/logger';
 import { shutdownPhoenixExporter } from './observability/phoenix';
+import { startMaintenanceScheduler, stopMaintenanceScheduler } from './observability/maintenance.scheduler';
 import type { Server } from 'http';
 
 // Graceful shutdown on SIGTERM/SIGINT: stop taking new connections, let
@@ -17,6 +18,7 @@ const installShutdownHandlers = (server: Server): void => {
   const shutdown = async (signal: string): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
+    stopMaintenanceScheduler();
     logger.info(`[SHUTDOWN] ${signal} received — shutting down gracefully (limit ${env.SHUTDOWN_TIMEOUT_MS}ms)`);
 
     const startedAt = Date.now();
@@ -70,6 +72,10 @@ const start = async () => {
     const server = app.listen(env.PORT, () => {
       logger.info(`AskAITutor backend running on port ${env.PORT} [${env.NODE_ENV}]`);
       logger.info(`GraphQL endpoint: http://localhost:${env.PORT}/graphql`);
+
+      if (env.OBSERVABILITY.ALERTS_ENABLED && env.NODE_ENV !== 'test') {
+        startMaintenanceScheduler();
+      }
 
       // Continue any dataset build that was interrupted by a restart. Only
       // chunks that still have no embedding are processed; finished work is
