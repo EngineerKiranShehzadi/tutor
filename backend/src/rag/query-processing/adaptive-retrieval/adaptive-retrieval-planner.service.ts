@@ -76,6 +76,7 @@ export async function planAdaptiveRetrieval(params: {
         systemPrompt: buildAdaptiveRetrievalSystemPrompt(),
         temperature: env.LLM.ADAPTIVE_RETRIEVAL.TEMPERATURE,
         maxOutputTokens: 300,
+        thinking: env.LLM.ADAPTIVE_RETRIEVAL.THINKING,
         responseSchema: ADAPTIVE_RETRIEVAL_RESPONSE_SCHEMA,
         timeoutMs,
       }),

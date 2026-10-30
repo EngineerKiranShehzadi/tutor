@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
 import path from 'path';
+import type { LlmThinking } from '../llm/llm.types';
 
 dotenv.config({ path: path.join(__dirname, '../../.env') });
 
@@ -11,6 +12,19 @@ const required = (key: string): string => {
 
 const optional = (key: string, fallback: string): string =>
   process.env[key] ?? fallback;
+
+const nonNegativeInt = (key: string, fallback: number): number => {
+  const n = parseInt(process.env[key] ?? '', 10);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+};
+
+// Per-task thinking effort (off|minimal|low|medium|high). An unrecognised
+// value falls back to the task's default rather than failing boot.
+const THINKING_LEVELS: readonly LlmThinking[] = ['off', 'minimal', 'low', 'medium', 'high'];
+const thinking = (key: string, fallback: LlmThinking): LlmThinking => {
+  const raw = (process.env[key] ?? '').trim().toLowerCase();
+  return (THINKING_LEVELS as readonly string[]).includes(raw) ? (raw as LlmThinking) : fallback;
+};
 
 export interface LlmPrice { inputPer1M: number; outputPer1M: number }
 
@@ -219,6 +233,7 @@ export const env = {
     RAG_ANSWER: {
       PROVIDER:        optional('RAG_LLM_PROVIDER', 'gemini'),
       MODEL:           optional('RAG_ANSWER_MODEL', 'gemini-2.5-flash'),
+      THINKING: thinking('RAG_ANSWER_THINKING', 'low'),
       // Used once retry attempts exceed llm-gemini.service.ts's own
       // attempt<=2 threshold — preserves today's exact gemini-2.5-flash ->
       // gemini-flash-latest fallback chain by default.
@@ -227,6 +242,7 @@ export const env = {
     QUERY_ROUTER: {
       PROVIDER: optional('QUERY_ROUTER_LLM_PROVIDER', 'gemini'),
       MODEL:    optional('QUERY_ROUTER_LLM_MODEL', 'gemini-2.5-flash'),
+      THINKING: thinking('QUERY_ROUTER_THINKING', 'minimal'),
     },
     // Natural reply to greetings/small talk (services/greeting-response.
     // service.ts). Higher temperature than the classifiers so replies vary;
@@ -234,16 +250,19 @@ export const env = {
     GREETING: {
       PROVIDER:    optional('GREETING_LLM_PROVIDER', 'gemini'),
       MODEL:       optional('GREETING_LLM_MODEL', 'gemini-2.5-flash'),
+      THINKING: thinking('GREETING_THINKING', 'minimal'),
       TIMEOUT_MS:  parseInt(optional('GREETING_LLM_TIMEOUT_MS', '6000'), 10),
       TEMPERATURE: parseFloat(optional('GREETING_LLM_TEMPERATURE', '0.7')),
     },
     QUERY_REWRITE: {
       PROVIDER: optional('QUERY_REWRITE_LLM_PROVIDER', 'gemini'),
       MODEL:    optional('QUERY_REWRITE_LLM_MODEL', 'gemini-2.5-flash'),
+      THINKING: thinking('QUERY_REWRITE_THINKING', 'minimal'),
     },
     LECTURE_SUMMARY: {
       PROVIDER: optional('LECTURE_SUMMARY_LLM_PROVIDER', 'gemini'),
       MODEL:    optional('LECTURE_SUMMARY_LLM_MODEL', 'gemini-2.5-flash'),
+      THINKING: thinking('LECTURE_SUMMARY_THINKING', 'low'),
     },
     GUARDRAIL: {
       // Separate from INPUT_GUARDRAIL_INJECTION_ENABLED below: that flag
@@ -253,6 +272,7 @@ export const env = {
       ENABLED:     optional('GUARDRAIL_LLM_ENABLED', 'true') === 'true',
       PROVIDER:    optional('GUARDRAIL_LLM_PROVIDER', 'gemini'),
       MODEL:       optional('GUARDRAIL_LLM_MODEL', 'gemini-2.5-flash'),
+      THINKING: thinking('GUARDRAIL_THINKING', 'minimal'),
       TIMEOUT_MS:  parseInt(optional('GUARDRAIL_LLM_TIMEOUT_MS', '4000'), 10),
       TEMPERATURE: parseFloat(optional('GUARDRAIL_LLM_TEMPERATURE', '0')),
     },
@@ -263,6 +283,7 @@ export const env = {
     QUERY_DECOMPOSITION: {
       PROVIDER:    optional('QUERY_DECOMPOSITION_LLM_PROVIDER', 'gemini'),
       MODEL:       optional('QUERY_DECOMPOSITION_LLM_MODEL', 'gemini-2.5-flash'),
+      THINKING: thinking('QUERY_DECOMPOSITION_THINKING', 'minimal'),
       TIMEOUT_MS:  parseInt(optional('QUERY_DECOMPOSITION_LLM_TIMEOUT_MS', '4000'), 10),
       TEMPERATURE: parseFloat(optional('QUERY_DECOMPOSITION_LLM_TEMPERATURE', '0')),
     },
@@ -275,6 +296,7 @@ export const env = {
     ADAPTIVE_RETRIEVAL: {
       PROVIDER:    optional('ADAPTIVE_RETRIEVAL_LLM_PROVIDER', 'gemini'),
       MODEL:       optional('ADAPTIVE_RETRIEVAL_LLM_MODEL', 'gemini-2.5-flash'),
+      THINKING: thinking('ADAPTIVE_RETRIEVAL_THINKING', 'minimal'),
       TIMEOUT_MS:  parseInt(optional('ADAPTIVE_RETRIEVAL_LLM_TIMEOUT_MS', '4000'), 10),
       TEMPERATURE: parseFloat(optional('ADAPTIVE_RETRIEVAL_LLM_TEMPERATURE', '0')),
     },
@@ -285,6 +307,7 @@ export const env = {
     ANSWER_VERIFICATION: {
       PROVIDER:    optional('ANSWER_VERIFICATION_LLM_PROVIDER', 'gemini'),
       MODEL:       optional('ANSWER_VERIFICATION_LLM_MODEL', 'gemini-2.5-flash'),
+      THINKING: thinking('ANSWER_VERIFICATION_THINKING', 'off'),
       TIMEOUT_MS:  parseInt(optional('ANSWER_VERIFICATION_LLM_TIMEOUT_MS', '8000'), 10),
       TEMPERATURE: parseFloat(optional('ANSWER_VERIFICATION_LLM_TEMPERATURE', '0')),
     },
@@ -298,6 +321,7 @@ export const env = {
     OUTPUT_FORMAT_REPAIR: {
       PROVIDER:    optional('OUTPUT_FORMAT_REPAIR_LLM_PROVIDER', 'gemini'),
       MODEL:       optional('OUTPUT_FORMAT_REPAIR_LLM_MODEL', 'gemini-2.5-flash'),
+      THINKING: thinking('OUTPUT_FORMAT_REPAIR_THINKING', 'minimal'),
       TIMEOUT_MS:  parseInt(optional('OUTPUT_FORMAT_REPAIR_LLM_TIMEOUT_MS', '4000'), 10),
       TEMPERATURE: parseFloat(optional('OUTPUT_FORMAT_REPAIR_LLM_TEMPERATURE', '0')),
     },
@@ -307,6 +331,12 @@ export const env = {
   // Runs before query-router.service.ts — see rag/guardrails/input/
   // input-guardrail.service.ts. Application-level limits, deliberately
   // independent of whatever context window the configured model supports.
+  CHAT: {
+    // How many prior turns of the session are passed to the router, rewriter
+    // and answer prompt as follow-up context. 0 disables history.
+    HISTORY_TURNS: nonNegativeInt('CHAT_HISTORY_TURNS', 10),
+  },
+
   INPUT_GUARDRAIL: {
     ENABLED:                  optional('INPUT_GUARDRAIL_ENABLED', 'true') === 'true',
     MAX_CHARS:                parseInt(optional('INPUT_GUARDRAIL_MAX_CHARS', '8000'), 10),

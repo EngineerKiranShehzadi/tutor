@@ -55,6 +55,7 @@ export const generateGreetingResponse = async (
         temperature: TEMPERATURE,
         // Headroom: some Gemini models spend part of this budget on thinking.
         maxOutputTokens: 512,
+        thinking: env.LLM.GREETING.THINKING,
         timeoutMs: TIMEOUT_MS,
       }),
       extractLlmUsage

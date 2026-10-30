@@ -113,6 +113,7 @@ const callLlmRewriter = async (
         systemPrompt: REWRITER_SYSTEM_PROMPT,
         temperature: 0,
         maxOutputTokens: 256,
+        thinking: env.LLM.QUERY_REWRITE.THINKING,
         responseSchema: REWRITE_RESPONSE_SCHEMA,
         timeoutMs,
       }),

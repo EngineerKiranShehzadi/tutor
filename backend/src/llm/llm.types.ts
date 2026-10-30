@@ -19,15 +19,20 @@ export interface LlmSchema {
   required?: string[];
 }
 
+export type LlmThinking = 'off' | 'minimal' | 'low' | 'medium' | 'high';
+
 export interface LlmRequest {
   model: string;
   systemPrompt?: string;
   userPrompt: string;
   temperature?: number;
   maxOutputTokens?: number;
-  // 0 disables model "thinking" so it can't consume maxOutputTokens (honored
-  // by providers that support it, ignored otherwise).
-  thinkingBudget?: number;
+  // Provider-neutral reasoning effort. Each provider adapter translates it
+  // into whatever its models accept (Gemini 2.5: a token budget; Gemini 3.x:
+  // a thinking level) and clamps to what the model allows; providers with no
+  // such control ignore it. Thinking tokens count against maxOutputTokens, so
+  // small structured-output calls should keep this at 'off'/'minimal'.
+  thinking?: LlmThinking;
   // When set, the provider must return JSON matching this shape in
   // `response.raw` (adapters handle whatever provider-specific flag turns
   // structured output on, e.g. Gemini's responseMimeType+responseSchema).

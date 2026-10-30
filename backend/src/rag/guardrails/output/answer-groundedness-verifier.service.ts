@@ -113,7 +113,7 @@ async function verifyOnce(params: VerifyAnswerParams): Promise<VerifierOutcome> 
         maxOutputTokens: 500,
         // The verdict is a small JSON object; with thinking on, Gemini can
         // spend the whole 500-token cap thinking and return truncated JSON.
-        thinkingBudget: 0,
+        thinking: env.LLM.ANSWER_VERIFICATION.THINKING,
         responseSchema: GROUNDEDNESS_RESPONSE_SCHEMA,
         timeoutMs,
       }),

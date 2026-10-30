@@ -86,6 +86,7 @@ export async function classifyPromptInjection(text: string): Promise<ClassifierO
         systemPrompt: CLASSIFIER_SYSTEM_PROMPT,
         temperature: env.LLM.GUARDRAIL.TEMPERATURE,
         maxOutputTokens: 200,
+        thinking: env.LLM.GUARDRAIL.THINKING,
         responseSchema: CLASSIFICATION_SCHEMA,
         timeoutMs,
       }),

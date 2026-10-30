@@ -90,6 +90,7 @@ const summarizeBatchWithGemini = async (
         systemPrompt: SUMMARY_SYSTEM_PROMPT,
         temperature: 0.3,
         maxOutputTokens: 1024,
+        thinking: env.LLM.LECTURE_SUMMARY.THINKING,
         timeoutMs,
       }),
       extractLlmUsage
@@ -132,6 +133,7 @@ const combineSummariesWithGemini = async (
         systemPrompt: COMBINE_SYSTEM_PROMPT,
         temperature: 0.3,
         maxOutputTokens: 1536,
+        thinking: env.LLM.LECTURE_SUMMARY.THINKING,
         timeoutMs,
       }),
       extractLlmUsage

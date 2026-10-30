@@ -69,7 +69,7 @@ const VERDICT: LlmSchema = {
   {
     const m = await startMock(() => ok('{"decision":"VERIFIED","items":[]}'));
     const { provider } = mkProvider(m.url);
-    const r = await provider.generate({ model: 'openai/gpt-oss-120b', systemPrompt: 'SYS', userPrompt: 'USER', temperature: 0, maxOutputTokens: 500, thinkingBudget: 0, responseSchema: VERDICT });
+    const r = await provider.generate({ model: 'openai/gpt-oss-120b', systemPrompt: 'SYS', userPrompt: 'USER', temperature: 0, maxOutputTokens: 500, thinking: 'off', responseSchema: VERDICT });
     const b = m.seen[0].body;
     const rf = b.response_format;
     check('2a. Request: model, system+user messages, auth header, reasoning_effort, temperature, JSON-schema response format (lower-case types, closed objects)',

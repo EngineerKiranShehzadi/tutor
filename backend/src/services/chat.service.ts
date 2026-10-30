@@ -51,6 +51,17 @@ export function compactReadinessReason(reason: string): string {
   return counts ? `${code} ${counts[1]}/${counts[2]}` : code;
 }
 
+// The last `turns` prior exchanges (history is oldest-first), as the
+// question/answer pairs the router, rewriter and answer prompt consume.
+// slice(-0) would return everything, so 0 is handled explicitly.
+export function selectHistoryTurns(
+  history: ChatHistoryEntry[],
+  turns: number
+): { question: string; answer: string }[] {
+  if (turns <= 0) return [];
+  return history.slice(-turns).map(e => ({ question: e.question, answer: e.answer }));
+}
+
 export interface AskLectureAgentDeps {
   runInputGuardrails?:     (question: string) => Promise<InputGuardrailResult>;
   generateEmbedding?:      (text: string, isQuery?: boolean) => Promise<number[]>;
@@ -465,9 +476,7 @@ export const askLectureAgent = async (
     // 4. Load current session's history for follow-up context
     currentStage = 'load-session-history';
     const recentHistory = await trace.span('load-session-history', () => getSessionHistory(studentId, sessionId));
-    const historyTurns  = recentHistory
-      .slice(-10)
-      .map(e => ({ question: e.question, answer: e.answer }));
+    const historyTurns  = selectHistoryTurns(recentHistory, env.CHAT.HISTORY_TURNS);
 
     if (historyTurns.length > 0) {
       logger.info(`[CHAT] 📚 Passing ${historyTurns.length} prior turn(s) as context`);

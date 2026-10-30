@@ -12,7 +12,7 @@ const MODEL = process.env.GROQ_MODEL ?? 'openai/gpt-oss-120b';
 
   const t1 = Date.now();
   const v = await p.generate({
-    model: MODEL, temperature: 0, maxOutputTokens: 500, thinkingBudget: 0, responseSchema: GROUNDEDNESS_RESPONSE_SCHEMA,
+    model: MODEL, temperature: 0, maxOutputTokens: 500, thinking: 'off', responseSchema: GROUNDEDNESS_RESPONSE_SCHEMA,
     systemPrompt: 'You verify whether an ANSWER is fully supported by the CONTEXT. Decide VERIFIED, REVISE or INSUFFICIENT_EVIDENCE.',
     userPrompt: 'CONTEXT: Zero-shot prompting means asking the model to do a task with no examples.\nQUESTION: What is zero-shot prompting?\nANSWER: Zero-shot prompting means giving no examples.',
   });

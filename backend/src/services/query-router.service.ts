@@ -159,6 +159,7 @@ const classifyWithLlm = async (question: string, timeoutMs: number): Promise<Lec
         systemPrompt: ROUTER_SYSTEM_PROMPT,
         temperature: 0,
         maxOutputTokens: 64,
+        thinking: env.LLM.QUERY_ROUTER.THINKING,
         responseSchema: ROUTE_RESPONSE_SCHEMA,
         timeoutMs,
       }),

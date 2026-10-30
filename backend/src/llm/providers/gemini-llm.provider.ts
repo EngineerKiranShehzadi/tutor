@@ -1,4 +1,5 @@
 import { GeminiSchemaType, type GeminiSchema, generateContent, generateContentStream, type GeminiGenerateResult } from '../../services/gemini-provider.service';
+import { toGeminiThinkingConfig } from './gemini-thinking';
 import type { LlmProvider } from './llm-provider.interface';
 import type { LlmRequest, LlmResponse, LlmSchema } from '../llm.types';
 
@@ -58,7 +59,7 @@ export const geminiLlmProvider: LlmProvider = {
       systemInstruction: request.systemPrompt,
       temperature: request.temperature,
       maxOutputTokens: request.maxOutputTokens,
-      thinkingBudget: request.thinkingBudget,
+      thinkingConfig: toGeminiThinkingConfig(request.model, request.thinking),
       timeoutMs: request.timeoutMs,
       // Gemini requires responseMimeType alongside responseSchema for
       // structured output — callers only ever specify the schema, this
@@ -72,7 +73,9 @@ export const geminiLlmProvider: LlmProvider = {
   },
 
   // Plain-text streaming only — structured (JSON-schema) output is never
-  // streamed, so responseSchema is intentionally not forwarded here.
+  // streamed, so responseSchema is intentionally not forwarded here (thinking
+  // is: the streamed grounded answer is the task with the largest thinking
+  // spend).
   async generateStream(request: LlmRequest, onDelta: (text: string) => void): Promise<LlmResponse> {
     const result = await generateContentStream({
       model: request.model,
@@ -80,6 +83,7 @@ export const geminiLlmProvider: LlmProvider = {
       systemInstruction: request.systemPrompt,
       temperature: request.temperature,
       maxOutputTokens: request.maxOutputTokens,
+      thinkingConfig: toGeminiThinkingConfig(request.model, request.thinking),
       timeoutMs: request.timeoutMs,
     }, onDelta);
     return toLlmResponse(result, request.model);

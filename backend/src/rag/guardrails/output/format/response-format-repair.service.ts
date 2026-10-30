@@ -83,6 +83,7 @@ async function repairWithLlm(expectedFormat: ExpectedResponseFormat, answer: str
         systemPrompt: FORMAT_REPAIR_SYSTEM_PROMPT,
         temperature: env.LLM.OUTPUT_FORMAT_REPAIR.TEMPERATURE,
         maxOutputTokens: 2048,
+        thinking: env.LLM.OUTPUT_FORMAT_REPAIR.THINKING,
         timeoutMs,
       }),
       extractLlmUsage

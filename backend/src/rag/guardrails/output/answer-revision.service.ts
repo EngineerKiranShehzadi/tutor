@@ -66,6 +66,7 @@ export async function reviseAnswer(params: ReviseAnswerParams): Promise<Revision
         systemPrompt: ANSWER_REVISION_SYSTEM_PROMPT,
         temperature: 0.2,
         maxOutputTokens: 2048,
+        thinking: env.LLM.ANSWER_VERIFICATION.THINKING,
         timeoutMs,
       }),
       extractLlmUsage

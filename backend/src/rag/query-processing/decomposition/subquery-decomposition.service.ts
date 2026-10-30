@@ -76,6 +76,7 @@ const callDecompositionLlm = async (effectiveQuery: string): Promise<RawDecompos
       systemPrompt: buildDecompositionSystemPrompt(maxSubqueries),
       temperature: env.LLM.QUERY_DECOMPOSITION.TEMPERATURE,
       maxOutputTokens: 400,
+      thinking: env.LLM.QUERY_DECOMPOSITION.THINKING,
       responseSchema: DECOMPOSITION_RESPONSE_SCHEMA,
       timeoutMs,
     }),

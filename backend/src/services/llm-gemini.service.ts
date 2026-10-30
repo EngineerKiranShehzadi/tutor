@@ -191,7 +191,7 @@ ${question}${uncoveredBlock}`;
   let streamedAny = false;
 
   try {
-    const request = { model: modelName, userPrompt: prompt, temperature: 0.3, maxOutputTokens: 8192 };
+    const request = { model: modelName, userPrompt: prompt, temperature: 0.3, maxOutputTokens: 8192, thinking: env.LLM.RAG_ANSWER.THINKING };
     const result = await withLlmDiagnostic(
       {
         spanName: 'gemini_answer_call',
