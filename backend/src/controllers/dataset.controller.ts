@@ -110,7 +110,6 @@ export const uploadDataset = async (
     logger.error(`[UPLOAD] ❌ ${msg}`);
     const status = err instanceof AppError ? err.statusCode : 400;
     sendError(res, msg, status);
-    next(err);
   }
 };
 

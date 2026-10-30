@@ -297,6 +297,24 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
                 </p>
               )}
 
+              {preview.possibleDuplicateCount > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex flex-col gap-2" data-testid="dataset-duplicate-warning">
+                  <p className="text-[14px] text-amber-900">
+                    These new rows look like edited versions of existing Q&amp;As. With Merge, both will stay live. If this file is your full corrected dataset, use Replace.
+                  </p>
+                  <ul className="text-[13px] text-amber-900 list-disc pl-5 space-y-1">
+                    {preview.possibleDuplicates.map(d => (
+                      <li key={`${d.sheetRow}-${d.existingQaId}`}>
+                        Row {d.sheetRow}: “{d.newQuestion}” ≈ <span className="font-mono text-[12px]">{d.existingQaId}</span> “{d.existingQuestion}”
+                      </li>
+                    ))}
+                    {preview.possibleDuplicateCount > preview.possibleDuplicates.length && (
+                      <li>…and {preview.possibleDuplicateCount - preview.possibleDuplicates.length} more</li>
+                    )}
+                  </ul>
+                </div>
+              )}
+
               {noChanges && (
                 <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-[14px] text-slate-600" data-testid="dataset-no-changes">
                   This file matches the live dataset — there is nothing to update.
@@ -375,7 +393,7 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
                 data-testid="rollback-btn"
                 className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 rounded-lg text-[14px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                <i className="fas fa-rotate-left" /> Roll back to v{previous.version_no}
+                <i className="fas fa-rotate-left" /> Switch to version #{previous.version_no}
               </button>
             )}
           </div>
@@ -426,17 +444,17 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
       {rollbackOpen && active && previous && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4" role="dialog" aria-modal="true" data-testid="rollback-dialog">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
-            <h3 className="text-lg font-bold text-slate-900 mb-2">Roll back to version {previous.version_no}?</h3>
+            <h3 className="text-lg font-bold text-slate-900 mb-2">Switch to version #{previous.version_no}?</h3>
             <ul className="text-[14px] text-slate-600 list-disc pl-5 space-y-1.5 mb-5">
               <li>Students will immediately get answers from <b>v{previous.version_no}</b> (from {fmt(previous.created_at)}).</li>
-              <li>Version {active.version_no} becomes the previous version — you can roll forward again.</li>
+              <li>Version {active.version_no} becomes the previous version — you can switch back again.</li>
               <li>Cached answers from v{active.version_no} stop being used; those of v{previous.version_no} become valid again.</li>
               <li>Existing chat history and its source links are not affected.</li>
             </ul>
             <div className="flex justify-end gap-2.5">
               <button onClick={() => setRollbackOpen(false)} className="px-4 py-2 border border-slate-200 rounded-xl text-[15px] font-semibold text-slate-600 hover:bg-slate-50" data-testid="rollback-cancel">Cancel</button>
               <button onClick={doRollback} disabled={rollingBack} className="px-4 py-2 bg-slate-900 text-white rounded-xl text-[15px] font-semibold hover:bg-slate-700 disabled:opacity-60" data-testid="rollback-confirm">
-                {rollingBack ? 'Rolling back…' : `Roll back to v${previous.version_no}`}
+                {rollingBack ? 'Switching…' : `Switch to version #${previous.version_no}`}
               </button>
             </div>
           </div>

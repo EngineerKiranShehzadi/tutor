@@ -196,7 +196,7 @@ const lastAnswerText = async (page) => {
   await sleep(1000);
   await shot(adminPage, 'admin-rolled-back-to-v1');
   check('7a. Rollback needs confirmation (Cancel changes nothing), then v1 is live again',
-    /Roll back to version 1/.test(dlg) && afterCancel === '2' && activeVersionNo() === '1', `dialog mentions v1=${/version 1/.test(dlg)}, active after Cancel=v${afterCancel}, active after Confirm=v${activeVersionNo()}, versions: ${versionStatuses()}`);
+    /Switch to version #1/.test(dlg) && afterCancel === '2' && activeVersionNo() === '1', `dialog mentions v1=${/version 1/.test(dlg)}, active after Cancel=v${afterCancel}, active after Confirm=v${activeVersionNo()}, versions: ${versionStatuses()}`);
   await ask(sp, 'What is zero-shot prompting?');
   const afterRb = await lastAnswerText(sp);
   await shot(sp, 'student-answer-after-rollback');

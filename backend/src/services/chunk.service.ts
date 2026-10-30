@@ -143,7 +143,9 @@ function normaliseRow(r: Record<string, unknown>): RawRow {
 // Parses the xlsx buffer and returns validated rows
 export function parseExcel(buffer: Buffer): RawRow[] {
   const workbook = XLSX.read(buffer, { type: 'buffer' });
-  const sheet    = workbook.Sheets[workbook.SheetNames[0]];
+  // The audit workbooks carry several sheets; the dataset is on Final_Dataset.
+  const sheetName = workbook.SheetNames.find(n => n.trim().toLowerCase() === 'final_dataset') ?? workbook.SheetNames[0];
+  const sheet    = workbook.Sheets[sheetName];
   const rawRows  = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
 
   if (rawRows.length === 0) throw new AppError('Excel file is empty', 400);

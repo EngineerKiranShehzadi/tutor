@@ -27,7 +27,7 @@ if (!/(localhost|127\.0\.0\.1)/.test(dbUrl) || !/(test|pipe)/i.test(dbUrl.split(
 
 import pool, { query } from '../config/database';
 import { EMBEDDING_MODEL_VERSION, EmbeddingUnavailableError } from '../services/embedding.service';
-import { buildChunkPieces } from '../services/chunk.service';
+import { buildChunkPieces, parseExcel } from '../services/chunk.service';
 import { matchRows, FileRow, ActiveQa, QaFields } from '../services/dataset-plan';
 import {
   prepareDatasetVersion, finishDatasetVersion, resumePendingVersions, rollbackDataset, exportActiveDataset,
@@ -896,6 +896,94 @@ const run = async () => {
         && embedder.calls.length === 0 && (await snap()) === s0 && (await vecOf(dChunk)).v === null
         && cli.code === 1 && /upload its dataset from the admin page/.test(cli.out) && (await snap()) === s0,
       `fn exit=${r4.exitCode} cli exit=${cli.code} unchanged=${(await snap()) === s0}`);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 21. P7 guardrails: possible duplicates, Final_Dataset sheet, first-version status restore
+  // ─────────────────────────────────────────────────────────────────────
+  {
+    const L = await newLecture('p7-dupes');
+    embedder.reset();
+    const base = baseRows(6);
+    const r1 = await prepareDatasetVersion(L, makeXlsx(base));
+    if (r1.kind !== 'CREATED') throw new Error('p7 setup failed');
+    await fin(r1.versionId);
+
+    // Question wording corrected, no qa_id column; the rest of the sheet re-uploaded.
+    const edited = base.map((r, i) => i === 2 ? { ...r, question: 'What does test concept number 3 really mean' , answer: r.answer + ' Corrected.' } : r);
+    const dm = await prepareDatasetVersion(L, makeXlsx(edited), { dryRun: true });
+    const dr = await prepareDatasetVersion(L, makeXlsx(edited), { dryRun: true, mode: 'REPLACE', confirmRemovals: 0 });
+    // Unrelated new question + different answer.
+    const unrelated = [...base, { question: 'Explain gradient descent in a neural network', answer: 'It iteratively moves weights against the loss gradient.', keywords: 'gd' }];
+    const um = await prepareDatasetVersion(L, makeXlsx(unrelated), { dryRun: true });
+    // Same answer under a completely different question.
+    const sameAns = [{ question: 'Totally different phrasing here', answer: `${base[0].answer.replace(/ /g, '  ')}`, keywords: 'x' }, ...base.slice(1)];
+    const sm = await prepareDatasetVersion(L, makeXlsx(sameAns), { dryRun: true });
+    // Punctuation/case-only edit.
+    const punct = [...base.slice(0, 3), { question: 'WHAT does test concept number 4, mean??', answer: 'Brand new answer text.', keywords: 'y' }, ...base.slice(4)];
+    const pm = await prepareDatasetVersion(L, makeXlsx(punct), { dryRun: true });
+    const dp = dm.preview.possibleDuplicates[0];
+    check('21a. MERGE: a question edit without qa_id is flagged as a possible duplicate (with row + existing Q&A)',
+      dm.preview.added === 1 && dm.preview.possibleDuplicateCount === 1 && dp?.sheetRow === 4
+        && /really mean/.test(dp.newQuestion) && /concept number 3 mean/.test(dp.existingQuestion) && /^qa_/.test(dp.existingQaId)
+        && dm.preview.fileHasQaIdColumn === false,
+      `count=${dm.preview.possibleDuplicateCount} row=${dp?.sheetRow} hasQaId=${dm.preview.fileHasQaIdColumn}`);
+    check('21b. An unrelated new question is not flagged',
+      um.preview.added === 1 && um.preview.possibleDuplicateCount === 0 && um.preview.possibleDuplicates.length === 0,
+      `count=${um.preview.possibleDuplicateCount}`);
+    check('21c. REPLACE flags nothing; same answer (whitespace-normalised) and punctuation-only question edits are flagged under MERGE',
+      dr.preview.possibleDuplicateCount === 0 && sm.preview.possibleDuplicateCount === 1 && pm.preview.possibleDuplicateCount === 1,
+      `replace=${dr.preview.possibleDuplicateCount} sameAnswer=${sm.preview.possibleDuplicateCount} punct=${pm.preview.possibleDuplicateCount}`);
+
+    // List is capped at 20 but the count is the total.
+    const L2 = await newLecture('p7-cap');
+    const big = baseRows(30);
+    const b2 = await prepareDatasetVersion(L2, makeXlsx(big));
+    if (b2.kind !== 'CREATED') throw new Error('p7 cap setup failed');
+    await fin(b2.versionId);
+    const reworded = big.slice(0, 25).map((r, i) => ({ question: `Reworded capped question ${i} about nothing alike`, answer: r.answer, keywords: 'c' }));
+    const cm = await prepareDatasetVersion(L2, makeXlsx([...reworded, ...big.slice(25)]), { dryRun: true });
+    check('21d. possibleDuplicates is capped at 20, possibleDuplicateCount is the full total',
+      cm.preview.possibleDuplicates.length === 20 && cm.preview.possibleDuplicateCount === 25,
+      `listed=${cm.preview.possibleDuplicates.length} total=${cm.preview.possibleDuplicateCount}`);
+
+    // qa_id column present -> fileHasQaIdColumn true.
+    const exported = await exportActiveDataset(L);
+    const qm = await prepareDatasetVersion(L, exported, { dryRun: true });
+    check('21e. A workbook with a qa_id column reports fileHasQaIdColumn=true', qm.preview.fileHasQaIdColumn === true, `has=${qm.preview.fileHasQaIdColumn}`);
+  }
+  {
+    // parseExcel reads Final_Dataset even when it is the second sheet (case-insensitive).
+    const ws1 = XLSX.utils.json_to_sheet([{ Note: 'cover sheet', Text: 'not a dataset' }]);
+    const ws2 = XLSX.utils.json_to_sheet([{ ID: 1, Question: 'Q from final', Answer: 'A from final', Source: 's' }]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws1, 'Summary');
+    XLSX.utils.book_append_sheet(wb, ws2, 'final_dataset');
+    const rows2 = parseExcel(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer);
+    const only = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(only, XLSX.utils.json_to_sheet([{ Question: 'Q first', Answer: 'A first' }]), 'Whatever');
+    const rows1 = parseExcel(XLSX.write(only, { type: 'buffer', bookType: 'xlsx' }) as Buffer);
+    check('21f. parseExcel reads the Final_Dataset sheet when it is not first; otherwise the first sheet',
+      rows2.length === 1 && rows2[0].question === 'Q from final' && rows1.length === 1 && rows1[0].question === 'Q first',
+      `multi=${rows2[0]?.question} single=${rows1[0]?.question}`);
+  }
+  {
+    // First-version upload: if the build is refused after beforeBuild set DATASET_UPLOADED, the status goes back.
+    const L = await newLecture('p7-status');
+    const before = (await lectureState(L)).status;
+    const res = await expectReject(prepareDatasetVersion(L, makeXlsx(baseRows(3)), {
+      beforeBuild: async () => {
+        await query(`UPDATE lectures SET status = 'DATASET_UPLOADED' WHERE id = $1`, [L]);
+        // A concurrent BUILDING version makes buildVersion refuse with a 409.
+        await query(
+          `INSERT INTO dataset_versions (lecture_id, version_no, status, mode, embedding_model_version, chunking_config_version, stats)
+           VALUES ($1, 1, 'BUILDING', 'MERGE', $2, 'x', '{}'::jsonb)`, [L, EMBEDDING_MODEL_VERSION]);
+      },
+    }));
+    const after = (await lectureState(L)).status;
+    check('21g. First-version upload refused in buildVersion (409) restores the lecture status',
+      res.rejected && (res.err as { statusCode?: number }).statusCode === 409 && before !== 'DATASET_UPLOADED' && after === before,
+      `rejected=${res.rejected} before=${before} after=${after}`);
   }
 
   // ─────────────────────────────────────────────────────────────────────

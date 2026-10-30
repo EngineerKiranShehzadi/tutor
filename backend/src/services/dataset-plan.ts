@@ -145,3 +145,47 @@ export const matchRows = (
 };
 
 const truncate = (s: string, n = 70): string => (s.length > n ? s.slice(0, n - 1) + '…' : s);
+
+// ── Possible duplicates (MERGE guardrail) ───────────────────────────────
+
+export interface PossibleDuplicate {
+  sheetRow: number;
+  newQuestion: string;
+  existingQaId: string;
+  existingQuestion: string;
+}
+
+const JACCARD_THRESHOLD = 0.8;
+const normSpace = (s: string): string => s.replace(/\s+/g, ' ').trim();
+const normQuestion = (s: string): string =>
+  normSpace(s.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' '));
+
+const jaccard = (a: Set<string>, b: Set<string>): number => {
+  if (a.size === 0 || b.size === 0) return 0;
+  let inter = 0;
+  for (const w of a) if (b.has(w)) inter++;
+  return inter / (a.size + b.size - inter);
+};
+
+// Pairs (added file row, carried-over Q&A) that look like the same Q&A with a
+// corrected wording: same answer, same question once punctuation/case are
+// ignored, or near-identical word sets. Under MERGE both would stay live.
+export const findPossibleDuplicates = (
+  added: { sheetRow: number; question: string; answer: string }[],
+  carried: { qaId: string; question: string; answer: string }[]
+): PossibleDuplicate[] => {
+  const prep = <T extends { question: string; answer: string }>(x: T) => {
+    const q = normQuestion(x.question);
+    return { x, q, a: normSpace(x.answer), words: new Set(q.split(' ').filter(Boolean)) };
+  };
+  const existing = carried.map(prep);
+  const out: PossibleDuplicate[] = [];
+  for (const n of added.map(prep)) {
+    for (const e of existing) {
+      if (n.a === e.a || n.q === e.q || jaccard(n.words, e.words) >= JACCARD_THRESHOLD) {
+        out.push({ sheetRow: n.x.sheetRow, newQuestion: n.x.question, existingQaId: e.x.qaId, existingQuestion: e.x.question });
+      }
+    }
+  }
+  return out;
+};

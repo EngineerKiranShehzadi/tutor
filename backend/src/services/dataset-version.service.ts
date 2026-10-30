@@ -7,7 +7,7 @@ import { generateEmbedding, EMBEDDING_MODEL_VERSION, EmbeddingUnavailableError }
 import { env } from '../config/env';
 import { parseExcel, toFileRows, buildChunkPieces, CHUNKING_CONFIG_VERSION } from './chunk.service';
 import { getLectureById, updateLectureProgress, updateLectureStatus } from './lecture.service';
-import { matchRows, fieldsEqual, ActiveQa, QaFields, FileRow } from './dataset-plan';
+import { matchRows, fieldsEqual, findPossibleDuplicates, PossibleDuplicate, ActiveQa, QaFields, FileRow } from './dataset-plan';
 
 // Incremental, resumable, safely-published dataset pipeline.
 //
@@ -58,6 +58,12 @@ export interface UpdatePreview {
   chunksToEmbed: number;
   chunksCopied: number;
   chunksReused: number;
+  // The workbook has a qa_id column (the export does; hand-made files usually don't).
+  fileHasQaIdColumn: boolean;
+  // MERGE: added rows that look like edited versions of Q&As being carried over
+  // (both would stay live). At most 20 are listed; the count is the total.
+  possibleDuplicates: PossibleDuplicate[];
+  possibleDuplicateCount: number;
 }
 
 export type PrepareResult =
@@ -160,7 +166,8 @@ const planUpdate = async (
   fileRows: FileRow[],
   mode: DatasetMode,
   fileHash: string,
-  filename: string | null
+  filename: string | null,
+  fileHasQaIdColumn: boolean
 ): Promise<Plan> => {
   const { versionId, chunks } = await loadActiveChunks(lectureId);
 
@@ -182,6 +189,7 @@ const planUpdate = async (
   const newChunks: NewChunkSpec[] = [];
   const reused: Plan['reused'] = [];
   let added = 0, updated = 0, unchanged = 0;
+  const addedRows: FileRow[] = [];
   const matchedQaIds = new Set<string>();
 
   for (let i = 0; i < fileRows.length; i++) {
@@ -213,7 +221,7 @@ const planUpdate = async (
       });
     }
 
-    if (m.isNew) added++;
+    if (m.isNew) { added++; addedRows.push(row); }
     else if (!allReused || old.length !== pieces.length) updated++;
     else unchanged++;
   }
@@ -226,7 +234,10 @@ const planUpdate = async (
   // never touched.
   const carriedQaIds: string[] = [];
   let reembeddedForModel = 0;
+  let duplicates: PossibleDuplicate[] = [];
   if (mode === 'MERGE') {
+    // Every missing Q&A stays live under MERGE (carried over or re-embedded).
+    duplicates = findPossibleDuplicates(addedRows, missing.map(q => ({ qaId: q.qaId, question: q.fields.question, answer: q.fields.answer })));
     for (const q of missing) {
       const pieces = oldByQa.get(q.qaId)!;
       if (pieces.every(c => c.has_embedding && c.embedding_model_version === EMBEDDING_MODEL_VERSION)) {
@@ -255,6 +266,9 @@ const planUpdate = async (
     chunksToEmbed: newChunks.filter(c => c.copyFromChunkId === null).length,
     chunksCopied: newChunks.filter(c => c.copyFromChunkId !== null).length,
     chunksReused: reused.length,
+    fileHasQaIdColumn,
+    possibleDuplicates: duplicates.slice(0, 20),
+    possibleDuplicateCount: duplicates.length,
   };
 
   return { lectureId, mode, activeVersionId: versionId, fileHash, filename, newChunks, reused, carriedQaIds, preview };
@@ -397,10 +411,12 @@ export async function prepareDatasetVersion(
   if (mode !== 'MERGE' && mode !== 'REPLACE') throw new AppError('mode must be MERGE or REPLACE', 400);
 
   logger.info(`[DATASET] 🚀 Preparing ${mode} update for lecture #${lectureId}`);
-  const fileRows = toFileRows(parseExcel(buffer));
+  const rawRows = parseExcel(buffer);
+  const fileHasQaIdColumn = rawRows.length > 0 && 'qa_id' in rawRows[0];
+  const fileRows = toFileRows(rawRows);
   if (fileRows.length === 0) throw new AppError('No valid rows found in the dataset', 400);
 
-  const plan = await planUpdate(lectureId, fileRows, mode, sha256(buffer), opts.filename ?? null);
+  const plan = await planUpdate(lectureId, fileRows, mode, sha256(buffer), opts.filename ?? null, fileHasQaIdColumn);
   const p = plan.preview;
 
   if (opts.dryRun) return { kind: 'DRY_RUN', preview: p };
@@ -411,8 +427,24 @@ export async function prepareDatasetVersion(
     return { kind: 'NOOP', preview: p };
   }
 
-  if (opts.beforeBuild) await opts.beforeBuild({ firstVersion: plan.activeVersionId === null });
-  const { versionId, versionNo } = await buildVersion(plan);
+  const firstVersion = plan.activeVersionId === null;
+  const previousStatus = firstVersion ? (await getLectureById(lectureId)).status : null;
+  if (opts.beforeBuild) await opts.beforeBuild({ firstVersion });
+  let built: { versionId: number; versionNo: number };
+  try {
+    built = await buildVersion(plan);
+  } catch (err) {
+    // beforeBuild may have moved a dataset-less lecture to DATASET_UPLOADED; if
+    // the build never started, put the status back instead of leaving it stuck.
+    if (previousStatus !== null && previousStatus !== 'DATASET_UPLOADED') {
+      await query(
+        `UPDATE lectures SET status = $2, updated_at = NOW() WHERE id = $1 AND status = 'DATASET_UPLOADED' AND active_version_id IS NULL`,
+        [lectureId, previousStatus]
+      ).catch(() => undefined);
+    }
+    throw err;
+  }
+  const { versionId, versionNo } = built;
   return { kind: 'CREATED', versionId, versionNo, preview: p };
 }
 

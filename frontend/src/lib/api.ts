@@ -97,6 +97,9 @@ export interface DatasetPreview {
   chunksToEmbed: number;
   chunksCopied: number;
   chunksReused: number;
+  fileHasQaIdColumn: boolean;
+  possibleDuplicates: { sheetRow: number; newQuestion: string; existingQaId: string; existingQuestion: string }[];
+  possibleDuplicateCount: number;  // MERGE: added rows that look like edits of kept Q&As
 }
 
 export interface DatasetVersionInfo {
