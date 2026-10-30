@@ -18,8 +18,8 @@ const nonNegativeInt = (key: string, fallback: number): number => {
   return Number.isFinite(n) && n >= 0 ? n : fallback;
 };
 
-// Provider names fall back to the default when unset OR blank.
-const providerName = (key: string, fallback: string): string =>
+// A string from env; unset or blank falls back (unlike optional(), which keeps '').
+const nonBlank = (key: string, fallback: string): string =>
   (process.env[key] ?? '').trim() || fallback;
 
 // A finite number from env; unset, blank or unparseable falls back.
@@ -355,8 +355,16 @@ export const env = {
   // EMBEDDING_MODEL_VERSION, which invalidates stored vectors and cached
   // answers — re-embed first.
   RETRIEVAL: {
-    EMBEDDING_PROVIDER: providerName('EMBEDDING_PROVIDER', 'local-http'),
-    RERANK_PROVIDER:    providerName('RERANK_PROVIDER', 'local-http'),
+    EMBEDDING_PROVIDER: nonBlank('EMBEDDING_PROVIDER', 'local-http'),
+    RERANK_PROVIDER:    nonBlank('RERANK_PROVIDER', 'local-http'),
+    // Hosted-provider settings. Each key is only required when its provider is
+    // selected — checked once at startup (see config/retrieval-providers.ts).
+    EMBEDDING_MODEL:      nonBlank('EMBEDDING_MODEL', 'text-embedding-3-small'),
+    // Must equal the database column (vector(1024)); anything else is rejected at startup.
+    EMBEDDING_DIMENSIONS: positiveInt('EMBEDDING_DIMENSIONS', 1024),
+    RERANK_MODEL:         nonBlank('RERANK_MODEL', 'rerank-3'),
+    OPENAI_API_KEY:       nonBlank('OPENAI_API_KEY', ''),
+    VOYAGE_API_KEY:       nonBlank('VOYAGE_API_KEY', ''),
     // Minimum cosine similarity for a chunk to survive vector search.
     VECTOR_SIMILARITY_THRESHOLD: finiteFloat('VECTOR_SIMILARITY_THRESHOLD', 0.55),
     // Minimum reranker score for a chunk to be used as context.

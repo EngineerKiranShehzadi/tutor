@@ -18,8 +18,14 @@ export interface RerankProvider {
   // traces and cache keys, so it must change whenever the model does.
   readonly modelVersion: string;
   // Where a readiness probe should check reachability, for providers that sit
-  // behind an HTTP endpoint. Omitted when there is nothing cheap to probe.
+  // behind an endpoint of their own (the local server). Omitted for hosted
+  // providers: their readiness is the assertConfigured() check, so a probe
+  // never spends tokens.
   readonly healthUrl?: string;
+  // Throws a clear error if the provider cannot work as configured (missing
+  // API key). Called once at startup, and again before the first request so
+  // scripts fail with the same message. Never makes a network call.
+  assertConfigured(): void;
   // Scores every candidate against the query and returns the scores best-first.
   // Truncating to top-N and mapping ids back to chunks is the caller's job.
   rerank(query: string, candidates: RerankCandidate[]): Promise<RerankScore[]>;

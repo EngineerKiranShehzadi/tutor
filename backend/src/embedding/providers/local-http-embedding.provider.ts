@@ -19,6 +19,8 @@ export const localHttpEmbeddingProvider: EmbeddingProvider = {
   dimensions: EMBEDDING_DIMS,
   healthUrl: LOCAL_EMBED_URL,
 
+  assertConfigured(): void { /* no credentials needed */ },
+
   // isQuery must be true for student questions — BGE prepends a retrieval
   // instruction to queries but not to indexed passages.
   // Fails with a clear error if the server is not running.

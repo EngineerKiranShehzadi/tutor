@@ -99,11 +99,19 @@ async function checkHttpReachable(url: string): Promise<ComponentHealth> {
   }
 }
 
-// Probes the configured provider's endpoint. A provider with no HTTP endpoint
-// to probe is config-only: degraded (uncertain), never a network call.
-async function checkProviderReachable(healthUrl: string | undefined): Promise<ComponentHealth> {
-  if (!healthUrl) return { status: 'degraded', latencyMs: 0 };
-  return checkHttpReachable(healthUrl);
+// Provider with an HTTP endpoint of its own (the local server): probe it.
+// Hosted provider: config check only — the key is present and the settings are
+// usable — never a paid call per probe. Anything else is uncertain (degraded).
+export async function checkProviderHealth(
+  provider: { healthUrl?: string; assertConfigured(): void },
+): Promise<ComponentHealth> {
+  if (provider.healthUrl) return checkHttpReachable(provider.healthUrl);
+  try {
+    provider.assertConfigured();
+    return { status: 'healthy', latencyMs: 0 };
+  } catch {
+    return { status: 'unhealthy', latencyMs: 0, errorCode: 'NOT_CONFIGURED' };
+  }
 }
 
 async function checkGemini(): Promise<ComponentHealth> {
@@ -138,8 +146,8 @@ export async function checkReadiness(): Promise<ReadinessResult> {
   const [database, pgvector, embeddingServer, reranker, gemini] = await Promise.all([
     cached('database', ttl, checkDatabase),
     cached('pgvector', ttl, checkPgvector),
-    cached('embeddingServer', ttl, () => checkProviderReachable(resolveEmbeddingProvider(env.RETRIEVAL.EMBEDDING_PROVIDER).healthUrl)),
-    cached('reranker', ttl, () => checkProviderReachable(resolveRerankProvider(env.RETRIEVAL.RERANK_PROVIDER).healthUrl)),
+    cached('embeddingServer', ttl, () => checkProviderHealth(resolveEmbeddingProvider(env.RETRIEVAL.EMBEDDING_PROVIDER))),
+    cached('reranker', ttl, () => checkProviderHealth(resolveRerankProvider(env.RETRIEVAL.RERANK_PROVIDER))),
     cached('gemini', ttl, checkGemini),
   ]);
 

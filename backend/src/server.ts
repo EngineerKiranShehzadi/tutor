@@ -2,6 +2,7 @@ import { createApp } from './app';
 import pool, { connectDB } from './config/database';
 import { verifyEmailTransport } from './services/email.service';
 import { env } from './config/env';
+import { assertRetrievalProvidersConfigured } from './config/retrieval-providers';
 import { logger } from './utils/logger';
 import { shutdownPhoenixExporter } from './observability/phoenix';
 import { startMaintenanceScheduler, stopMaintenanceScheduler } from './observability/maintenance.scheduler';
@@ -56,6 +57,7 @@ const installShutdownHandlers = (server: Server): void => {
 
 const start = async () => {
   try {
+    assertRetrievalProvidersConfigured();
     await connectDB();
 
     // Only verify email transport if credentials are configured

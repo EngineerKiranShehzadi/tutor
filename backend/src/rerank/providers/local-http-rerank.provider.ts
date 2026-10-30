@@ -12,6 +12,8 @@ export const localHttpRerankProvider: RerankProvider = {
   modelVersion: MODEL_VERSION,
   healthUrl: LOCAL_RERANK_URL,
 
+  assertConfigured(): void { /* no credentials needed */ },
+
   async rerank(query: string, candidates: RerankCandidate[]): Promise<RerankScore[]> {
     let res: Response;
     try {
