@@ -38,6 +38,20 @@ def embed():
     embedding = model.encode(text, normalize_embeddings=True).tolist()
     return jsonify({'embedding': embedding, 'dims': len(embedding)})
 
+MAX_BATCH = 64
+
+@app.route('/embed_batch', methods=['POST'])
+def embed_batch():
+    data = request.get_json(silent=True)
+    texts = data.get('texts') if data else None
+    if not isinstance(texts, list) or not texts or not all(isinstance(t, str) for t in texts):
+        return jsonify({'error': 'texts must be a non-empty list of strings'}), 400
+    if len(texts) > MAX_BATCH:
+        return jsonify({'error': f'At most {MAX_BATCH} texts per request'}), 400
+    # Passages only: no query instruction prefix.
+    embeddings = model.encode(texts, normalize_embeddings=True, batch_size=len(texts)).tolist()
+    return jsonify({'embeddings': embeddings})
+
 @app.route('/rerank', methods=['POST'])
 def rerank():
     data = request.get_json()

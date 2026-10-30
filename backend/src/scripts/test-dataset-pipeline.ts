@@ -608,6 +608,71 @@ const run = async () => {
   }
 
   // ─────────────────────────────────────────────────────────────────────
+  // 14c. P6 batch embedding
+  // ─────────────────────────────────────────────────────────────────────
+  {
+    const vecsByText = async (lectureId: number) => new Map((await query<{ t: string; v: string }>(
+      'SELECT chunk_text AS t, local_embedding::text AS v FROM lecture_qna_chunks WHERE lecture_id = $1 AND local_embedding IS NOT NULL', [lectureId])).rows.map(r => [r.t, r.v]));
+    const progressOf = async (lectureId: number) => (await query<{ c: number; t: number }>('SELECT progress_current AS c, progress_total AS t FROM lectures WHERE id = $1', [lectureId])).rows[0];
+    const batchCalls: number[] = [];
+    const goodBatch = async (texts: string[]) => { batchCalls.push(texts.length); return texts.map(vecFor); };
+
+    // (a) same vectors as per-chunk, in ceil(n/size) batch calls
+    const La = await newLecture('batch-per-chunk');
+    const Lb = await newLecture('batch-batched');
+    const rowsB = baseRows(10);
+    const pa = await prepareDatasetVersion(La, makeXlsx(rowsB));
+    const pb = await prepareDatasetVersion(Lb, makeXlsx(rowsB));
+    embedder.reset();
+    if (pa.kind === 'CREATED') await finishDatasetVersion(pa.versionId, { embed: embedder.embed, ...FAST });
+    if (pb.kind === 'CREATED') await finishDatasetVersion(pb.versionId, { embedBatch: goodBatch, embedBatchSize: 4, ...FAST });
+    const [ma, mb] = [await vecsByText(La), await vecsByText(Lb)];
+    check('14c-a. Batched embedding stores the same vectors as per-chunk (batch size 4 → ceil(n/4) calls)',
+      ma.size > 0 && ma.size === mb.size && [...ma].every(([t, v]) => mb.get(t) === v) && batchCalls.length === Math.ceil(ma.size / 4)
+        && (await versionRows(Lb))[0].status === 'ACTIVE',
+      `chunks=${ma.size} batchCalls=${batchCalls.join(',')}`);
+
+    // (b) one bad text inside a batch fails only that chunk (others stored; version not activated)
+    const Lc = await newLecture('batch-bad-text');
+    const pc = await prepareDatasetVersion(Lc, makeXlsx(baseRows(6)));
+    const badText = (await query<{ chunk_text: string }>(
+      `SELECT c.chunk_text FROM dataset_version_chunks d JOIN lecture_qna_chunks c ON c.id = d.chunk_id WHERE d.version_id = $1 ORDER BY c.id OFFSET 2 LIMIT 1`,
+      [pc.kind === 'CREATED' ? pc.versionId : 0])).rows[0].chunk_text;
+    const singles: string[] = [];
+    const picky = async (t: string) => { singles.push(t); if (t === badText) throw new Error('injected bad text'); return vecFor(t); };
+    const pickyBatch = async (texts: string[]) => { if (texts.includes(badText)) throw new Error('injected bad text in batch'); return texts.map(vecFor); };
+    const rc = pc.kind === 'CREATED' ? await finishDatasetVersion(pc.versionId, { embed: picky, embedBatch: pickyBatch, embedBatchSize: 32, ...FAST, retryDelayMs: 600_000 }) : null;
+    const missing = (await query<{ chunk_text: string }>(
+      `SELECT c.chunk_text FROM dataset_version_chunks d JOIN lecture_qna_chunks c ON c.id = d.chunk_id WHERE d.version_id = $1 AND c.local_embedding IS NULL`,
+      [pc.kind === 'CREATED' ? pc.versionId : 0])).rows;
+    const totalC = await countOne('SELECT count(*) AS n FROM dataset_version_chunks WHERE version_id = $1', [pc.kind === 'CREATED' ? pc.versionId : 0]);
+    check('14c-b. One bad text inside a batch fails only that chunk: the rest of the batch is stored via the chunk-by-chunk fallback',
+      rc?.outcome === 'PAUSED' && missing.length === 1 && missing[0].chunk_text === badText && (await vecsByText(Lc)).size === totalC - 1,
+      `outcome=${rc?.outcome} stillMissing=${missing.length} stored=${(await vecsByText(Lc)).size}`);
+
+    // (c) outage in the middle of a batched build: PAUSED (attempts kept), resumes by itself, progress reaches total
+    const Ld = await newLecture('batch-outage');
+    const pd = await prepareDatasetVersion(Ld, makeXlsx(baseRows(9)));
+    let up = false; let n = 0;
+    const flakyBatch = async (texts: string[]) => {
+      if (n++ >= 1 && !up) throw new EmbeddingUnavailableError('simulated outage mid-build');   // first batch ok, then down
+      return texts.map(vecFor);
+    };
+    const rd = pd.kind === 'CREATED' ? await finishDatasetVersion(pd.versionId, { embedBatch: flakyBatch, embedBatchSize: 3, retryDelayMs: 40, chunkBackoffMs: 1, maxAttempts: 2 }) : null;
+    await new Promise(r => setTimeout(r, 300));
+    const dv = (await query<{ status: string; attempts: number; last_error: string | null }>('SELECT status, attempts, last_error FROM dataset_versions WHERE lecture_id = $1', [Ld])).rows[0];
+    const storedDuring = (await vecsByText(Ld)).size;
+    up = true;
+    let st = '';
+    for (let i = 0; i < 50; i++) { await new Promise(r => setTimeout(r, 100)); st = (await versionRows(Ld))[0].status; if (st === 'ACTIVE') break; }
+    const prog = await progressOf(Ld);
+    check('14c-c. Outage in the middle of a batched build pauses (BUILDING, attempts not consumed, first batch kept) and resumes by itself to ACTIVE',
+      rd?.outcome === 'PAUSED' && dv.status === 'BUILDING' && dv.attempts === 0 && /unavailable/i.test(dv.last_error ?? '') && storedDuring === 3
+        && st === 'ACTIVE' && (await vecsByText(Ld)).size > 3 && (await lectureState(Ld)).status === 'READY' && prog.t > 0 && prog.c === prog.t,
+      `outcome=${rd?.outcome} duringOutage=${dv.status}/attempts=${dv.attempts}/stored=${storedDuring} → ${st} progress=${prog.c}/${prog.t}`);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
   // 15. Simultaneous uploads on one lecture
   // ─────────────────────────────────────────────────────────────────────
   {

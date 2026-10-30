@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx';
 import pool, { query } from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { logger } from '../utils/logger';
-import { generateEmbedding, EMBEDDING_MODEL_VERSION, EmbeddingUnavailableError } from './embedding.service';
+import { generateEmbedding, generateEmbeddingsBatch, EMBEDDING_MODEL_VERSION, EmbeddingUnavailableError } from './embedding.service';
 import { env } from '../config/env';
 import { parseExcel, toFileRows, buildChunkPieces, CHUNKING_CONFIG_VERSION } from './chunk.service';
 import { getLectureById, updateLectureProgress, updateLectureStatus } from './lecture.service';
@@ -97,6 +97,10 @@ export interface PrepareOptions {
 
 export interface FinishDeps {
   embed?: (text: string) => Promise<number[]>;
+  // Batched embedder. Defaults to the real server's /embed_batch unless only
+  // `embed` is injected, in which case chunks are embedded one by one.
+  embedBatch?: (texts: string[]) => Promise<number[][]>;
+  embedBatchSize?: number;
   maxAttempts?: number;
   retryDelayMs?: number;
   chunkRetries?: number;
@@ -583,6 +587,8 @@ export async function finishDatasetVersion(versionId: number, deps: FinishDeps =
   runningVersions.add(versionId);
   try {
     const embed = deps.embed ?? ((t: string) => generateEmbedding(t));
+    const embedBatch = deps.embedBatch ?? (deps.embed ? undefined : generateEmbeddingsBatch);
+    const batchSizeCfg = Math.min(64, Math.max(1, deps.embedBatchSize ?? env.DATASET.EMBED_BATCH));
     const maxAttempts = deps.maxAttempts ?? MAX_FINISH_ATTEMPTS;
     const retryDelay = deps.retryDelayMs ?? env.DATASET.RETRY_DELAY_MS;
     const chunkRetries = deps.chunkRetries ?? CHUNK_RETRIES;
@@ -609,10 +615,11 @@ export async function finishDatasetVersion(versionId: number, deps: FinishDeps =
       // unreachable and nothing else went wrong" — however few chunks are left.
       let sawUnavailable = false;
       let sawOtherFailure = false;
-      for (const chunk of pending) {
-        let ok = false;
+      type Pending = { id: number; chunk_text: string };
+      // One chunk with its own retries; records the failure kind on the pass.
+      const embedOne = async (chunk: Pending): Promise<boolean> => {
         let lastErr: unknown;
-        for (let t = 0; t <= chunkRetries && !ok; t++) {
+        for (let t = 0; t <= chunkRetries; t++) {
           try {
             const vec = await embed(chunk.chunk_text);
             await query(
@@ -620,21 +627,66 @@ export async function finishDatasetVersion(versionId: number, deps: FinishDeps =
                WHERE id = $3 AND local_embedding IS NULL`,
               [`[${vec.join(',')}]`, EMBEDDING_MODEL_VERSION, chunk.id]
             );
-            ok = true;
+            return true;
           } catch (err) {
             lastErr = err;
             if (t < chunkRetries) await sleep(backoff * (t + 1));
           }
         }
-        if (!ok) {
-          logger.error(`[DATASET] ❌ Could not embed chunk id=${chunk.id}: ${(lastErr as Error)?.message}`);
-          if (lastErr instanceof EmbeddingUnavailableError) sawUnavailable = true; else sawOtherFailure = true;
-          if (++consecutive >= failLimit) break;
+        logger.error(`[DATASET] ❌ Could not embed chunk id=${chunk.id}: ${(lastErr as Error)?.message}`);
+        if (lastErr instanceof EmbeddingUnavailableError) sawUnavailable = true; else sawOtherFailure = true;
+        return false;
+      };
+
+      // A whole batch in one embedder call and ONE UPDATE. Returns true when the
+      // batch was written; false on an outage (after retries) — a non-outage
+      // failure throws so the caller can retry the batch chunk by chunk.
+      const embedBatchOnce = async (batch: Pending[]): Promise<boolean> => {
+        let lastErr: unknown;
+        for (let t = 0; t <= chunkRetries; t++) {
+          try {
+            const vecs = await embedBatch!(batch.map(c => c.chunk_text));
+            await query(
+              `UPDATE lecture_qna_chunks c
+               SET local_embedding = u.emb::vector, embedding_model_version = $3
+               FROM unnest($1::bigint[], $2::text[]) AS u(id, emb)
+               WHERE c.id = u.id AND c.local_embedding IS NULL`,
+              [batch.map(c => c.id), vecs.map(v => `[${v.join(',')}]`), EMBEDDING_MODEL_VERSION]
+            );
+            return true;
+          } catch (err) {
+            if (!(err instanceof EmbeddingUnavailableError)) throw err;
+            lastErr = err;
+            if (t < chunkRetries) await sleep(backoff * (t + 1));
+          }
+        }
+        logger.error(`[DATASET] ❌ Embedding service unavailable for a batch of ${batch.length}: ${(lastErr as Error)?.message}`);
+        sawUnavailable = true;
+        return false;
+      };
+
+      const batchSize = embedBatch ? batchSizeCfg : 1;
+      for (let i = 0; i < pending.length && consecutive < failLimit; i += batchSize) {
+        const batch = pending.slice(i, i + batchSize);
+        if (!embedBatch) {
+          if (await embedOne(batch[0])) { consecutive = 0; done++; await updateLectureProgress(v.lecture_id, Math.min(total, total - pending.length + done)); }
+          else consecutive++;
           continue;
         }
-        consecutive = 0;
-        done++;
-        await updateLectureProgress(v.lecture_id, Math.min(total, total - pending.length + done));
+        let okCount = 0;
+        try {
+          okCount = (await embedBatchOnce(batch)) ? batch.length : 0;
+          if (okCount === 0) { consecutive += batch.length; continue; }
+        } catch (err) {
+          logger.warn(`[DATASET] Batch of ${batch.length} failed (${(err as Error).message}); retrying chunk by chunk`);
+          for (const chunk of batch) {
+            if (await embedOne(chunk)) { okCount++; consecutive = 0; } else consecutive++;
+            if (consecutive >= failLimit) break;
+          }
+        }
+        if (okCount === batch.length) consecutive = 0;
+        done += okCount;
+        if (okCount > 0) await updateLectureProgress(v.lecture_id, Math.min(total, total - pending.length + done));
       }
 
       const remaining = (await pendingChunks(versionId)).length;

@@ -21,6 +21,7 @@ export const env = {
   // retrying a build that is paused because the embedding service is down.
   DATASET: {
     RETRY_DELAY_MS: parseInt(optional('DATASET_RETRY_DELAY_MS', '15000'), 10),
+    EMBED_BATCH: parseInt(optional('DATASET_EMBED_BATCH', '32'), 10) || 32,
   },
 
   DB: {

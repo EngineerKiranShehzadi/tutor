@@ -1,6 +1,8 @@
 import { logger } from '../utils/logger';
 
 export const LOCAL_EMBED_URL = process.env.EMBEDDING_SERVER_URL ?? 'http://localhost:5001/embed';
+export const LOCAL_EMBED_BATCH_URL = process.env.EMBEDDING_BATCH_SERVER_URL ?? LOCAL_EMBED_URL.replace(/\/embed$/, '/embed_batch');
+const EMBEDDING_DIMS = 1024;
 
 // Identifies which embedding model/dimensionality produced a stored vector.
 // The local embedding server exposes no model-metadata endpoint, so this is
@@ -51,4 +53,44 @@ export const generateEmbedding = async (text: string, isQuery = false): Promise<
   const data = (await res.json()) as { embedding: number[] };
   logger.info(`[EMBEDDING] ✅ Generated ${data.embedding.length}-dim vector via local model`);
   return data.embedding;
+};
+
+// Embeds indexed passages (no query prefix) in one request. Same error
+// classes as generateEmbedding; the reply must have one 1024-dim vector per text.
+export const generateEmbeddingsBatch = async (texts: string[]): Promise<number[][]> => {
+  if (texts.length === 0) return [];
+  let res: Response;
+  try {
+    res = await fetch(LOCAL_EMBED_BATCH_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ texts }),
+      signal: AbortSignal.timeout(120_000),
+    });
+  } catch (err) {
+    throw new EmbeddingUnavailableError(
+      `Local embedding server not reachable at ${LOCAL_EMBED_BATCH_URL}. ` +
+      `Start it with: python scripts/embedding_server.py`
+    );
+  }
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    if (res.status === 502 || res.status === 503 || res.status === 504) {
+      throw new EmbeddingUnavailableError(`Embedding server unavailable (${res.status}): ${body}`);
+    }
+    throw new Error(`Embedding server error ${res.status}: ${body}`);
+  }
+
+  const data = (await res.json()) as { embeddings?: number[][] };
+  const embeddings = data.embeddings;
+  if (!Array.isArray(embeddings) || embeddings.length !== texts.length) {
+    throw new Error(`Embedding server returned ${Array.isArray(embeddings) ? embeddings.length : 'no'} vectors for ${texts.length} texts`);
+  }
+  const bad = embeddings.findIndex(e => !Array.isArray(e) || e.length !== EMBEDDING_DIMS);
+  if (bad !== -1) {
+    throw new Error(`Embedding server returned a ${embeddings[bad]?.length}-dim vector at index ${bad}; expected ${EMBEDDING_DIMS}`);
+  }
+  logger.info(`[EMBEDDING] ✅ Generated ${embeddings.length} ${EMBEDDING_DIMS}-dim vectors in one batch`);
+  return embeddings;
 };
