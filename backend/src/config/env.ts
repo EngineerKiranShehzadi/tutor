@@ -128,6 +128,9 @@ export const env = {
     // PHOENIX_ENABLED is also true.
     ENABLED: optional('OBSERVABILITY_ENABLED', 'false') === 'true',
     SAMPLE_RATE: parseFloat(optional('OBSERVABILITY_SAMPLE_RATE', '1')),
+    // Traces slower than this are always exported to Phoenix, whatever
+    // SAMPLE_RATE says (see observability/sampling.ts).
+    SLOW_TRACE_MS: parseInt(optional('OBSERVABILITY_SLOW_TRACE_MS', '10000'), 10),
     // Opt-in content capture (truncated question/answer/chunk previews on
     // spans and in admin trace detail). Independent of NODE_ENV — operators
     // decide per-environment; see MAX_CONTENT_LENGTH for the truncation cap.

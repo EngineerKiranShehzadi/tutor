@@ -4,6 +4,7 @@ import { logger } from '../utils/logger';
 import { OPENINFERENCE_SPAN_KIND, ATTR } from './otel-semconv';
 import { sanitizeAttributes, sanitizeValue, isContentCaptureEnabled } from './sanitize';
 import { isValidTraceId } from './tracer';
+import { decideTraceExport } from './sampling';
 import type { FinishedTrace, FinishedSpan } from './types';
 
 // Optional, best-effort export of our own internal traces to Phoenix over
@@ -161,7 +162,9 @@ export async function shutdownPhoenixExporter(timeoutMs = 5000): Promise<void> {
 
 async function exportTrace(trace: FinishedTrace): Promise<boolean> {
   if (!env.OBSERVABILITY.ENABLED || !env.OBSERVABILITY.PHOENIX_ENABLED) return false;
-  if (env.OBSERVABILITY.SAMPLE_RATE < 1 && Math.random() > env.OBSERVABILITY.SAMPLE_RATE) return false;
+  const decision = decideTraceExport(trace, env.OBSERVABILITY.SAMPLE_RATE);
+  logger.debug(`[PHOENIX] Export decision for trace ${trace.traceId}: ${decision.reason}`);
+  if (!decision.export) return false;
 
   try {
     const { trace: otelTrace, context: otelContext, SpanStatusCode } = await import('@opentelemetry/api');
