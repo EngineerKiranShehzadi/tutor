@@ -16,8 +16,13 @@
  * Usage: npm run test:observability-auth
  */
 import { createApp } from '../app';
-import { query } from '../config/database';
 import { generateAccessToken } from '../utils/jwt';
+import { createTestUser, deleteTestUsers } from './test-fixtures';
+
+// Own users, created in main() and removed at the end, so the cases never depend on
+// (or skip for lack of) existing STUDENT/ADMIN rows.
+let studentId = '';
+let adminId = '';
 
 interface CaseResult { pass: boolean; detail?: string }
 interface Case { label: string; run: (base: string) => Promise<CaseResult> }
@@ -45,9 +50,7 @@ cases.push({
 cases.push({
   label: 'GET /observability/status as an authenticated STUDENT (non-admin) -> 403',
   run: async (base) => {
-    const { rows } = await query<{ id: string }>(`SELECT id FROM users WHERE role = 'STUDENT' LIMIT 1`);
-    if (!rows[0]) return { pass: false, detail: 'SKIPPED — no STUDENT user in DB to test with' };
-    const token = generateAccessToken(rows[0].id, 'STUDENT');
+    const token = generateAccessToken(studentId, 'STUDENT');
     const res = await fetch(`${base}/api/v1/observability/status`, {
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -58,9 +61,7 @@ cases.push({
 cases.push({
   label: 'POST /observability/traces/:id/notes as a STUDENT (non-admin) -> 403, never reaches the handler',
   run: async (base) => {
-    const { rows } = await query<{ id: string }>(`SELECT id FROM users WHERE role = 'STUDENT' LIMIT 1`);
-    if (!rows[0]) return { pass: false, detail: 'SKIPPED — no STUDENT user in DB to test with' };
-    const token = generateAccessToken(rows[0].id, 'STUDENT');
+    const token = generateAccessToken(studentId, 'STUDENT');
     const res = await fetch(`${base}/api/v1/observability/traces/fake-trace-id/notes`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -73,9 +74,7 @@ cases.push({
 cases.push({
   label: 'GET /observability/status as an authenticated ADMIN -> 200 with expected shape',
   run: async (base) => {
-    const { rows } = await query<{ id: string }>(`SELECT id FROM users WHERE role = 'ADMIN' LIMIT 1`);
-    if (!rows[0]) return { pass: false, detail: 'SKIPPED — no ADMIN user in DB to test with' };
-    const token = generateAccessToken(rows[0].id, 'ADMIN');
+    const token = generateAccessToken(adminId, 'ADMIN');
     const res = await fetch(`${base}/api/v1/observability/status`, {
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -88,9 +87,7 @@ cases.push({
 cases.push({
   label: 'GET /observability/capabilities as an authenticated ADMIN -> 200 (does not throw even if Phoenix is unreachable)',
   run: async (base) => {
-    const { rows } = await query<{ id: string }>(`SELECT id FROM users WHERE role = 'ADMIN' LIMIT 1`);
-    if (!rows[0]) return { pass: false, detail: 'SKIPPED — no ADMIN user in DB to test with' };
-    const token = generateAccessToken(rows[0].id, 'ADMIN');
+    const token = generateAccessToken(adminId, 'ADMIN');
     const res = await fetch(`${base}/api/v1/observability/capabilities`, {
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -102,9 +99,7 @@ cases.push({
 cases.push({
   label: 'GET /observability/traces with an invalid limit (non-numeric) -> clean 422, not 500/stack trace',
   run: async (base) => {
-    const { rows } = await query<{ id: string }>(`SELECT id FROM users WHERE role = 'ADMIN' LIMIT 1`);
-    if (!rows[0]) return { pass: false, detail: 'SKIPPED — no ADMIN user in DB to test with' };
-    const token = generateAccessToken(rows[0].id, 'ADMIN');
+    const token = generateAccessToken(adminId, 'ADMIN');
     const res = await fetch(`${base}/api/v1/observability/traces?limit=not-a-number`, {
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -120,9 +115,7 @@ cases.push({
 cases.push({
   label: 'GET /observability/metrics/constructor cannot bypass the slice allowlist to leak the full metrics payload',
   run: async (base) => {
-    const { rows } = await query<{ id: string }>(`SELECT id FROM users WHERE role = 'ADMIN' LIMIT 1`);
-    if (!rows[0]) return { pass: false, detail: 'SKIPPED — no ADMIN user in DB to test with' };
-    const token = generateAccessToken(rows[0].id, 'ADMIN');
+    const token = generateAccessToken(adminId, 'ADMIN');
     const res = await fetch(`${base}/api/v1/observability/metrics/constructor`, {
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -134,9 +127,7 @@ cases.push({
 cases.push({
   label: 'GET /observability/traces?spanKind=NOT_A_REAL_KIND is rejected, not silently no-op filtered',
   run: async (base) => {
-    const { rows } = await query<{ id: string }>(`SELECT id FROM users WHERE role = 'ADMIN' LIMIT 1`);
-    if (!rows[0]) return { pass: false, detail: 'SKIPPED — no ADMIN user in DB to test with' };
-    const token = generateAccessToken(rows[0].id, 'ADMIN');
+    const token = generateAccessToken(adminId, 'ADMIN');
     const res = await fetch(`${base}/api/v1/observability/traces?spanKind=NOT_A_REAL_KIND`, {
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -145,6 +136,8 @@ cases.push({
 });
 
 async function main() {
+  studentId = await createTestUser('STUDENT');
+  adminId = await createTestUser('ADMIN');
   const app = await createApp();
   const server = app.listen(0);
   await new Promise<void>((resolve) => server.once('listening', resolve));
@@ -163,6 +156,8 @@ async function main() {
       console.log(`FAIL  ${c.label} (threw: ${(err as Error).message})`);
     }
   }
+
+  await deleteTestUsers([studentId, adminId]).catch(err => console.log(`cleanup failed: ${(err as Error).message}`));
 
   console.log(`\n${cases.length - failures}/${cases.length} passed`);
   // server.close()'s callback waits for every open connection (including

@@ -18,6 +18,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { env } from '../config/env';
 import { query } from '../config/database';
+import { createTestUser, deleteTestUsers, createReadyLecture, deleteTestLecture } from './test-fixtures';
 import { QnaChunk } from '../types';
 import {
   askLectureAgent,
@@ -108,16 +109,16 @@ async function withTrace(
 }
 
 async function runTracingChecks(): Promise<Record<string, CaseResult>> {
-  const KEYS = ['1', '2', '2b', '3', '4', '5', '6', '7', '10', '11', '12', '13', '14'];
-  const { rows: lectureRows } = await query<{ id: number }>(`SELECT id FROM lectures WHERE status = 'READY' LIMIT 1`);
-  const { rows: userRows } = await query<{ id: string }>(`SELECT id FROM users LIMIT 1`);
-  if (lectureRows.length === 0 || userRows.length === 0) {
-    const skip: CaseResult = { pass: false, skip: true, detail: 'SKIPPED — no READY lecture or user found in DB' };
-    return Object.fromEntries(KEYS.map(k => [k, skip]));
+  // Own fixtures (student + READY lecture with profile and embedded active
+  // version), so this block never depends on what is already in the DB.
+  const studentId = await createTestUser('STUDENT');
+  let lectureId: number;
+  try {
+    lectureId = await createReadyLecture();
+  } catch (err) {
+    await deleteTestUsers([studentId]);
+    throw err;
   }
-
-  const lectureId = lectureRows[0].id;
-  const studentId = userRows[0].id;
   const session = await createChatSession(studentId, lectureId);
   const ctx = { lectureId, studentId, sessionId: session.id };
   const results: Record<string, CaseResult> = {};
@@ -274,6 +275,8 @@ async function runTracingChecks(): Promise<Record<string, CaseResult>> {
   } finally {
     await query(`DELETE FROM chat_history WHERE question LIKE 'OBSTEST%'`).catch(() => {});
     await deleteChatSession(studentId, session.id);
+    await deleteTestLecture(lectureId).catch(() => {});
+    await deleteTestUsers([studentId]).catch(() => {});
   }
 }
 
