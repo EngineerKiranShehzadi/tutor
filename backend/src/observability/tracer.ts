@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from 'crypto';
-import { AsyncLocalStorage } from 'async_hooks';
 import { logger } from '../utils/logger';
+import { spanContextStorage } from './trace-context';
 import { spanKindFor, OpenInferenceSpanKind } from './otel-semconv';
 import type { FinishedSpan, FinishedTrace, SafeMetadata, SpanStatus, SpanEvent } from './types';
 
@@ -39,19 +39,13 @@ function generateSpanId(): string {
   return randomUUID().replace(/-/g, '').slice(0, 16);
 }
 
-interface ActiveSpanContext {
-  trace: RequestTrace;
-  parentSpanId: string;
-}
-
 // Lets a deeply-nested service call (query-router, llm-gemini, etc.) find
 // "the current request's trace and current parent span" without the trace
 // object being threaded through every function signature in the pipeline.
-// AsyncLocalStorage correctly propagates across every await in the chain,
-// so a `trace.span()` call made from inside another `trace.span()`'s fn —
-// no matter how many modules deep — automatically becomes a real child.
-const spanContextStorage = new AsyncLocalStorage<ActiveSpanContext>();
-
+// AsyncLocalStorage (see trace-context.ts) correctly propagates across every
+// await in the chain, so a `trace.span()` call made from inside another
+// `trace.span()`'s fn — no matter how many modules deep — automatically
+// becomes a real child.
 export function getActiveTrace(): RequestTrace | null {
   return spanContextStorage.getStore()?.trace ?? null;
 }

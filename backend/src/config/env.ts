@@ -21,6 +21,11 @@ export const env = {
   // not done by then, the process exits with code 1. See server.ts.
   SHUTDOWN_TIMEOUT_MS: parseInt(optional('SHUTDOWN_TIMEOUT_MS', '10000'), 10),
 
+  // Production only: also write logs/error.log and logs/combined.log (10 MB
+  // size rotation, 5 files). Off by default — production logs go to the
+  // console as JSON. See utils/logger.ts.
+  LOG_TO_FILE: optional('LOG_TO_FILE', 'false') === 'true',
+
   // Dataset pipeline (dataset-version.service.ts). How long to wait before
   // retrying a build that is paused because the embedding service is down.
   DATASET: {
