@@ -21,7 +21,11 @@ export const env = {
   // retrying a build that is paused because the embedding service is down.
   DATASET: {
     RETRY_DELAY_MS: parseInt(optional('DATASET_RETRY_DELAY_MS', '15000'), 10),
-    EMBED_BATCH: parseInt(optional('DATASET_EMBED_BATCH', '32'), 10) || 32,
+    // Chunks per embedding request; 1 = per-chunk (/embed). Batching is meant for a
+    // GPU or a remote embedder; on a CPU-only box it is slower. Measured on the
+    // local CPU server, lecture 4 (329 chunks): per-chunk 111 s, batch 8 128 s,
+    // batch 32 158 s; vectors identical (min cosine 0.9999999999991).
+    EMBED_BATCH: Math.max(1, parseInt(optional('DATASET_EMBED_BATCH', '1'), 10) || 1),
   },
 
   DB: {

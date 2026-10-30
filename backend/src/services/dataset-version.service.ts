@@ -587,8 +587,9 @@ export async function finishDatasetVersion(versionId: number, deps: FinishDeps =
   runningVersions.add(versionId);
   try {
     const embed = deps.embed ?? ((t: string) => generateEmbedding(t));
-    const embedBatch = deps.embedBatch ?? (deps.embed ? undefined : generateEmbeddingsBatch);
     const batchSizeCfg = Math.min(64, Math.max(1, deps.embedBatchSize ?? env.DATASET.EMBED_BATCH));
+    // Batch size 1 means per-chunk (/embed); batching only applies above that.
+    const embedBatch = batchSizeCfg > 1 ? (deps.embedBatch ?? (deps.embed ? undefined : generateEmbeddingsBatch)) : undefined;
     const maxAttempts = deps.maxAttempts ?? MAX_FINISH_ATTEMPTS;
     const retryDelay = deps.retryDelayMs ?? env.DATASET.RETRY_DELAY_MS;
     const chunkRetries = deps.chunkRetries ?? CHUNK_RETRIES;
