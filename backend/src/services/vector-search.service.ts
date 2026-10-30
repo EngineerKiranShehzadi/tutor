@@ -7,8 +7,10 @@ export const SIMILARITY_THRESHOLD = env.RETRIEVAL.VECTOR_SIMILARITY_THRESHOLD;
 
 // Searches only the specified lecture's chunks using pgvector cosine similarity,
 // and only those in the lecture's ACTIVE dataset version — chunks of a version
-// still being built (or of an older one) are never returned.
-export const searchChunks = async (
+// still being built (or of an older one) are never returned. Returns the top-K
+// by similarity with NO threshold applied; searchChunks() is the production
+// entry point that enforces it, and the threshold tuner reads this directly.
+export const searchChunkCandidates = async (
   embedding: number[],
   lectureId: number,
   topK = 5,
@@ -17,7 +19,7 @@ export const searchChunks = async (
   // lands mid-request can never mix two versions' chunks into one answer.
   // Omitted: the lecture's active version at query time.
   datasetVersionId?: number
-): Promise<QnaChunk[]> => {
+): Promise<(QnaChunk & { similarity: number })[]> => {
   const vectorLiteral = `[${embedding.join(',')}]`;
 
   const { rows } = await query<QnaChunk & { similarity: number }>(
@@ -34,6 +36,17 @@ export const searchChunks = async (
      LIMIT $3`,
     [vectorLiteral, lectureId, topK, datasetVersionId ?? null]
   );
+
+  return rows;
+};
+
+export const searchChunks = async (
+  embedding: number[],
+  lectureId: number,
+  topK = 5,
+  datasetVersionId?: number
+): Promise<QnaChunk[]> => {
+  const rows = await searchChunkCandidates(embedding, lectureId, topK, datasetVersionId);
 
   // Filter by similarity threshold — strictly enforced
   const filtered = rows.filter(r => (r.similarity ?? 0) >= SIMILARITY_THRESHOLD);

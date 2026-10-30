@@ -35,7 +35,7 @@ export const rerankChunks = async (
 
 export const DEFAULT_MIN_RERANK_SCORE = env.RETRIEVAL.RERANK_MIN_SCORE;
 
-function normalizeAnswer(answer: string): string {
+export function normalizeAnswer(answer: string): string {
   return answer.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 

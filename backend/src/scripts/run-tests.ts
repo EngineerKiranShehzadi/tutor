@@ -59,6 +59,7 @@ const SUITES: Suite[] = [
   { name: 'request-log', script: 'src/scripts/test-request-log.ts' },
   { name: 'llm-thinking', script: 'src/scripts/test-llm-thinking.ts' },
   { name: 'db-guard', script: 'src/scripts/test-db-guard.ts' },
+  { name: 'tune-thresholds', script: 'src/scripts/test-tune-thresholds.ts' },
   { name: 'hosted-providers', script: 'src/scripts/test-hosted-providers.ts' },
   { name: 'retrieval-providers', script: 'src/scripts/test-retrieval-providers.ts' },
   { name: 'sampling', script: 'src/scripts/test-sampling.ts' },
