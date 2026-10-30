@@ -43,6 +43,14 @@ export const LECTURE_NOT_FOUND_MESSAGE = 'I could not find this information in t
 // the real, lazily-imported services below (defaults are only evaluated
 // when a caller doesn't override them, so normal request handling still
 // lazy-loads exactly as before).
+// "MISSING_EMBEDDINGS: 2/5 chunk(s) of active version 7 ..." -> "MISSING_EMBEDDINGS 2/5".
+// Keeps the code plus the n/total counts, drops the free-text and version ids.
+export function compactReadinessReason(reason: string): string {
+  const code = reason.split(':')[0].trim();
+  const counts = /(\d+)\/(\d+)/.exec(reason);
+  return counts ? `${code} ${counts[1]}/${counts[2]}` : code;
+}
+
 export interface AskLectureAgentDeps {
   runInputGuardrails?:     (question: string) => Promise<InputGuardrailResult>;
   generateEmbedding?:      (text: string, isQuery?: boolean) => Promise<number[]>;
@@ -321,7 +329,7 @@ export const askLectureAgent = async (
     const readiness = await (deps.getLectureReadiness ?? getLectureReadiness)(lectureId);
     if (!readiness.ready) {
       logger.warn(`[CHAT] ⚠️  Lecture #${lectureId} dataset not ready: ${readiness.reason}`);
-      finishTrace('ERROR', { responseStatus: 'LECTURE_NOT_READY' });
+      finishTrace('ERROR', { responseStatus: 'LECTURE_NOT_READY', notFoundReason: compactReadinessReason(readiness.reason) });
       throw new AppError('AI tutor is not ready for this lecture yet. Please wait for processing.', 400);
     }
 

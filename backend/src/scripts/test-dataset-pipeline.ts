@@ -36,6 +36,7 @@ import {
 import { searchChunks } from '../services/vector-search.service';
 import { lookupAnswerMemory, writeAnswerMemory } from '../services/rag-answer-memory.service';
 import { askLectureAgent } from '../services/chat.service';
+import { buildRequestLogRow, writeRequestLog } from '../observability/request-log.service';
 
 // ── helpers ─────────────────────────────────────────────────────────────
 
@@ -736,6 +737,18 @@ const run = async () => {
     };
     const notReadyMsg = /not ready for this lecture/;
 
+    // Same as ask(), but persists the trace into rag_request_log (awaited) and returns that row.
+    const askLogged = async (lectureId: number) => {
+      const writes: Promise<void>[] = [];
+      await askLectureAgent(
+        { studentId: student, lectureId, question: 'What does test concept number 1 mean?', sessionId: 0 },
+        { onTraceComplete: t => { writes.push(writeRequestLog(buildRequestLogRow(t, false))); } },
+      ).catch(() => undefined);
+      await Promise.all(writes);
+      return (await query<{ response_status: string; not_found_reason: string | null }>(
+        `SELECT response_status, not_found_reason FROM rag_request_log WHERE lecture_id = $1 ORDER BY created_at DESC LIMIT 1`, [lectureId])).rows[0];
+    };
+
     // (a) READY by status, but no active version
     const La = await newLecture('17a status READY, no active version');
     await query(`UPDATE lectures SET status = 'READY' WHERE id = $1`, [La]);
@@ -744,6 +757,9 @@ const run = async () => {
     check('17a. READY lecture with active_version_id NULL → not ready, chat answers LECTURE_NOT_READY (not NOT_FOUND)',
       !ra.ready && /^NO_ACTIVE_VERSION/.test(ra.reason) && aa.threw && aa.status === 400 && notReadyMsg.test(aa.message),
       `readiness=${JSON.stringify(ra)} chat=${aa.status}:${aa.message}`);
+    const la = await askLogged(La);
+    check('17a-log. The LECTURE_NOT_READY request-log row carries the readiness reason (NO_ACTIVE_VERSION)',
+      la?.response_status === 'LECTURE_NOT_READY' && la.not_found_reason === 'NO_ACTIVE_VERSION', `row=${JSON.stringify(la)}`);
 
     // (c) healthy lecture built by the real pipeline
     const Lc = await newLecture('17c healthy');
@@ -763,6 +779,9 @@ const run = async () => {
       (await lectureState(Lc)).status === 'READY' && !rb.ready && /^MISSING_EMBEDDINGS: 1\//.test(rb.reason)
         && ab.threw && ab.status === 400 && notReadyMsg.test(ab.message),
       `readiness=${JSON.stringify(rb)} chat=${ab.status}:${ab.message}`);
+    const lb = await askLogged(Lc);
+    check('17b-log. A MISSING_EMBEDDINGS not-ready row carries the reason with its n/total counts',
+      lb?.response_status === 'LECTURE_NOT_READY' && /^MISSING_EMBEDDINGS 1\/\d+$/.test(lb.not_found_reason ?? ''), `row=${JSON.stringify(lb)}`);
 
     // a chunk embedded by a different model also makes it not ready
     await query(`UPDATE lecture_qna_chunks SET local_embedding = $2::vector WHERE local_embedding IS NULL AND lecture_id = $1`, [Lc, `[${vecFor('x').join(',')}]`]);

@@ -86,6 +86,21 @@ export const ATTENTION_NOT_FOUND_LABELS: Record<string, string> = {
   ALL_CANDIDATES_BELOW_RERANK_FLOOR: 'Not found — matches were too weak',
 };
 
+// Why a lecture was "not ready" (stored as e.g. "MISSING_EMBEDDINGS 2/5").
+export const ATTENTION_NOT_READY_LABELS: Record<string, string> = {
+  NO_ACTIVE_VERSION: 'Lecture not ready — no dataset has been published',
+  EMPTY_ACTIVE_VERSION: 'Lecture not ready — the published dataset is empty',
+  MISSING_EMBEDDINGS: 'Lecture not ready — some answers are not searchable yet',
+  STALE_EMBEDDING_MODEL: 'Lecture not ready — some answers need re-processing',
+};
+
+function notReadyLabel(reason?: string | null): string {
+  if (!reason) return 'Lecture not ready yet';
+  const [code, counts] = reason.split(' ');
+  const base = pick(ATTENTION_NOT_READY_LABELS, code, 'Lecture not ready yet');
+  return counts && /^\d+\/\d+$/.test(counts) ? `${base} (${counts})` : base;
+}
+
 export const ATTENTION_ERROR_LABELS: Record<string, string> = {
   TIMEOUT: 'Answer timed out',
   SERVICE_UNREACHABLE: 'A service could not be reached',
@@ -149,7 +164,7 @@ export function attentionDetailLabels(row: {
   } else if (row.responseStatus === 'GUARDRAIL_REJECTED') {
     out.push('Rejected by safety check');
   } else if (row.responseStatus === 'LECTURE_NOT_READY') {
-    out.push('Lecture not ready yet');
+    out.push(notReadyLabel(row.notFoundReason));
   } else if (row.responseStatus === 'ERROR' && !row.errorCode) {
     out.push('Something went wrong');
   }
