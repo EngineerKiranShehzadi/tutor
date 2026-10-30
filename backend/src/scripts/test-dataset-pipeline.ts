@@ -31,7 +31,7 @@ import { buildChunkPieces } from '../services/chunk.service';
 import { matchRows, FileRow, ActiveQa, QaFields } from '../services/dataset-plan';
 import {
   prepareDatasetVersion, finishDatasetVersion, resumePendingVersions, rollbackDataset, exportActiveDataset,
-  listDatasetVersions, RemovalConfirmationRequired, getLectureReadiness, validateVersion,
+  listDatasetVersions, RemovalConfirmationRequired, getLectureReadiness, validateVersion, retryMissingEmbeddings,
 } from '../services/dataset-version.service';
 import { searchChunks } from '../services/vector-search.service';
 import { lookupAnswerMemory, writeAnswerMemory } from '../services/rag-answer-memory.service';
@@ -792,6 +792,110 @@ const run = async () => {
         && embedder.calls.every(t => !carriedTexts.has(t)) && embedder.calls.length > 0 && embedder.calls.length <= 2
         && (await modelCounts(Lc2)) === `${EMBEDDING_MODEL_VERSION}:${afterC.length}`,
       `carried=${pc2.kind === 'CREATED' ? pc2.preview.carriedOver : '?'} sameRowsKept=${carriedStill}/${carriedIds.size} embedCalls=${embedder.calls.length} (edited row only)`);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 19. Rollback validates the version it restores
+  // ─────────────────────────────────────────────────────────────────────
+  {
+    const L = await newLecture('19 rollback validation');
+    embedder.reset();
+    const p1 = await prepareDatasetVersion(L, makeXlsx(baseRows(4)));
+    if (p1.kind === 'CREATED') await fin(p1.versionId);
+    const p2 = await prepareDatasetVersion(L, makeXlsx(baseRows(5)));
+    if (p2.kind === 'CREATED') await fin(p2.versionId);
+    const v1 = p1.kind === 'CREATED' ? p1.versionId : -1;
+    const v2 = p2.kind === 'CREATED' ? p2.versionId : -1;
+    const chunkOfV1 = await countOne('SELECT MIN(chunk_id) n FROM dataset_version_chunks WHERE version_id = $1', [v1]);
+    await query(`UPDATE lecture_qna_chunks SET embedding_model_version = 'old-model:768' WHERE id = $1`, [chunkOfV1]);
+    const refused = await expectReject(rollbackDataset(L));
+    const st = await lectureState(L);
+    const vs = await versionRows(L);
+    check('19a. Rollback to a version with one old-model chunk is refused (409) and the active version stays the same',
+      refused.rejected && /previous version cannot be restored/.test(refused.message) && /different model/.test(refused.message)
+        && (refused.err as { statusCode?: number }).statusCode === 409
+        && st.active_version_id === v2 && st.status === 'READY'
+        && vs.find(v => v.id === v1)?.status === 'SUPERSEDED' && vs.find(v => v.id === v2)?.status === 'ACTIVE',
+      `message="${refused.message.slice(0, 120)}" active=${st.active_version_id} (expected ${v2})`);
+    await query(`UPDATE lecture_qna_chunks SET embedding_model_version = $2 WHERE id = $1`, [chunkOfV1, EMBEDDING_MODEL_VERSION]);
+    const rbOk = await rollbackDataset(L);
+    check('19b. Once the version is healthy again the same rollback succeeds', rbOk.activeVersionId === v1, `active=${rbOk.activeVersionId} (expected ${v1})`);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 20. Legacy retry: only the ACTIVE version's missing vectors, never orphans / other-model vectors
+  // ─────────────────────────────────────────────────────────────────────
+  {
+    const vecOf = async (id: number) => (await query<{ v: string | null; m: string | null }>(
+      'SELECT local_embedding::text AS v, embedding_model_version AS m FROM lecture_qna_chunks WHERE id = $1', [id])).rows[0];
+    const build = async (tag: string) => {
+      const L = await newLecture(tag);
+      embedder.reset();
+      const p = await prepareDatasetVersion(L, makeXlsx(baseRows(4)));
+      if (p.kind === 'CREATED') await fin(p.versionId);
+      const members = (await activeChunks(L)).map(c => c.id);
+      return { L, members };
+    };
+    const orphanFor = async (L: number) => (await query<{ id: number }>(
+      `INSERT INTO lecture_qna_chunks (lecture_id, question, answer, chunk_text) VALUES ($1, 'orphan q', 'orphan a', 'orphan chunk text') RETURNING id`, [L])).rows[0].id;
+
+    // (a) NULL member + orphan + other-model member
+    const A = await build('20a retry mixed');
+    const orphan = await orphanFor(A.L);
+    const [nullMember, otherMember] = A.members;
+    await query(`UPDATE lecture_qna_chunks SET local_embedding = NULL, embedding_model_version = NULL WHERE id = $1`, [nullMember]);
+    await query(`UPDATE lecture_qna_chunks SET embedding_model_version = 'old-model:768' WHERE id = $1`, [otherMember]);
+    const otherBefore = await vecOf(otherMember);
+    const nullText = (await query<{ chunk_text: string }>('SELECT chunk_text FROM lecture_qna_chunks WHERE id = $1', [nullMember])).rows[0].chunk_text;
+    embedder.reset();
+    const r1 = await retryMissingEmbeddings(A.L, { embed: embedder.embed });
+    const nm = await vecOf(nullMember), om = await vecOf(otherMember), orph = await vecOf(orphan);
+    check('20a. Retry embeds the active version\'s NULL chunk with the model version; the orphan and the other-model vector are untouched; lecture not set to EMBEDDING',
+      r1.embedded === 1 && embedder.calls.length === 1 && embedder.calls[0] === nullText
+        && nm.v !== null && nm.m === EMBEDDING_MODEL_VERSION
+        && orph.v === null && om.v === otherBefore.v && om.m === 'old-model:768'
+        && r1.otherModel === 1 && r1.exitCode === 1 && /export the dataset and re-upload/.test(r1.message)
+        && (await lectureState(A.L)).status === 'READY',
+      `embedded=${r1.embedded} calls=${embedder.calls.length} nullChunkModel=${nm.m} orphanVector=${orph.v === null ? 'none' : 'SET'} otherModelKept=${om.m} exit=${r1.exitCode}`);
+
+    // once the other-model chunk is healthy, a repeat run has nothing to do
+    await query(`UPDATE lecture_qna_chunks SET embedding_model_version = $2 WHERE id = $1`, [otherMember, EMBEDDING_MODEL_VERSION]);
+    embedder.reset();
+    const r2 = await retryMissingEmbeddings(A.L, { embed: embedder.embed });
+    check('20b. Ready lecture → "nothing to do", exit 0, no embedding calls, orphan still without a vector',
+      r2.exitCode === 0 && /Nothing to do/.test(r2.message) && embedder.calls.length === 0 && (await vecOf(orphan)).v === null, `exit=${r2.exitCode} calls=${embedder.calls.length}`);
+
+    // (c) the only gap is a NULL member: lecture is set READY when readiness agrees
+    const C = await build('20c retry sets READY');
+    await query(`UPDATE lecture_qna_chunks SET local_embedding = NULL, embedding_model_version = NULL WHERE id = $1`, [C.members[0]]);
+    await query(`UPDATE lectures SET status = 'FAILED' WHERE id = $1`, [C.L]);
+    embedder.reset();
+    const r3 = await retryMissingEmbeddings(C.L, { embed: embedder.embed });
+    check('20c. When the active version ends fully embedded on the current model, the lecture is set READY',
+      r3.exitCode === 0 && r3.embedded === 1 && (await lectureState(C.L)).status === 'READY', `exit=${r3.exitCode} status=${(await lectureState(C.L)).status}`);
+
+    // (d) no active version → exit 1, nothing written
+    const D = await newLecture('20d no active version');
+    const dChunk = (await query<{ id: number }>(
+      `INSERT INTO lecture_qna_chunks (lecture_id, question, answer, chunk_text) VALUES ($1, 'q', 'a', 'legacy chunk without version') RETURNING id`, [D])).rows[0].id;
+    const snap = async () => JSON.stringify([
+      (await query('SELECT status, active_version_id, progress_current, progress_total, updated_at FROM lectures WHERE id = $1', [D])).rows,
+      (await query('SELECT id, local_embedding IS NULL AS n, embedding_model_version FROM lecture_qna_chunks WHERE lecture_id = $1 ORDER BY id', [D])).rows,
+      await countOne('SELECT COUNT(*) n FROM dataset_versions WHERE lecture_id = $1', [D]),
+    ]);
+    const s0 = await snap();
+    embedder.reset();
+    const r4 = await retryMissingEmbeddings(D, { embed: embedder.embed });
+    const cli = await new Promise<{ code: number | null; out: string }>(resolve => {
+      const ch = spawn(TSNODE, ['--transpile-only', join(__dirname, 'retry-missing-embeddings.ts'), String(D)], { env: process.env });
+      let out = ''; ch.stdout.on('data', d => { out += d; }); ch.stderr.on('data', d => { out += d; });
+      ch.on('close', code => resolve({ code, out }));
+    });
+    check('20d. Lecture with no active version: exit 1 with the upload message, nothing embedded, nothing written (function and CLI)',
+      r4.exitCode === 1 && /no active dataset version — upload its dataset from the admin page/.test(r4.message)
+        && embedder.calls.length === 0 && (await snap()) === s0 && (await vecOf(dChunk)).v === null
+        && cli.code === 1 && /upload its dataset from the admin page/.test(cli.out) && (await snap()) === s0,
+      `fn exit=${r4.exitCode} cli exit=${cli.code} unchanged=${(await snap()) === s0}`);
   }
 
   // ─────────────────────────────────────────────────────────────────────

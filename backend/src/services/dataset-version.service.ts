@@ -774,6 +774,13 @@ export async function rollbackDataset(lectureId: number): Promise<{ activeVersio
       throw new AppError('The previous version is incomplete and cannot be restored.', 409);
     }
 
+    // The same checks a new version must pass before going live (model, vectors,
+    // numbering, self-retrieval): the previous version may have aged since it was built.
+    const problems = await validateVersion(target);
+    if (problems.length > 0) {
+      throw new AppError(`The previous version cannot be restored: ${problems.join('; ')}`, 409);
+    }
+
     await client.query(`UPDATE dataset_versions SET status = 'SUPERSEDED', updated_at = NOW() WHERE id = $1`, [current]);
     await client.query(`UPDATE dataset_versions SET status = 'ACTIVE', activated_at = NOW(), updated_at = NOW() WHERE id = $1`, [target]);
     await client.query(`UPDATE lectures SET active_version_id = $1, status = 'READY', updated_at = NOW() WHERE id = $2`, [target, lectureId]);
@@ -884,4 +891,86 @@ export async function getAllLectureReadiness(): Promise<Map<number, LectureReadi
 export async function getLectureReadiness(lectureId: number): Promise<LectureReadiness> {
   const { rows } = await query<ReadinessRow>(READINESS_SQL, [lectureId, EMBEDDING_MODEL_VERSION]);
   return rows[0] ? toReadiness(rows[0]) : { ready: false, reason: 'LECTURE_NOT_FOUND' };
+}
+
+// ── Legacy repair: embed what the ACTIVE version is missing (no in-flight build) ──
+
+export interface RetryResult {
+  exitCode: 0 | 1;
+  message: string;
+  embedded: number;
+  failed: number;
+  otherModel: number;
+}
+
+/**
+ * For a lecture with an active version and no build in flight: embeds only the
+ * chunks that are members of the active version and have no vector, recording
+ * the model version. Chunks outside the active version (orphans kept for chat
+ * history) are never touched, and vectors from a different model are never
+ * overwritten (the dataset has to be re-uploaded so the pipeline re-embeds it
+ * as a new, validated version). The lecture is never set to EMBEDDING and is
+ * set READY only when getLectureReadiness agrees.
+ */
+export async function retryMissingEmbeddings(
+  lectureId: number,
+  deps: { embed?: (text: string) => Promise<number[]> } = {}
+): Promise<RetryResult> {
+  const embed = deps.embed ?? generateEmbedding;
+  const result = (exitCode: 0 | 1, message: string, extra: Partial<RetryResult> = {}): RetryResult =>
+    ({ exitCode, message, embedded: 0, failed: 0, otherModel: 0, ...extra });
+
+  const { rows: lec } = await query<{ active_version_id: number | null }>(
+    'SELECT active_version_id FROM lectures WHERE id = $1', [lectureId]);
+  if (!lec[0]) return result(1, `Lecture #${lectureId} not found.`);
+  const versionId = lec[0].active_version_id;
+  if (versionId === null) {
+    return result(1, 'This lecture has no active dataset version — upload its dataset from the admin page.');
+  }
+
+  if ((await getLectureReadiness(lectureId)).ready) {
+    return result(0, `Nothing to do — lecture #${lectureId} is already ready (every chunk of its active version is embedded with ${EMBEDDING_MODEL_VERSION}).`);
+  }
+
+  const { rows: missing } = await query<{ id: number; chunk_text: string }>(
+    `SELECT c.id, c.chunk_text
+     FROM dataset_version_chunks d JOIN lecture_qna_chunks c ON c.id = d.chunk_id
+     WHERE d.version_id = $1 AND c.local_embedding IS NULL
+     ORDER BY c.id`, [versionId]);
+
+  let embedded = 0;
+  for (let i = 0; i < missing.length; i++) {
+    const chunk = missing[i];
+    try {
+      // isQuery stays false: these are stored passages, not student questions.
+      const vec = await embed(chunk.chunk_text);
+      await query(
+        `UPDATE lecture_qna_chunks SET local_embedding = $1::vector, embedding_model_version = $2
+         WHERE id = $3 AND local_embedding IS NULL`,
+        [`[${vec.join(',')}]`, EMBEDDING_MODEL_VERSION, chunk.id]);
+      embedded++;
+      logger.info(`[RETRY] Embedded ${i + 1}/${missing.length} (id=${chunk.id})`);
+    } catch (err) {
+      logger.error(`[RETRY] ❌ Failed chunk id=${chunk.id}`, err);
+    }
+  }
+  const failed = missing.length - embedded;
+
+  const { rows: other } = await query<{ n: string }>(
+    `SELECT COUNT(*) AS n FROM dataset_version_chunks d JOIN lecture_qna_chunks c ON c.id = d.chunk_id
+     WHERE d.version_id = $1 AND c.local_embedding IS NOT NULL AND c.embedding_model_version IS DISTINCT FROM $2`,
+    [versionId, EMBEDDING_MODEL_VERSION]);
+  const otherModel = Number(other[0].n);
+
+  const ready = (await getLectureReadiness(lectureId)).ready;
+  if (ready) await updateLectureStatus(lectureId, 'READY');
+
+  const parts = [`${embedded}/${missing.length} missing chunk(s) of the active version embedded.`];
+  if (failed > 0) parts.push(`${failed} chunk(s) still have no embedding — is the embedding server running? Run this again.`);
+  if (otherModel > 0) {
+    parts.push(`${otherModel} chunk(s) have a vector from a different embedding model and were NOT overwritten — ` +
+      `export the dataset and re-upload it (REPLACE) so the pipeline re-embeds it as a new version.`);
+  }
+  if (ready) parts.push(`Lecture #${lectureId} is ready.`);
+  return result(ready ? 0 : 1, parts.join(' '), { embedded, failed, otherModel });
 }
