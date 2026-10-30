@@ -1,5 +1,6 @@
 import { query } from '../../config/database';
 import { env } from '../../config/env';
+import { composePhoenixTraceUrl, resolvePhoenixProjectId } from './phoenix-links';
 
 // Postgres-only reads over rag_request_log / lectures for the admin monitor
 // dashboard. Deliberately independent of Phoenix. Never selects question or
@@ -170,6 +171,22 @@ export interface AttentionRow {
   totalMs: number;
   exportedToPhoenix: boolean;
   reasons: AttentionReason[];
+  // Filled by attachPhoenixLinks; getAttention itself is Postgres-only.
+  phoenixTraceUrl: string | null;
+}
+
+// Adds the Phoenix UI link to rows that were exported. The Phoenix project is
+// resolved once per call (cached across calls); never throws, so Phoenix being
+// down just leaves phoenixTraceUrl null.
+export async function attachPhoenixLinks(rows: AttentionRow[]): Promise<AttentionRow[]> {
+  const publicUrl = env.OBSERVABILITY.PHOENIX_PUBLIC_URL;
+  if (!publicUrl || !rows.some(r => r.exportedToPhoenix)) return rows;
+  let projectId: string | null = null;
+  try { projectId = await resolvePhoenixProjectId(); } catch { /* link stays null */ }
+  return rows.map(r => ({
+    ...r,
+    phoenixTraceUrl: r.exportedToPhoenix ? composePhoenixTraceUrl(publicUrl, projectId, r.traceId) : null,
+  }));
 }
 
 export async function getAttention(limit: number, before: string | null): Promise<{ rows: AttentionRow[]; nextBefore: string | null }> {
@@ -205,6 +222,7 @@ export async function getAttention(limit: number, before: string | null): Promis
     answerVerificationReason: (r.answer_verification_reason as string | null) ?? null,
     totalMs: Number(r.total_ms),
     exportedToPhoenix: Boolean(r.exported_to_phoenix),
+    phoenixTraceUrl: null,
     reasons: buildReasons({
       status: String(r.status),
       responseStatus: (r.response_status as string | null) ?? null,

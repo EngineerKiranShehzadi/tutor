@@ -3,7 +3,7 @@ import { protect, requireRole } from '../middleware/auth.middleware';
 import { validate } from '../middleware/validate';
 import { logger } from '../utils/logger';
 import {
-  parseWindow, getSummary, getTimeseries, getAttention, getLectureStats, getStageStats,
+  parseWindow, getSummary, getTimeseries, getAttention, attachPhoenixLinks, getLectureStats, getStageStats,
 } from '../services/observability/monitor.service';
 import { monitorWindowValidators, monitorAttentionValidators } from '../validation/observability.schema';
 
@@ -34,7 +34,7 @@ router.get('/attention', monitorAttentionValidators, validate, async (req: Reque
   try {
     const limit = req.query.limit ? Number(req.query.limit) : 25;
     const result = await getAttention(limit, (req.query.before as string) || null);
-    res.json({ success: true, data: result.rows, meta: { nextBefore: result.nextBefore } });
+    res.json({ success: true, data: await attachPhoenixLinks(result.rows), meta: { nextBefore: result.nextBefore } });
   } catch (err) { fail(res, err, 'GET /attention'); }
 });
 

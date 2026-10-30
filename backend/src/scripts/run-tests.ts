@@ -59,6 +59,7 @@ const SUITES: Suite[] = [
   { name: 'sampling', script: 'src/scripts/test-sampling.ts' },
   { name: 'monitor', script: 'src/scripts/test-monitor.ts' },
   { name: 'alerts', script: 'src/scripts/test-alerts.ts' },
+  { name: 'phoenix-links', script: 'src/scripts/test-phoenix-links.ts' },
 ];
 
 function main(): void {

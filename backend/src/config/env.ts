@@ -149,6 +149,10 @@ export const env = {
     // which are the OTLP ingest path, not the server root.
     PHOENIX_BASE_URL:    optional('PHOENIX_BASE_URL', 'http://localhost:6006'),
     PHOENIX_PROJECT_NAME: optional('PHOENIX_PROJECT_NAME', 'askaitutor-rag'),
+    // Phoenix URL an admin opens in their browser (may differ from
+    // PHOENIX_BASE_URL, the backend-to-Phoenix URL). Empty = no trace links
+    // in /monitor/attention. Trailing slash stripped.
+    PHOENIX_PUBLIC_URL: optional('PHOENIX_PUBLIC_URL', '').trim().replace(/\/+$/, ''),
     // Optional bearer auth for both the OTLP exporter and the read-back
     // client. Never sent to the frontend — see observability.routes.ts.
     PHOENIX_API_KEY: optional('PHOENIX_API_KEY', ''),
