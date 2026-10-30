@@ -116,7 +116,9 @@ function buildRow(lectureId: number, lectureBias: number) {
     randomBytes(16).toString('hex'), createdAt, lectureId, route, status, responseStatus, notFoundReason,
     errorCode, memoryResult, verification, totalMs, JSON.stringify(stage), llmCalls, inputTokens,
     outputTokens, cost, hasTokens ? MODEL : null,
-    status === 'ERROR' || responseStatus === 'NOT_FOUND' || (verification !== 'VERIFIED' && verification !== null) || chance(0.1),
+    // Seeded trace IDs never exist in Phoenix, so never claim an export —
+    // true would give the admin monitor a broken "Open in Phoenix" link.
+    false,
   ];
 }
 
