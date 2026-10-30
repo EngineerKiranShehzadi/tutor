@@ -15,7 +15,7 @@
  *     ts-node --transpile-only src/scripts/test-dataset-pipeline.ts [--lecture-copy <id>]
  */
 import { createHash } from 'crypto';
-import { spawn } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import * as XLSX from 'xlsx';
 import { join } from 'path';
 
@@ -148,6 +148,30 @@ const workerMain = async () => {
     const prep = await prepareDatasetVersion(lectureId, file, { mode: 'MERGE' });
     console.log('WORKER prepared ' + JSON.stringify(prep.kind === 'CREATED' ? { versionId: prep.versionId } : { kind: prep.kind }));
     if (prep.kind === 'CREATED') await finishDatasetVersion(prep.versionId, { embed: emb.embed, ...FAST });
+  } else if (mode === 'switch') {
+    // Runs with a DIFFERENT EMBEDDING_PROVIDER than the parent, so its EMBEDDING_MODEL_VERSION
+    // differs from the one the lecture was built under. Models the operator's path:
+    // export the active dataset, re-upload it with Replace.
+    const lectureId = Number(process.argv[5]);
+    const studentId = process.argv[6];
+    const readyBefore = await getLectureReadiness(lectureId);
+    let chat = { threw: false, status: 0, message: '' };
+    try {
+      await askLectureAgent({ studentId, lectureId, question: 'What does test concept number 1 mean?', sessionId: 0 });
+    } catch (e) {
+      const err = e as { statusCode?: number; message: string };
+      chat = { threw: true, status: err.statusCode ?? 0, message: err.message };
+    }
+    const prep = await prepareDatasetVersion(lectureId, await exportActiveDataset(lectureId), { mode: 'REPLACE' });
+    if (prep.kind === 'CREATED') await finishDatasetVersion(prep.versionId, { embed: emb.embed, ...FAST });
+    const readyAfter = await getLectureReadiness(lectureId);
+    const models = (await query<{ m: string | null; n: string }>(
+      `SELECT c.embedding_model_version AS m, COUNT(*) AS n
+       FROM lectures l JOIN dataset_version_chunks d ON d.version_id = l.active_version_id JOIN lecture_qna_chunks c ON c.id = d.chunk_id
+       WHERE l.id = $1 GROUP BY 1`, [lectureId])).rows.map(r => `${r.m}:${r.n}`).join(',');
+    console.log('WORKER switched ' + JSON.stringify({
+      version: EMBEDDING_MODEL_VERSION, readyBefore, chat, prepKind: prep.kind, embedCalls: emb.calls.length, readyAfter, models,
+    }));
   } else if (mode === 'resume') {
     const ids = await resumePendingVersions({ embed: emb.embed, ...FAST });
     console.log('WORKER resumed ' + JSON.stringify({ versionIds: ids, embedCalls: emb.calls.length, texts: emb.calls }));
@@ -1066,6 +1090,46 @@ const run = async () => {
     check('21g. First-version upload refused in buildVersion (409) restores the lecture status',
       res.rejected && (res.err as { statusCode?: number }).statusCode === 409 && before !== 'DATASET_UPLOADED' && after === before,
       `rejected=${res.rejected} before=${before} after=${after}`);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 22. Switching EMBEDDING_PROVIDER changes EMBEDDING_MODEL_VERSION: the lecture is not ready until re-embedded
+  // ─────────────────────────────────────────────────────────────────────
+  {
+    const Ls = await newLecture('22 provider switch');
+    embedder.reset();
+    const p0 = await prepareDatasetVersion(Ls, makeXlsx(baseRows(6)));
+    if (p0.kind === 'CREATED') await fin(p0.versionId);
+    const total = (await activeChunks(Ls)).length;
+    const parentBefore = await getLectureReadiness(Ls);
+    const student = await createStudent();
+
+    // A second process whose EMBEDDING_PROVIDER is openai (fake key; no request is ever made — the embedder is injected).
+    const w = spawnSync(TSNODE, ['--transpile-only', __filename, '--worker', 'switch', '0', String(Ls), student], {
+      env: { ...process.env, EMBEDDING_PROVIDER: 'openai', OPENAI_API_KEY: 'sk-test-not-used' }, encoding: 'utf8',
+    });
+    const line = (w.stdout ?? '').split('\n').find(l => l.startsWith('WORKER switched '));
+    const o = line ? JSON.parse(line.slice('WORKER switched '.length)) as {
+      version: string; readyBefore: { ready: boolean; reason: string }; chat: { threw: boolean; status: number; message: string };
+      prepKind: string; embedCalls: number; readyAfter: { ready: boolean; reason: string }; models: string;
+    } : null;
+    const NEW = 'openai:text-embedding-3-small:1024';
+
+    check('22a. Under EMBEDDING_PROVIDER=openai the model version is openai:text-embedding-3-small:1024 (the local build used another)',
+      !!o && o.version === NEW && EMBEDDING_MODEL_VERSION !== NEW && parentBefore.ready,
+      `worker=${o?.version} parent=${EMBEDDING_MODEL_VERSION} stderr=${(w.stderr ?? '').slice(0, 120)}`);
+    check('22b. Before re-embedding the lecture is NOT ready: STALE_EMBEDDING_MODEL for every chunk, chat answers LECTURE_NOT_READY',
+      !!o && !o.readyBefore.ready && new RegExp(`^STALE_EMBEDDING_MODEL: ${total}/${total} .*${NEW}$`).test(o.readyBefore.reason)
+        && o.chat.threw && o.chat.status === 400 && /not ready for this lecture/.test(o.chat.message),
+      `readiness=${JSON.stringify(o?.readyBefore)} chat=${o?.chat.status}:${o?.chat.message}`);
+    check('22c. Export → re-upload with Replace re-embeds EVERY chunk (none reused or copied from the old model) and publishes',
+      !!o && o.prepKind === 'CREATED' && o.embedCalls === total && o.models === `${NEW}:${total}`,
+      `prep=${o?.prepKind} embedCalls=${o?.embedCalls}/${total} models=${o?.models}`);
+    const parentAfter = await getLectureReadiness(Ls);
+    check('22d. After re-embedding the lecture is ready under the new model — and stale for the old provider (the version string decides)',
+      !!o && o.readyAfter.ready && /^OK: /.test(o.readyAfter.reason) && o.readyAfter.reason.includes(NEW)
+        && !parentAfter.ready && /^STALE_EMBEDDING_MODEL: /.test(parentAfter.reason),
+      `after=${JSON.stringify(o?.readyAfter)} parentNow=${parentAfter.reason}`);
   }
 
   // ─────────────────────────────────────────────────────────────────────
