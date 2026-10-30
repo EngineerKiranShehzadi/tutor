@@ -106,3 +106,18 @@ export const createAnnotationValidators = [
   body('label').optional().isString().trim().isLength({ max: 100 }),
   body('score').optional().isFloat({ min: -1000, max: 1000 }).toFloat(),
 ];
+
+// ── /observability/monitor (Postgres-backed dashboard endpoints) ──────────
+
+export const MONITOR_WINDOWS = ['24h', '7d', '30d'] as const;
+
+export const monitorWindowValidators = [
+  query('window').optional().isIn([...MONITOR_WINDOWS]).withMessage(`window must be one of ${MONITOR_WINDOWS.join(', ')}`),
+];
+
+export const monitorAttentionValidators = [
+  query('limit').optional().isInt({ min: 1, max: 100 }).toInt(),
+  // Kept as a string (no .toDate()): the service casts it in SQL so the
+  // microsecond precision of the cursor survives the round trip.
+  query('before').optional().isISO8601().withMessage(`before ${ISO_DATE_MSG}`),
+];
