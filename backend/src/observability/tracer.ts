@@ -219,16 +219,29 @@ function safeCall<T>(fn: () => T, fallback: T): T {
 // if it can be avoided — chat.service.ts fires this after building the
 // response). Phase 1: Phoenix export + a concise log line.
 export async function recordTrace(trace: FinishedTrace): Promise<void> {
+  // Each step is independent: a failure in one must never skip the next.
   try {
     logger.info(
       `[TRACE] ${trace.rootName} id=${trace.traceId} status=${trace.status} durationMs=${trace.durationMs.toFixed(1)} spans=${trace.spans.length} route=${trace.attributes.route ?? 'n/a'}`
     );
+  } catch (err) {
+    logger.warn(`[OBSERVABILITY] recordTrace log line failed (non-fatal): ${(err as Error).message}`);
+  }
+
+  let exported = false;
+  try {
     const { exportTraceToPhoenix } = await import('./phoenix');
-    const exported = await exportTraceToPhoenix(trace);
+    exported = await exportTraceToPhoenix(trace);
+  } catch (err) {
+    exported = false;
+    logger.warn(`[OBSERVABILITY] recordTrace Phoenix export failed (non-fatal): ${(err as Error).message}`);
+  }
+
+  try {
     // Dynamic like phoenix above: request-log.service imports isValidTraceId from this file.
     const { buildRequestLogRow, writeRequestLog } = await import('./request-log.service');
     await writeRequestLog(buildRequestLogRow(trace, exported));
   } catch (err) {
-    logger.warn(`[OBSERVABILITY] recordTrace failed (non-fatal): ${(err as Error).message}`);
+    logger.warn(`[OBSERVABILITY] recordTrace request-log write failed (non-fatal): ${(err as Error).message}`);
   }
 }
