@@ -91,6 +91,7 @@ export interface DatasetPreview {
   updated: number;
   unchanged: number;
   carriedOver: number;   // MERGE: existing Q&As missing from the file, kept as they are
+  reembeddedForModel: number; // MERGE: kept Q&As re-embedded because the embedding model changed
   removed: number;       // REPLACE: existing Q&As missing from the file, dropped
   removedSamples: { qaId: string; question: string }[];
   chunksToEmbed: number;

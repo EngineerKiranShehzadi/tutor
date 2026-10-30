@@ -183,7 +183,7 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
   const hasDataset = !!active;
   const firstUploadRunning = !hasDataset && ['DATASET_UPLOADED', 'PROCESSING', 'EMBEDDING'].includes(lectureStatus);
   const busy = phase === 'analysing' || phase === 'applying' || !!inFlight || firstUploadRunning;
-  const noChanges = !!preview && preview.added === 0 && preview.updated === 0 && preview.removed === 0;
+  const noChanges = !!preview && preview.added === 0 && preview.updated === 0 && preview.removed === 0 && !(preview.reembeddedForModel > 0);
   const needsConfirm = !!preview && preview.removed > 0;
   const canApply = phase === 'preview' && !!preview && !noChanges && (!needsConfirm || confirmed);
 
@@ -290,6 +290,12 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
                   ? 'No embedding work needed — existing embeddings are reused.'
                   : <>Only <b>{preview.chunksToEmbed}</b> chunk(s) need new embeddings; {preview.chunksReused + preview.chunksCopied} existing embedding(s) are reused.</>}
               </p>
+
+              {preview.reembeddedForModel > 0 && (
+                <p className="text-[13px] text-amber-700" data-testid="preview-reembedded">
+                  {preview.reembeddedForModel} Q&amp;A(s) re-embedded because the embedding model changed
+                </p>
+              )}
 
               {noChanges && (
                 <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-[14px] text-slate-600" data-testid="dataset-no-changes">
