@@ -209,7 +209,9 @@ export default function LectureDetailPage({ params }: Props) {
 
       {/* Layout: during active processing show left cards + right progress card; otherwise normal 2-col */}
       {(() => {
-        const showProgress = (lecture.status === 'PROCESSING' || lecture.status === 'EMBEDDING') && lecture.progressTotal > 0;
+        // Only a first-ever dataset shows a processing state, and the build
+        // sets EMBEDDING directly (PROCESSING is a legacy value nothing writes).
+        const showProgress = lecture.status === 'EMBEDDING' && lecture.progressTotal > 0;
         const pct       = showProgress ? Math.round((lecture.progressCurrent / lecture.progressTotal) * 100) : 0;
         const remaining = showProgress ? lecture.progressTotal - lecture.progressCurrent : 0;
         // Use measured rate if available, else no estimate
@@ -222,8 +224,8 @@ export default function LectureDetailPage({ params }: Props) {
 
         const STEPS = [
           { key: 'parse',   label: 'Parse & Validate',      icon: 'fas fa-file-check',  done: true },
-          { key: 'insert',  label: 'Insert Chunks',         icon: 'fas fa-database',    done: lecture.status !== 'PROCESSING', active: lecture.status === 'PROCESSING' },
-          { key: 'embed',   label: 'Generate Embeddings',   icon: 'fas fa-brain',       done: false, active: lecture.status === 'EMBEDDING' },
+          { key: 'insert',  label: 'Insert Chunks',         icon: 'fas fa-database',    done: true },
+          { key: 'embed',   label: 'Generate Embeddings',   icon: 'fas fa-brain',       done: false, active: true },
           { key: 'ready',   label: 'AI Tutor Ready',        icon: 'fas fa-robot',       done: false },
         ];
 
@@ -311,7 +313,7 @@ export default function LectureDetailPage({ params }: Props) {
         );
 
         if (showProgress) {
-          const activeStep = lecture.status === 'PROCESSING' ? 1 : 2;
+          const activeStep = 2;
           return (
             <div className="grid grid-cols-[1fr_1.1fr] gap-5 mb-5">
               {/* Left: stacked cards */}
@@ -324,12 +326,12 @@ export default function LectureDetailPage({ params }: Props) {
               <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
                 {/* Card header */}
                 <div className="flex items-center gap-2.5 px-6 py-4 border-b border-slate-100 bg-slate-50/60">
-                  <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${lecture.status === 'PROCESSING' ? 'bg-blue-600' : 'bg-violet-600'}`}>
-                    <i className={`${lecture.status === 'PROCESSING' ? 'fas fa-cog fa-spin' : 'fas fa-brain fa-spin'} text-white text-[14px]`} />
+                  <div className="w-7 h-7 rounded-lg flex items-center justify-center bg-violet-600">
+                    <i className="fas fa-brain fa-spin text-white text-[14px]" />
                   </div>
                   <span className="text-[16px] font-semibold text-slate-700">Processing Progress</span>
-                  <span className={`ml-auto text-[13px] font-bold px-2.5 py-1 rounded-full ${lecture.status === 'PROCESSING' ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'bg-violet-50 text-violet-700 border border-violet-200'}`}>
-                    {lecture.status === 'PROCESSING' ? 'Step 1 of 2' : 'Step 2 of 2'}
+                  <span className="ml-auto text-[13px] font-bold px-2.5 py-1 rounded-full bg-violet-50 text-violet-700 border border-violet-200">
+                    Step 2 of 2
                   </span>
                 </div>
 
@@ -337,10 +339,10 @@ export default function LectureDetailPage({ params }: Props) {
 
                   {/* Big progress percentage */}
                   <div className="flex items-end gap-3">
-                    <span className={`text-5xl font-black tabular-nums ${lecture.status === 'PROCESSING' ? 'text-blue-600' : 'text-violet-600'}`}>{pct}%</span>
+                    <span className="text-5xl font-black tabular-nums text-violet-600">{pct}%</span>
                     <div className="mb-1.5">
                       <p className="text-[15px] font-semibold text-slate-700">
-                        {lecture.status === 'PROCESSING' ? 'Inserting Chunks' : 'Generating Embeddings'}
+                        Generating Embeddings
                       </p>
                       <p className="text-[13px] text-slate-400">
                         {lecture.progressCurrent.toLocaleString()} of {lecture.progressTotal.toLocaleString()} chunks
@@ -352,7 +354,7 @@ export default function LectureDetailPage({ params }: Props) {
                   <div>
                     <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden">
                       <div
-                        className={`h-3 rounded-full transition-all duration-700 ${lecture.status === 'PROCESSING' ? 'bg-gradient-to-r from-blue-400 to-blue-600' : 'bg-gradient-to-r from-violet-400 to-violet-600'}`}
+                        className="h-3 rounded-full transition-all duration-700 bg-gradient-to-r from-violet-400 to-violet-600"
                         style={{ width: `${pct}%` }}
                       />
                     </div>
@@ -372,10 +374,10 @@ export default function LectureDetailPage({ params }: Props) {
                         const isDone   = idx < activeStep;
                         const isActive = idx === activeStep;
                         return (
-                          <div key={step.key} className={`flex items-center gap-3 px-4 py-3 ${isActive ? (lecture.status === 'PROCESSING' ? 'bg-blue-50' : 'bg-violet-50') : ''}`}>
+                          <div key={step.key} className={`flex items-center gap-3 px-4 py-3 ${isActive ? 'bg-violet-50' : ''}`}>
                             <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 text-[13px]
                               ${isDone   ? 'bg-emerald-100 text-emerald-600' :
-                                isActive ? (lecture.status === 'PROCESSING' ? 'bg-blue-100 text-blue-600' : 'bg-violet-100 text-violet-600') :
+                                isActive ? 'bg-violet-100 text-violet-600' :
                                            'bg-slate-100 text-slate-400'}`}>
                               {isDone   ? <i className="fas fa-check" /> :
                                isActive ? <i className={`${step.icon} animate-pulse`} /> :
@@ -386,7 +388,7 @@ export default function LectureDetailPage({ params }: Props) {
                             </span>
                             <span className={`text-[12px] font-semibold px-2 py-0.5 rounded-full
                               ${isDone   ? 'bg-emerald-50 text-emerald-600' :
-                                isActive ? (lecture.status === 'PROCESSING' ? 'bg-blue-50 text-blue-600' : 'bg-violet-50 text-violet-600') :
+                                isActive ? 'bg-violet-50 text-violet-600' :
                                            'bg-slate-50 text-slate-400'}`}>
                               {isDone ? 'Done' : isActive ? 'Active' : 'Pending'}
                             </span>

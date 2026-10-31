@@ -1090,6 +1090,39 @@ const run = async () => {
       `${JSON.stringify(st)} repaired⊇stuck,legacy=${repaired.includes(stuck) && repaired.includes(legacy)}`);
   }
 
+  // ── AD-N4: the upload response reports the real version status ──
+  {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const s3 = require('../services/s3-storage.service') as { isS3Configured: () => boolean; uploadRawDataset: (...a: unknown[]) => Promise<{ bucket: string; key: string }> };
+    const realS3 = { cfg: s3.isS3Configured, up: s3.uploadRawDataset };
+    s3.isS3Configured = () => true;
+    s3.uploadRawDataset = async () => ({ bucket: 'test-bucket', key: 'raw/adn4.xlsx' });
+    const admin = (await query<{ id: string }>(`INSERT INTO users (name, email, password_hash, is_verified, role) VALUES ('ADN4 Admin', $1, 'x', TRUE, 'ADMIN') RETURNING id`, [`adn4-${Date.now()}@example.test`])).rows[0].id;
+    const mkLecture = async () => (await query<{ id: number }>(`INSERT INTO lectures (title, youtube_url, youtube_video_id) VALUES ('[adn4] upload', 'https://youtu.be/xxxxxxxxxxx', 'xxxxxxxxxxx') RETURNING id`)).rows[0].id;
+    const app = express(); app.use(express.json()); app.use('/datasets', datasetRoutes); app.use(errorHandler);
+    const srv = app.listen(0, '127.0.0.1');
+    await new Promise<void>(r => srv.once('listening', () => r()));
+    const base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+    const post = async (lec: number) => {
+      const fd = new FormData();
+      fd.append('file', new Blob([workbook([['question', 'answer'], ['What is ADN4?', 'A status test.']])], { type: 'application/octet-stream' }), 'adn4.xlsx');
+      const r = await fetch(`${base}/datasets/upload/${lec}`, { method: 'POST', headers: { Authorization: `Bearer ${generateAccessToken(admin, 'ADMIN')}` }, body: fd });
+      return { status: r.status, body: await r.json().catch(() => ({})) as { message?: string; data?: Record<string, unknown> } };
+    };
+    try {
+      const okLec = await mkLecture();
+      const ok = await post(okLec);
+      // Stop the background build of the accepted upload (no embedding server here).
+      await query(`UPDATE dataset_versions SET status = 'FAILED', last_error = 'test' WHERE lecture_id = $1 AND status = 'BUILDING'`, [okLec]);
+      check('AD-N4-1. An accepted upload reports versionStatus BUILDING, not the "PROCESSING" lecture status nothing writes any more',
+        ok.status === 200 && ok.body.data?.versionStatus === 'BUILDING' && !('status' in (ok.body.data ?? {})),
+        `status=${ok.status} data=${JSON.stringify(ok.body.data ? { versionStatus: ok.body.data.versionStatus, status: ok.body.data.status } : null)}`);
+    } finally {
+      srv.close();
+      s3.isS3Configured = realS3.cfg; s3.uploadRawDataset = realS3.up;
+    }
+  }
+
   // ── X1/X2: trace-list query params reach the service as their real types ──
   {
     // Only the service the route calls is stubbed; the route, its validators and auth are real.

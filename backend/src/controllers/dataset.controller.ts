@@ -99,8 +99,10 @@ export const uploadDataset = async (
     }
 
     if (archive.location) await updateLectureDatasetLocation(lectureId, archive.location);
+    // The new version's real state; the lecture's own status is not reported
+    // (it stays READY when a dataset is live, EMBEDDING for a first upload).
     sendSuccess(res, 'Dataset uploaded. Building the new version in the background; the current dataset stays live until it is complete.', {
-      lectureId, status: 'PROCESSING', versionId: result.versionId, versionNo: result.versionNo, preview: result.preview,
+      lectureId, versionStatus: 'BUILDING', versionId: result.versionId, versionNo: result.versionNo, preview: result.preview,
     });
 
     // Embed + validate + publish asynchronously so the HTTP response is already sent
