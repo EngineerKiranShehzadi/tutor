@@ -271,18 +271,19 @@ const issuePasswordResetOtp = async (email: string): Promise<void> => {
     [email.toLowerCase()]
   );
   const user = rows[0];
+  // 6-digit OTP via cryptographically secure random (NIST SP 800-63B: minimum 6 digits).
+  // Generated and hashed (cost 12) before the existence check, so a missing
+  // account does exactly the same slow work as a real one.
+  const otp = crypto.randomInt(100000, 1000000).toString();
+  const codeHash = await bcrypt.hash(otp, 12);
+
   if (!user) {
     // Same outward behaviour as a real account: report success, send nothing.
-    // The real reason stays in the log. Burn a bcrypt hash so the response time
-    // does not give the missing account away either.
+    // The real reason stays in the log.
     logger.warn(`[AUTH] password reset requested for unknown email "${email}" — no OTP sent`);
-    await bcrypt.compare('x', DUMMY_PASSWORD_HASH);
     return;
   }
 
-  // 6-digit OTP via cryptographically secure random (NIST SP 800-63B: minimum 6 digits)
-  const otp = crypto.randomInt(100000, 1000000).toString();
-  const codeHash = await bcrypt.hash(otp, 12);
   const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes (NIST SP 800-63B: max 10 min)
 
   // Invalidate all previous unused tokens for this user
@@ -302,16 +303,13 @@ const issuePasswordResetOtp = async (email: string): Promise<void> => {
     logger.info(`[DEV] Password Reset OTP for ${user.email}: ${otp}`);
   }
 
-  // Send email (skip gracefully in dev if SMTP not configured)
+  // Send email (skip gracefully in dev if SMTP not configured). Not awaited: an
+  // SMTP round-trip only on this branch would make a registered address
+  // answer measurably slower than an unknown one. A failed send is logged; the
+  // user can use "Resend code".
   if (env.EMAIL.USER && env.EMAIL.PASSWORD) {
-    try {
-      await sendPasswordResetOtp(user.email, user.name, otp);
-    } catch (emailErr) {
-      logger.warn('Failed to send OTP email', emailErr);
-      if (env.NODE_ENV === 'production') {
-        throw new AppError('Failed to send OTP email. Please try again.', 500);
-      }
-    }
+    void sendPasswordResetOtp(user.email, user.name, otp)
+      .catch(emailErr => logger.warn(`[AUTH] password reset OTP email failed for user ${user.id}`, emailErr));
   }
 };
 
@@ -403,7 +401,7 @@ export const resetPasswordWithOtp = async (
 
   const password_hash = await hashPassword(newPassword);
 
-  // Atomic transaction: update password + consume token + invalidate all sessions
+  // Atomic transaction: consume token + update password (and verify) + invalidate all sessions
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -416,9 +414,17 @@ export const resetPasswordWithOtp = async (
     if (consumed.rowCount !== 1) {
       throw new AppError(OTP_REJECTED, 400);
     }
+    // Completing a reset proves ownership of the inbox — exactly what email
+    // verification proves — so it also verifies the account. This lets the
+    // owner of an address squatted as an unverified account reclaim it in one
+    // step; the squatter's password is replaced and any pending code dropped.
     await client.query(
-      'UPDATE users SET password_hash = $1 WHERE id = $2',
+      'UPDATE users SET password_hash = $1, is_verified = TRUE WHERE id = $2',
       [password_hash, user.id]
+    );
+    await client.query(
+      'UPDATE email_verification_tokens SET used = TRUE WHERE user_id = $1 AND used = FALSE',
+      [user.id]
     );
     await client.query(
       'DELETE FROM refresh_tokens WHERE user_id = $1',

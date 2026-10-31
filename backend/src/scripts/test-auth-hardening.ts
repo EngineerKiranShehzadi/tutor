@@ -154,6 +154,31 @@ test('#9 two concurrent resets with one verified token: exactly one succeeds', a
   return { pass: ok === 1, detail: `fulfilled=${ok}` };
 });
 
+test('R3 a reset on a squatted unverified account verifies it in one step', async () => {
+  const email = addr('reclaim');
+  const s = await pendingSignup(email);               // squatter's unverified account + pending code
+  await Auth.requestPasswordReset(email);             // the inbox owner
+  await setCode('password_reset_tokens', s.id, '777777');
+  await Auth.verifyOtp(email, '777777');
+  await Auth.resetPasswordWithOtp(email, 'OwnerPass9', 'OwnerPass9');
+  const u = await userByEmail(email);
+  const pending = await count('SELECT COUNT(*) n FROM email_verification_tokens WHERE user_id = $1 AND used = FALSE', [s.id]);
+  const r = await Auth.loginUser(email, 'OwnerPass9');
+  const old = await errOf(Auth.loginUser(email, PW));
+  return { pass: u.is_verified && pending === 0 && r.status === 'AUTHENTICATED' && !!old, detail: `verified=${u.is_verified} pendingCodes=${pending} login=${r.status}` };
+});
+
+test('R2 a reset request for an unknown email is not markedly faster than for a real one', async () => {
+  const real = addr('reset-timing');
+  await insertUser(real);
+  const time = async (email: string) => { const t = Date.now(); await Auth.requestPasswordReset(email); return Date.now() - t; };
+  const missing: number[] = [], known: number[] = [];
+  for (let i = 0; i < 5; i++) { missing.push(await time(addr('nobody'))); known.push(await time(real)); }
+  const med = (a: number[]) => [...a].sort((x, y) => x - y)[2];
+  const ratio = (med(missing) + 1) / (med(known) + 1);
+  return { pass: ratio > 0.7, detail: `missing≈${med(missing)}ms known≈${med(known)}ms` };
+});
+
 // ── 6: 5-minute OTP lifetime, 60 s resend cooldown ──────────────────────
 test('#6 reset and signup codes live 5 minutes', async () => {
   const email = addr('ttl');
