@@ -25,6 +25,7 @@ import { createPiiSafeStream, settledLength } from '../rag/guardrails/output/pii
 import { scanForPii } from '../rag/guardrails/shared/pii/pii-detector.service';
 import { decomposedContextBudget, splitUncoveredAspects } from '../rag/query-processing/retrieval/decomposed-retrieval.service';
 import { runInputGuardrails } from '../rag/guardrails/input/input-guardrail.service';
+import { classifyRoute } from '../services/query-router.service';
 import pool from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { askLectureAgent, LECTURE_NOT_FOUND_MESSAGE, type AskLectureAgentDeps } from '../services/chat.service';
@@ -682,6 +683,36 @@ cases.push({
     const { value: r } = await formatGuardWith(PROSE, 'List the three types of prompting', REFLOW);
     const pass = r.finalAnswer === REFLOW && r.formatRepairSucceeded === true && r.formatRepairRejected === null && !repairAddsContent(PROSE, REFLOW);
     return { pass, detail: `succeeded=${r.formatRepairSucceeded}, rejected=${r.formatRepairRejected}` };
+  },
+});
+
+// ── S8: only a whole-lecture ask goes to the summary path ───────────────
+const SUMMARY_TABLE: { q: string; summary: boolean }[] = [
+  { q: 'Summarize this lecture', summary: true },
+  { q: 'Give me a summary', summary: true },
+  { q: 'summarize it', summary: true },
+  { q: 'What are the key points of this lecture?', summary: true },
+  { q: 'Give me an overview of the whole lecture', summary: true },
+  { q: 'Give me the key points', summary: true },
+  { q: 'tl;dr please', summary: true },
+  { q: "Can you give me a quick recap of today's class?", summary: true },
+  { q: 'What are the key points of few-shot prompting?', summary: false },
+  { q: 'What are the main topics in chain-of-thought prompting?', summary: false },
+  { q: 'Can you summarize what the lecture said about tokenization?', summary: false },
+  { q: 'Give an overview of zero-shot prompting', summary: false },
+];
+
+cases.push({
+  label: 'S8. Summary routing needs a summary-type ask AND the whole lecture as its target (table of 12 inputs)',
+  run: async () => {
+    // Any input that fell through to the LLM classifier would get FACT_QUESTION here.
+    const { value: got } = await withFakeLlm(env.LLM.QUERY_ROUTER.PROVIDER, ['{"route":"FACT_QUESTION"}'], async () => {
+      const out: string[] = [];
+      for (const row of SUMMARY_TABLE) out.push((await classifyRoute(row.q)).route);
+      return out;
+    });
+    const wrong = SUMMARY_TABLE.filter((row, i) => (got[i] === 'LECTURE_SUMMARY') !== row.summary);
+    return { pass: wrong.length === 0, detail: wrong.length ? wrong.map(w => `"${w.q}"→${got[SUMMARY_TABLE.indexOf(w)]}`).join(' | ') : `routes=${got.join(',')}` };
   },
 });
 
