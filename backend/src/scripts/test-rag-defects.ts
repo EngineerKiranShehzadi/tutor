@@ -921,6 +921,10 @@ const PII_FLAGGED: [string, string][] = [
   // R1: bare runs with no "+" or trunk 0, and public addresses with one-digit parts.
   ['call 4155552671', 'PHONE'], ['923001234567', 'PHONE'], ['447911123456', 'PHONE'], ['14155552671', 'PHONE'],
   ['3001234567', 'PHONE'], ['my DNS is 8.8.8.8', 'IP_ADDRESS'], ['1.1.1.1', 'IP_ADDRESS'], ['4.2.2.2', 'IP_ADDRESS'],
+  // A leading "00" is the international prefix written without "+"; a section
+  // cue exempts only the number right after it, not one further along.
+  ['00923001234567', 'PHONE'], ['0014155552671', 'PHONE'], ['0092 300 1234567', 'PHONE'], ['call 00447911123456', 'PHONE'],
+  ['Section 2 - 8.8.8.8', 'IP_ADDRESS'], ['section 2, my IP is 8.8.8.8', 'IP_ADDRESS'], ['Section 3.1 and 8.8.8.8', 'IP_ADDRESS'],
 ];
 const PII_CLEAN = [
   'GPT-3 has 175000000000 parameters', 'A 32-bit int holds 4294967296 values', 'INT_MAX is 2147483647', 'mod 1000000007',
@@ -930,6 +934,7 @@ const PII_CLEAN = [
   'A 32-bit unsigned int tops out at 4294967295', 'INT_MIN is -2147483648', '1 TiB is 1099511627776 bytes',
   'Unix time 1609459200', '1698765432123 ms since the epoch', 'about 7800000000 people', 'mod 998244353',
   'Sections 3.1.2.1 and 3.1.2.2', '§ 4.1.2.3', 'Fig. 2.1.1.3', 'Table 8.8.8.8',
+  'the bits 0010110101', 'Sections 1.2.3.4, 1.2.3.5 and 1.2.3.6', 'Sections 10.2.3.4–10.2.3.9',
 ];
 
 cases.push({

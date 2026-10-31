@@ -24,12 +24,21 @@ function luhnValid(digits: string): boolean {
 }
 
 // A phone-shaped match counts only when it is written like a phone number.
-// A separated form counts unless it reads as something else: a decimal
-// ("3.14159265358979"), a dotted quad (left to the IPv4 check), a number
-// grouped in thousands ("1 000 000 000"), or a code ending in a single check
-// digit (the ISBN "0-13-468599-1"). A bare run is judged by bareRunIsPhone.
+// A "+" or a leading "00" (the same international prefix, as Pakistan writes
+// it: 00923001234567, 0092 300 1234567, 001 415 555 2671) is enough, given
+// 7-15 digits after it. A separated form counts unless it reads as something
+// else: a decimal ("3.14159265358979"), a dotted quad (left to the IPv4
+// check), a number grouped in thousands ("1 000 000 000"), or a code ending
+// in a single check digit (the ISBN "0-13-468599-1"). A bare run is judged by
+// bareRunIsPhone.
 function looksLikePhone(candidate: string): boolean {
   const digits = candidate.replace(/\D/g, '');
+  // "00" then a country code (never 0). Quantity-shaped runs are still left
+  // alone, so a zero-padded binary string ("0010110101") is not a phone.
+  if (/^00[1-9]/.test(candidate)) {
+    const international = digits.length - 2;
+    return international >= 7 && international <= 15 && !quantityShaped(digits);
+  }
   if (digits.length < 7 || digits.length > 15) return false;
   if (candidate.startsWith('+')) return true;
 
@@ -68,9 +77,11 @@ function quantityShaped(digits: string): boolean {
   return [n - BigInt(1), n, n + BigInt(1)].some(m => m > BigInt(0) && (m & (m - BigInt(1))) === BigInt(0));
 }
 
-// "Chapter 10.2.3.4", "version 1.2.3.4", "§ 4.1.2.3", "Fig. 2.1.1.3", and the
-// later numbers of a list ("Sections 3.1.2.1 and 3.1.2.2").
-const SECTION_CUE = /(?:\b(?:chapters?|ch|sections?|sec|subsections?|parts?|versions?|ver|v|releases?|builds?|rev|revisions?|figures?|figs?|tables?|equations?|eqs?|steps?|clauses?|items?|units?|modules?|lessons?|exercises?|ex|problems?|appendix|appendices|rules?|paragraphs?|para|pages?|pp?|theorems?|lemmas?|definitions?|examples?|listings?)\.?|§)\s*(?:[\d.]+\s*(?:,|&|and|or|to|-|–)\s*)*$/i;
+// "Chapter 10.2.3.4", "version 1.2.3.4", "§ 4.1.2.3", "Fig. 2.1.1.3": the cue
+// word sits directly before the dotted number. A list counts only when every
+// earlier entry is itself a four-part number ("Sections 3.1.2.1 and 3.1.2.2"),
+// so a cue somewhere nearby ("Section 2 - 8.8.8.8") does not exempt an address.
+const SECTION_CUE = /(?:\b(?:chapters?|ch|sections?|sec|subsections?|parts?|versions?|ver|v|releases?|builds?|rev|revisions?|figures?|figs?|tables?|equations?|eqs?|steps?|clauses?|items?|units?|modules?|lessons?|exercises?|ex|problems?|appendix|appendices|rules?|paragraphs?|para|pages?|pp?|theorems?|lemmas?|definitions?|examples?|listings?)\.?|§)\s*(?:\d+(?:\.\d+){3}\s*(?:,|&|and|or|to|-|–)\s*)*$/i;
 const SECTION_CUE_WINDOW = 80;
 
 // An IPv4 address counts unless it identifies no one: private, loopback,
@@ -123,9 +134,11 @@ function findRedactions(text: string): Redaction[] {
     }
   }
 
+  // No card number starts with 0; a run that does is an "00" phone number
+  // (00447911123456 passes Luhn, since leading zeros never change the sum).
   for (const match of text.matchAll(CREDIT_CARD_CANDIDATE_PATTERN)) {
     const digits = match[0].replace(/[ -]/g, '');
-    if (digits.length >= 13 && digits.length <= 19 && luhnValid(digits)) {
+    if (digits.length >= 13 && digits.length <= 19 && !digits.startsWith('0') && luhnValid(digits)) {
       redactions.push({ start: match.index!, end: match.index! + match[0].length, placeholder: '[CREDIT_CARD]', category: 'CREDIT_CARD' });
     }
   }
