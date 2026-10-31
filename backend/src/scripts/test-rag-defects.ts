@@ -1,7 +1,9 @@
 /**
- * Regression tests for the student RAG defect list (D1–D9). No database, no
- * network: every LLM / embedding / rerank call is replaced by an in-process
- * fake, and the timer used for retry back-off is made instant.
+ * Regression tests for the student RAG defect list (D1–D9) and the
+ * integration audit (S-series). No database, no network: every LLM /
+ * embedding / rerank call is replaced by an in-process fake, the timer used
+ * for retry back-off is made instant, and orchestrator cases run against a
+ * small in-memory stand-in for pool.query (withFakeDb).
  *
  * Usage: npm run test:rag-defects
  */
@@ -23,6 +25,12 @@ import { createPiiSafeStream, settledLength } from '../rag/guardrails/output/pii
 import { scanForPii } from '../rag/guardrails/shared/pii/pii-detector.service';
 import { decomposedContextBudget, splitUncoveredAspects } from '../rag/query-processing/retrieval/decomposed-retrieval.service';
 import { runInputGuardrails } from '../rag/guardrails/input/input-guardrail.service';
+import pool from '../config/database';
+import { AppError } from '../middleware/errorHandler';
+import { askLectureAgent, LECTURE_NOT_FOUND_MESSAGE, type AskLectureAgentDeps } from '../services/chat.service';
+import { VERIFICATION_UNAVAILABLE_MESSAGE } from '../rag/guardrails/output/output-guardrail.service';
+import type { OutputGuardrailResult } from '../rag/guardrails/output/answer-verification.types';
+import type { FinishedTrace } from '../observability/types';
 
 interface CaseResult { pass: boolean; detail?: string }
 interface Case { label: string; run: () => Promise<CaseResult> }
@@ -104,7 +112,7 @@ cases.push({
 });
 
 cases.push({
-  label: 'D2b. With fail-closed, a verifier error serves the not-found message (verified=false), never the draft',
+  label: 'D2b. With fail-closed, a verifier error never serves the draft: it is marked verificationUnavailable with the "couldn\'t check" message (S1)',
   run: async () => {
     const av = env.ANSWER_VERIFICATION as { ENABLED: boolean; FAIL_OPEN_ON_VERIFIER_ERROR: boolean };
     const saved = { enabled: av.ENABLED, failOpen: av.FAIL_OPEN_ON_VERIFIER_ERROR };
@@ -117,7 +125,8 @@ cases.push({
           question: 'What is a prompt?', effectiveQuery: 'What is a prompt?', uncoveredAspects: [],
           evidenceTexts: CHUNKS.map(c => c.chunk_text), draftAnswer: 'DRAFT-SHOULD-NOT-BE-SERVED', notFoundMessage: NOT_FOUND,
         }));
-      const pass = r.finalAnswer === NOT_FOUND && r.verified === false && r.decision === null;
+      const pass = r.finalAnswer === VERIFICATION_UNAVAILABLE_MESSAGE && !r.finalAnswer.includes(NOT_FOUND)
+        && r.verificationUnavailable === true && r.verified === false && r.decision === null;
       return { pass, detail: `final="${r.finalAnswer.slice(0, 40)}", reason=${r.reason}` };
     } finally {
       av.ENABLED = saved.enabled;
@@ -321,13 +330,13 @@ cases.push({
 });
 
 cases.push({
-  label: 'P3. Verifier is told not to expect the unavailable part; the fallback says it could not be retrieved now (never "not found" for it)',
+  label: 'P3. Verifier is told not to expect the unavailable part; the INSUFFICIENT_EVIDENCE fallback says it could not be retrieved now (never "not found" for it)',
   run: async () => {
     const av = env.ANSWER_VERIFICATION as { ENABLED: boolean; FAIL_OPEN_ON_VERIFIER_ERROR: boolean };
     const saved = { enabled: av.ENABLED, failOpen: av.FAIL_OPEN_ON_VERIFIER_ERROR };
     av.ENABLED = true; av.FAIL_OPEN_ON_VERIFIER_ERROR = false;
     try {
-      const { value: r, requests } = await withFakeLlm(env.LLM.ANSWER_VERIFICATION.PROVIDER, [new Error('provider down')], () =>
+      const { value: r, requests } = await withFakeLlm(env.LLM.ANSWER_VERIFICATION.PROVIDER, [INSUFFICIENT_JSON], () =>
         runOutputGuardrail({
           question: 'Q?', effectiveQuery: 'Q?', uncoveredAspects: [], unavailableAspects: ['BROKEN-PART'],
           evidenceTexts: CHUNKS.map(c => c.chunk_text), draftAnswer: 'draft', notFoundMessage: 'I could not find this information in this lecture.',
@@ -335,6 +344,162 @@ cases.push({
       const pass = /Known unsupported aspects[\s\S]*- BROKEN-PART/.test(requests[0].userPrompt)
         && r.finalAnswer === "I could not find this information in this lecture. I also couldn't retrieve part of this right now (BROKEN-PART) — please ask again in a moment.";
       return { pass, detail: `final="${r.finalAnswer}"` };
+    } finally {
+      av.ENABLED = saved.enabled; av.FAIL_OPEN_ON_VERIFIER_ERROR = saved.failOpen;
+    }
+  },
+});
+
+
+// ── Orchestrator harness: askLectureAgent against an in-memory DB ───────
+const LECTURE_ID = 4;
+const VERDICT = (decision: string) => JSON.stringify({ decision, unsupportedClaims: decision === 'REVISE' ? ['made-up claim'] : [], missingAspects: [], reason: 'test' });
+const REVISE_JSON = VERDICT('REVISE');
+const INSUFFICIENT_JSON = VERDICT('INSUFFICIENT_EVIDENCE');
+
+interface FakeDb { history: { question: string; answer: string; sourceChunkIds: number[] }[]; studentQuestions: number; unexpected: string[] }
+
+// Replaces pool.query with just the statements askLectureAgent issues once its
+// network-facing dependencies are injected. Anything else throws (and is
+// recorded), so an unexpected write fails the case.
+async function withFakeDb<T>(fn: (db: FakeDb) => Promise<T>): Promise<{ value: T | Error; db: FakeDb }> {
+  const db: FakeDb = { history: [], studentQuestions: 0, unexpected: [] };
+  const original = pool.query;
+  (pool as unknown as { query: unknown }).query = async (text: string, params: unknown[] = []) => {
+    const t = text.replace(/\s+/g, ' ').trim();
+    const ok = (rows: unknown[] = [], rowCount = rows.length) => ({ rows, rowCount });
+    if (/^SELECT \* FROM lectures WHERE id = \$1/.test(t)) {
+      return ok(params[0] === LECTURE_ID ? [{ id: LECTURE_ID, title: 'Lecture', status: 'READY', youtube_video_id: null }] : []);
+    }
+    if (/^SELECT 1 AS ok FROM chat_sessions/.test(t)) return ok([{ ok: 1 }]);
+    if (/^INSERT INTO student_questions/.test(t)) { db.studentQuestions++; return ok([], 1); }
+    if (/FROM chat_history ch WHERE ch\.session_id = \$1/.test(t)) return ok([]);
+    if (/^INSERT INTO chat_history/.test(t)) {
+      db.history.push({ question: params[2] as string, answer: params[3] as string, sourceChunkIds: params[4] as number[] });
+      return ok([{ id: 900 + db.history.length }]);
+    }
+    if (/^UPDATE chat_sessions/.test(t)) return ok([], 1);
+    db.unexpected.push(t.slice(0, 100));
+    throw new Error(`unexpected SQL: ${t.slice(0, 100)}`);
+  };
+  try {
+    const value = await fn(db).catch(e => e as Error);
+    return { value, db };
+  } finally {
+    (pool as unknown as { query: unknown }).query = original;
+  }
+}
+
+const verifiedOutcome = (finalAnswer: string): OutputGuardrailResult => ({
+  finalAnswer, verified: true, decision: 'VERIFIED', reason: 'VERIFIED', revisionAttempted: false, revisionSucceeded: false,
+  verificationUnavailable: false, unsupportedClaimCount: 0, missingAspectCount: 0, expectedFormat: 'NATURAL_TEXT',
+  formatValidationRequired: false, formatValid: true, formatRepairAttempted: false, formatRepairSucceeded: false,
+  piiDetected: false, piiCategories: [],
+});
+
+interface OrchestratorSpies { traces: FinishedTrace[]; memoryWrites: { datasetVersionId: number }[]; generateCalls: number }
+
+function orchestratorDeps(over: Partial<AskLectureAgentDeps> = {}): { deps: AskLectureAgentDeps; spies: OrchestratorSpies } {
+  const spies: OrchestratorSpies = { traces: [], memoryWrites: [], generateCalls: 0 };
+  const deps: AskLectureAgentDeps = {
+    getLectureReadiness: async () => ({ ready: true, reason: 'READY' }),
+    getAgentProfile: async lectureId => ({ status: 'FOUND', profile: {
+      lecture_id: lectureId, agent_name: 'Nova', instructions: 'Teach clearly.', is_active: true,
+      created_at: new Date('2026-10-01T00:00:00Z'), updated_at: new Date('2026-10-01T00:00:00Z'),
+    } }),
+    datasetVersionId: 7,
+    runInputGuardrails: async q => ({ action: 'ALLOW', sanitizedInput: q }),
+    classifyRoute: async () => ({ route: 'FACT_QUESTION', source: 'rule' }),
+    lookupAnswerMemory: async () => ({ hit: null, embedding: [0.1, 0.2], datasetVersionId: 7, lookupFailed: false }),
+    writeAnswerMemory: async p => { spies.memoryWrites.push({ datasetVersionId: p.datasetVersionId }); },
+    generateEmbedding: async () => [0.1, 0.2],
+    searchChunks: async () => [chunk(1, 'Q: What is a prompt?\nA: An instruction.'), chunk(2, 'Q: What is a model?\nA: A function.')],
+    rerankChunks: async (_q, c) => c.map(x => ({ ...x, rerankScore: 0.9 })),
+    decomposeQuery: async q => ({ mode: 'DIRECT', effectiveQuery: q, subqueries: [], reason: 'NOT_COMPOUND', llmUsed: false }),
+    generateAnswer: async () => { spies.generateCalls++; return 'GROUNDED DRAFT'; },
+    runOutputGuardrail: async p => verifiedOutcome(p.draftAnswer),
+    onTraceComplete: t => { spies.traces.push(t); },
+    ...over,
+  };
+  return { deps, spies };
+}
+
+const askOrchestrator = (deps: AskLectureAgentDeps, question = 'What is a prompt?') =>
+  askLectureAgent({ studentId: '1e8039ae-e9b0-448f-b563-10351fab051c', lectureId: LECTURE_ID, question, sessionId: 77 }, deps);
+
+// Runs the REAL output guardrail with the verifier/revision LLM scripted.
+async function guardrailWith(script: Step[]): Promise<OutputGuardrailResult> {
+  const av = env.ANSWER_VERIFICATION as { ENABLED: boolean; FAIL_OPEN_ON_VERIFIER_ERROR: boolean; MAX_REVISIONS: number };
+  const saved = { enabled: av.ENABLED, failOpen: av.FAIL_OPEN_ON_VERIFIER_ERROR, max: av.MAX_REVISIONS };
+  av.ENABLED = true; av.FAIL_OPEN_ON_VERIFIER_ERROR = false; av.MAX_REVISIONS = 1;
+  try {
+    const { value } = await withFakeLlm(env.LLM.ANSWER_VERIFICATION.PROVIDER, script, () =>
+      runOutputGuardrail({
+        question: 'What is a prompt?', effectiveQuery: 'What is a prompt?', uncoveredAspects: [],
+        evidenceTexts: CHUNKS.map(c => c.chunk_text), draftAnswer: 'GROUNDED DRAFT', notFoundMessage: LECTURE_NOT_FOUND_MESSAGE,
+      }));
+    return value;
+  } finally {
+    av.ENABLED = saved.enabled; av.FAIL_OPEN_ON_VERIFIER_ERROR = saved.failOpen; av.MAX_REVISIONS = saved.max;
+  }
+}
+
+// ── S1: a verifier outage is an error, never "not in this lecture" ──────
+const INFRA_SCRIPTS: { reason: string; script: Step[] }[] = [
+  { reason: 'VERIFIER_TIMEOUT', script: [new Error('Request timeout after 8000ms')] },
+  { reason: 'VERIFIER_PROVIDER_ERROR', script: [new Error('provider down')] },
+  { reason: 'VERIFIER_INVALID_OUTPUT', script: ['this is not json'] },
+  { reason: 'REVISION_FAILED', script: [REVISE_JSON, new Error('revision provider down')] },
+  { reason: 'FINAL_VERIFICATION_FAILED', script: [REVISE_JSON, 'A revised answer.', new Error('provider down')] },
+];
+
+for (const { reason, script } of INFRA_SCRIPTS) {
+  cases.push({
+    label: `S1-${reason}. Verifier ${reason} → 503 "couldn't check this answer", trace ERROR at output-guardrail, no chat_history row, no memory write`,
+    run: async () => {
+      const outcome = await guardrailWith(script);
+      const { deps, spies } = orchestratorDeps({ runOutputGuardrail: async () => outcome });
+      const { value: err, db } = await withFakeDb(() => askOrchestrator(deps));
+      const t = spies.traces[0];
+      const pass = outcome.reason === reason && outcome.verificationUnavailable === true
+        && err instanceof AppError && err.statusCode === 503 && err.message === VERIFICATION_UNAVAILABLE_MESSAGE
+        && spies.traces.length === 1 && t.status === 'ERROR' && t.attributes.responseStatus === 'ERROR'
+        && t.attributes.failedStage === 'output-guardrail' && t.attributes.answerVerificationReason === reason
+        && db.history.length === 0 && spies.memoryWrites.length === 0 && db.unexpected.length === 0;
+      return { pass, detail: `reason=${outcome.reason}, unavailable=${outcome.verificationUnavailable}, status=${(err as AppError)?.statusCode}, `
+        + `trace=${t?.status}/${t?.attributes.responseStatus}/${t?.attributes.failedStage}, history=${db.history.length}, memory=${spies.memoryWrites.length}` };
+    },
+  });
+}
+
+cases.push({
+  label: 'S1-content. INSUFFICIENT_EVIDENCE still answers the not-found message, is saved to history, traced SUCCESS/ANSWERED, never cached',
+  run: async () => {
+    const outcome = await guardrailWith([INSUFFICIENT_JSON]);
+    const { deps, spies } = orchestratorDeps({ runOutputGuardrail: async () => outcome });
+    const { value: res, db } = await withFakeDb(() => askOrchestrator(deps));
+    const t = spies.traces[0];
+    const pass = outcome.reason === 'INSUFFICIENT_EVIDENCE' && outcome.verificationUnavailable === false
+      && !(res instanceof Error) && res.answer === LECTURE_NOT_FOUND_MESSAGE
+      && db.history.length === 1 && db.history[0].answer === LECTURE_NOT_FOUND_MESSAGE
+      && t?.status === 'SUCCESS' && t.attributes.responseStatus === 'ANSWERED' && spies.memoryWrites.length === 0;
+    return { pass, detail: `reason=${outcome.reason}, answer="${(res as { answer?: string }).answer?.slice(0, 40)}", history=${db.history.length}` };
+  },
+});
+
+cases.push({
+  label: 'S1-failopen. With ANSWER_VERIFICATION_FAIL_OPEN=true a verifier error still serves the unverified draft (unchanged)',
+  run: async () => {
+    const av = env.ANSWER_VERIFICATION as { ENABLED: boolean; FAIL_OPEN_ON_VERIFIER_ERROR: boolean };
+    const saved = { enabled: av.ENABLED, failOpen: av.FAIL_OPEN_ON_VERIFIER_ERROR };
+    av.ENABLED = true; av.FAIL_OPEN_ON_VERIFIER_ERROR = true;
+    try {
+      const { value: r } = await withFakeLlm(env.LLM.ANSWER_VERIFICATION.PROVIDER, [new Error('provider down')], () =>
+        runOutputGuardrail({
+          question: 'Q?', effectiveQuery: 'Q?', uncoveredAspects: [], evidenceTexts: ['e'],
+          draftAnswer: 'DRAFT', notFoundMessage: LECTURE_NOT_FOUND_MESSAGE,
+        }));
+      return { pass: r.finalAnswer === 'DRAFT' && r.verified === false && r.verificationUnavailable === false, detail: `reason=${r.reason}` };
     } finally {
       av.ENABLED = saved.enabled; av.FAIL_OPEN_ON_VERIFIER_ERROR = saved.failOpen;
     }

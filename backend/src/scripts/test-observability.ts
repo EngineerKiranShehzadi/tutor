@@ -75,6 +75,7 @@ const stubOutputGuardrail = async (params: OutputGuardrailParams): Promise<Outpu
   reason: 'VERIFIED',
   revisionAttempted: false,
   revisionSucceeded: false,
+  verificationUnavailable: false,
   unsupportedClaimCount: 0,
   missingAspectCount: 0,
   expectedFormat: 'NATURAL_TEXT',

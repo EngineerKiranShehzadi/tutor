@@ -68,8 +68,9 @@ export type OutputGuardrailReason = typeof OUTPUT_GUARDRAIL_REASONS[number];
 export interface OutputGuardrailResult {
   // The text that must actually be persisted/returned — either the
   // original draft (VERIFIED), a verified revision (REVISED_AND_VERIFIED),
-  // or a conservative grounded fallback (every other outcome). Never an
-  // unverified draft.
+  // a conservative grounded fallback (content decisions), or
+  // VERIFICATION_UNAVAILABLE_MESSAGE when the verifier couldn't run. Never an
+  // unverified draft (unless fail-open is explicitly enabled).
   finalAnswer: string;
   // True iff finalAnswer is a draft or revision that actually passed
   // verification — false whenever finalAnswer is a conservative fallback.
@@ -78,6 +79,12 @@ export interface OutputGuardrailResult {
   reason: OutputGuardrailReason;
   revisionAttempted: boolean;
   revisionSucceeded: boolean;
+  // True only when the verifier could not run (timeout, provider error,
+  // invalid output, failed revision, failed final verification) and the
+  // guardrail is failing closed. The answer is then neither served nor saved:
+  // chat.service.ts reports a 503 "couldn't check this answer" error instead
+  // of claiming the lecture doesn't cover the topic.
+  verificationUnavailable: boolean;
   // Counts only, from whichever verification pass produced the final
   // decision — never the claim/aspect text itself, so this is always safe
   // to put directly into trace attributes.

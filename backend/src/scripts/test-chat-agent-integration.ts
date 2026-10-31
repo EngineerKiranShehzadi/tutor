@@ -197,11 +197,11 @@ const fakeChunk = (id: number, lectureId: number, text = `Q: q${id}\nA: a${id}`)
 
 const verifiedResult = (finalAnswer: string): OutputGuardrailResult => ({
   finalAnswer, verified: true, decision: 'VERIFIED', reason: 'VERIFIED', revisionAttempted: false, revisionSucceeded: false,
-  unsupportedClaimCount: 0, missingAspectCount: 0, expectedFormat: 'NATURAL_TEXT', formatValidationRequired: false,
+  verificationUnavailable: false, unsupportedClaimCount: 0, missingAspectCount: 0, expectedFormat: 'NATURAL_TEXT', formatValidationRequired: false,
   formatValid: true, formatRepairAttempted: false, formatRepairSucceeded: false, piiDetected: false, piiCategories: [],
 });
 const fallbackResult = (finalAnswer: string): OutputGuardrailResult => ({
-  ...verifiedResult(finalAnswer), verified: false, decision: null, reason: 'VERIFIER_PROVIDER_ERROR',
+  ...verifiedResult(finalAnswer), verified: false, decision: 'INSUFFICIENT_EVIDENCE', reason: 'INSUFFICIENT_EVIDENCE',
 });
 
 interface Spies {

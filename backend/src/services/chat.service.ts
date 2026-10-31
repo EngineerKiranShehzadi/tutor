@@ -23,7 +23,7 @@ import { runAdaptiveRetrieval } from '../rag/query-processing/adaptive-retrieval
 import type { AdaptiveRetrievalParams } from '../rag/query-processing/adaptive-retrieval/adaptive-retrieval.service';
 import type { AdaptiveRetrievalResult } from '../rag/query-processing/adaptive-retrieval/adaptive-retrieval.types';
 import type { SubqueryRetrievalDeps } from '../rag/query-processing/retrieval/decomposed-retrieval.service';
-import { runOutputGuardrail } from '../rag/guardrails/output/output-guardrail.service';
+import { runOutputGuardrail, VERIFICATION_UNAVAILABLE_MESSAGE } from '../rag/guardrails/output/output-guardrail.service';
 import { createPiiSafeStream } from '../rag/guardrails/output/pii/streaming-pii-redactor';
 import type { OutputGuardrailParams } from '../rag/guardrails/output/output-guardrail.service';
 import type { OutputGuardrailResult } from '../rag/guardrails/output/answer-verification.types';
@@ -973,6 +973,22 @@ export const askLectureAgent = async (
     });
     if (guardrailOutcome.reason !== 'VERIFIED') {
       logger.info(`[CHAT] 🛡️  Output guardrail: ${guardrailOutcome.reason} (verified=${guardrailOutcome.verified}, revisionAttempted=${guardrailOutcome.revisionAttempted})`);
+    }
+    // The verifier could not run. Failing closed means the draft is not
+    // served, but this is an outage, not "the lecture doesn't cover it": it
+    // is traced as an ERROR and nothing is saved to chat history or answer
+    // memory, so a transient failure never becomes a permanent turn.
+    if (guardrailOutcome.verificationUnavailable) {
+      logger.error(`[CHAT] ❌ Answer verification unavailable (${guardrailOutcome.reason}) — returning 503, nothing saved`);
+      finishTrace('ERROR', {
+        responseStatus: 'ERROR',
+        failedStage: 'output-guardrail',
+        answerVerificationReason: guardrailOutcome.reason,
+        memoryResult: memoryResultAttr,
+        candidateCount: finalCandidateCount,
+        selectedChunkCount: chunks.length,
+      });
+      throw new AppError(VERIFICATION_UNAVAILABLE_MESSAGE, 503);
     }
     if (guardrailOutcome.piiDetected) {
       logger.info(`[CHAT] 🛡️  Output guardrail: PII sanitized in final answer (${guardrailOutcome.piiCategories.join(', ')})`);
