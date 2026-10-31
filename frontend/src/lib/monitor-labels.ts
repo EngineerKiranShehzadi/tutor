@@ -33,9 +33,12 @@ export const ERROR_CODE_LABELS: Record<string, string> = {
   UNKNOWN_ERROR: 'Unknown problem',
 };
 
-// Keys of rag_request_log.stage_ms (span names in the chat pipeline).
+// Keys of rag_request_log.stage_ms: the chat pipeline's span names, mirroring
+// backend observability/otel-semconv.ts STAGE_SPAN_KIND. LLM-call spans
+// (*_call) are never keys — request-log.service.ts leaves them out of stage_ms.
 export const STAGE_LABELS: Record<string, string> = {
   'validate-chat-session': 'Session check',
+  'validate-request': 'Checking the request',
   'load-agent-profile': 'Loading lecture settings',
   'load-session-history': 'Loading earlier conversation',
   'input-guardrail': 'Checking the question',
@@ -47,6 +50,8 @@ export const STAGE_LABELS: Record<string, string> = {
   'vector-search': 'Searching the lecture',
   'adaptive-retrieval': 'Searching the lecture (adaptive)',
   'decomposed-retrieval': 'Searching the lecture (by parts)',
+  'subquery-retrieval': 'Searching the lecture for one part',
+  'adaptive-retrieval-iteration': 'Searching again for a missing part',
   'fetch-all-lecture-chunks': 'Loading the full lecture',
   'rerank-candidates': 'Picking the best passages',
   'generate-grounded-answer': 'Writing the answer',

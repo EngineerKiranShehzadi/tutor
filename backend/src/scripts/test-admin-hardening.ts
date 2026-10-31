@@ -55,6 +55,7 @@ import { startMaintenanceScheduler, stopMaintenanceScheduler, maintenanceSchedul
 import { finishDatasetVersion, rollbackDataset } from '../services/dataset-version.service';
 import { EMBEDDING_MODEL_VERSION } from '../services/embedding.service';
 import observabilityRoutes from '../routes/observability.routes';
+import { STAGE_SPAN_KIND, OpenInferenceSpanKind } from '../observability/otel-semconv';
 
 const results: { name: string; pass: boolean; detail: string }[] = [];
 const check = (name: string, pass: boolean, detail: string) => {
@@ -1005,6 +1006,19 @@ const run = async () => {
       tracesSvc.listTraces = original;
       srv.close();
     }
+  }
+
+  // ── X3: every pipeline step on the monitor has a label ──
+  {
+    // Loaded at runtime: it lives in the frontend package, outside the backend's tsc project.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const labels = require(join(__dirname, '../../../frontend/src/lib/monitor-labels')) as {
+      STAGE_LABELS: Record<string, string>;
+    };
+    const stageNames = Object.entries(STAGE_SPAN_KIND).filter(([, kind]) => kind !== OpenInferenceSpanKind.LLM).map(([name]) => name);
+    const missingStages = stageNames.filter(n => !Object.prototype.hasOwnProperty.call(labels.STAGE_LABELS, n));
+    check('X3-1. Every non-LLM span name in STAGE_SPAN_KIND has a "Slowest pipeline steps" label (subquery-retrieval, adaptive-retrieval-iteration were "Other step")',
+      missingStages.length === 0, `missing=[${missingStages.join(', ')}]`);
   }
 
 };
