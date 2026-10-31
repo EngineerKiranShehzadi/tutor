@@ -116,7 +116,7 @@ export default function ErrorsPage() {
                       <tr key={t.traceId} onClick={() => router.push(`/admin/rag-traces/traces/${encodeURIComponent(t.traceId)}`)} className="hover:bg-slate-50/60 cursor-pointer transition-colors">
                         <td className="px-5 py-3 text-[12px] text-slate-500">{new Date(t.timestamp).toLocaleString()}</td>
                         <td className="px-4 py-3 text-[12px] font-medium text-slate-600">{t.route ?? '—'}</td>
-                        <td className="px-4 py-3"><TraceStatusBadge status="ERROR" /> <span className="text-[11px] font-mono text-slate-500 ml-1">{t.errorCode}</span></td>
+                        <td className="px-4 py-3"><TraceStatusBadge status={t.status} /> <span className="text-[11px] font-mono text-slate-500 ml-1">{t.errorCode}</span></td>
                         <td className="px-4 py-3 text-[13px] text-slate-500 tabular-nums">{fmtMs(t.durationMs)}</td>
                         <td className="px-4 py-3 text-[11px] text-slate-400 font-mono truncate max-w-[140px]">{t.traceId}</td>
                       </tr>

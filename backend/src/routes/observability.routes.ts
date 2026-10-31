@@ -163,7 +163,8 @@ router.get('/traces', traceListValidators, validate, async (req: Request, res: R
       minLatencyMs: req.query.minLatencyMs ? Number(req.query.minLatencyMs) : undefined,
       maxLatencyMs: req.query.maxLatencyMs ? Number(req.query.maxLatencyMs) : undefined,
       memoryResult: req.query.memoryResult as string | undefined,
-      errorOnly: req.query.errorOnly === 'true',
+      // traceListValidators' .toBoolean() has already turned the string into a boolean.
+      errorOnly: (req.query.errorOnly as unknown) === true,
       sort: (req.query.sort as 'start_time' | 'latency_ms') || undefined,
       order: (req.query.order as 'asc' | 'desc') || undefined,
     });

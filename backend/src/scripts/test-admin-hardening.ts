@@ -54,6 +54,7 @@ import { globalLimiter, userLimiter } from '../middleware/rateLimiter';
 import { startMaintenanceScheduler, stopMaintenanceScheduler, maintenanceSchedulerState, runRetention } from '../observability/maintenance.scheduler';
 import { finishDatasetVersion, rollbackDataset } from '../services/dataset-version.service';
 import { EMBEDDING_MODEL_VERSION } from '../services/embedding.service';
+import observabilityRoutes from '../routes/observability.routes';
 
 const results: { name: string; pass: boolean; detail: string }[] = [];
 const check = (name: string, pass: boolean, detail: string) => {
@@ -972,6 +973,35 @@ const run = async () => {
     check('AD11-1. studentJourney for an unknown id → "Student not found" (AppError 404), not "Internal server error"',
       errs[0]?.message === 'Student not found' && direct instanceof AppError && direct.statusCode === 404,
       `graphql="${errs[0]?.message}" status=${(direct as AppError).statusCode}`);
+  }
+
+  // ── X1: GET /traces?errorOnly reaches the service as a real filter ──
+  {
+    // Only the service the route calls is stubbed; the route, its validators and auth are real.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const tracesSvc = require('../services/observability/traces.service') as { listTraces: (f: Record<string, unknown>) => Promise<unknown> };
+    const original = tracesSvc.listTraces;
+    const seen: Record<string, unknown>[] = [];
+    tracesSvc.listTraces = async f => { seen.push(f); return { traces: [], nextCursor: null, appliedFilters: {} }; };
+    const admin = (await query<{ id: string }>(`INSERT INTO users (name, email, password_hash, is_verified, role) VALUES ('X1 Admin', $1, 'x', TRUE, 'ADMIN') RETURNING id`, [`x1-${Date.now()}@example.test`])).rows[0].id;
+    const app = express();
+    app.use('/obs', observabilityRoutes);
+    const srv = app.listen(0);
+    const base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+    const get = (qs: string) => fetch(`${base}/obs/traces?${qs}`, { headers: { Authorization: `Bearer ${generateAccessToken(admin, 'ADMIN')}` } }).then(r => r.status);
+    try {
+      const statuses = [
+        await get('errorOnly=true&startTime=2026-10-01T00:00:00Z&endTime=2026-10-02T00:00:00Z'),
+        await get('errorOnly=false'),
+        await get('limit=5'),
+      ];
+      check('X1-1. GET /traces?errorOnly=true hands errorOnly=true to listTraces (it was always false, so the Errors page listed successful traces); false/absent stay false',
+        statuses.every(s => s === 200) && seen[0]?.errorOnly === true && seen[1]?.errorOnly === false && seen[2]?.errorOnly === false,
+        `statuses=${statuses.join(',')} errorOnly=${seen.map(f => f.errorOnly).join(',')}`);
+    } finally {
+      tracesSvc.listTraces = original;
+      srv.close();
+    }
   }
 
 };
