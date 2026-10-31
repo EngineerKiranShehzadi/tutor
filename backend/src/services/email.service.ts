@@ -127,6 +127,27 @@ export const sendSignupVerificationOtp = async (
   logger.info(`Signup verification OTP email sent to ${to}`);
 };
 
+// ── "YOU ALREADY HAVE AN ACCOUNT" NOTICE ──────────────
+// Sent instead of a verification code when someone starts a signup with an
+// address that is already registered. The signup response is identical either
+// way (so it cannot be used to probe which addresses exist); this email is how
+// the real owner learns what happened.
+export const sendAccountExistsNotice = async (to: string, userName: string): Promise<void> => {
+  await transporter.sendMail({
+    from:    FROM,
+    to,
+    subject: 'You already have an AskAITutor account',
+    text:    `Hi ${userName}, someone tried to sign up for AskAITutor with this email address, but you already have an account. Log in, or use "Forgot password" if you cannot remember your password. If this was not you, you can ignore this email.`,
+    html:    `<div style="font-family:Arial,sans-serif;font-size:14px;color:#1e293b">
+      <p>Hi ${userName.replace(/[<>&"]/g, '')},</p>
+      <p>Someone tried to sign up for AskAITutor with this email address, but you already have an account.</p>
+      <p>Log in, or use <b>Forgot password</b> if you cannot remember your password. If this was not you, you can ignore this email.</p>
+    </div>`,
+  });
+
+  logger.info(`Account-exists notice sent to ${to}`);
+};
+
 // ── ADMIN ALERT EMAIL ─────────────────────────────────
 // Recipients: ALERT_EMAILS if set, otherwise every ADMIN user. Callers must
 // keep student data out of `lines`. Throws if nobody could be notified, so the

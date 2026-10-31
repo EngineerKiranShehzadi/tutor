@@ -5,7 +5,7 @@ import { AppError } from '../middleware/errorHandler';
 import { hashPassword, comparePassword, hashToken } from '../utils/password';
 import { validatePassword } from '../utils/password-policy';
 import { generateAccessToken, generateRefreshToken, verifyRefreshToken } from '../utils/jwt';
-import { sendPasswordResetOtp, sendSignupVerificationOtp } from './email.service';
+import { sendPasswordResetOtp, sendSignupVerificationOtp, sendAccountExistsNotice } from './email.service';
 import { env } from '../config/env';
 import { logger } from '../utils/logger';
 import { User, PasswordResetToken, EmailVerificationToken } from '../types';
@@ -140,7 +140,10 @@ export const logoutUser = async (userId: string, refreshToken: string) => {
 // compare, so parallel requests cannot all pass a "still under the limit" check
 // and exceed the cap together.
 const OTP_MAX_ATTEMPTS = 5;
-const OTP_TOO_MANY_ATTEMPTS = 'Too many incorrect attempts. Please request a new code.';
+// One message for every way a code can fail (unknown email, no live code,
+// expired, wrong, out of guesses). Distinct messages would tell a caller which
+// addresses have a pending reset or signup.
+const OTP_REJECTED = 'Invalid or expired code. Please check it, or request a new one.';
 
 type OtpTable = 'password_reset_tokens' | 'email_verification_tokens';
 
@@ -157,12 +160,11 @@ const reserveOtpAttempt = async (table: OtpTable, tokenId: string): Promise<numb
 };
 
 // Throws the right error for a wrong code, burning the code on the last guess.
-const rejectWrongOtp = async (table: OtpTable, tokenId: string, attemptNo: number, message: string): Promise<never> => {
+const rejectWrongOtp = async (table: OtpTable, tokenId: string, attemptNo: number): Promise<never> => {
   if (attemptNo >= OTP_MAX_ATTEMPTS) {
     await query(`UPDATE ${table} SET used = TRUE WHERE id = $1`, [tokenId]);
-    throw new AppError(OTP_TOO_MANY_ATTEMPTS, 400);
   }
-  throw new AppError(message, 400);
+  throw new AppError(OTP_REJECTED, 400);
 };
 
 // ── OTP: INTERNAL ─────────────────────────────────────
@@ -173,7 +175,14 @@ const issuePasswordResetOtp = async (email: string): Promise<void> => {
     [email.toLowerCase()]
   );
   const user = rows[0];
-  if (!user) throw new AppError('No account found with that email address', 400);
+  if (!user) {
+    // Same outward behaviour as a real account: report success, send nothing.
+    // The real reason stays in the log. Burn a bcrypt hash so the response time
+    // does not give the missing account away either.
+    logger.warn(`[AUTH] password reset requested for unknown email "${email}" — no OTP sent`);
+    await bcrypt.hash('x', 12);
+    return;
+  }
 
   // 6-digit OTP via cryptographically secure random (NIST SP 800-63B: minimum 6 digits)
   const otp = crypto.randomInt(100000, 1000000).toString();
@@ -230,7 +239,7 @@ export const verifyOtp = async (email: string, code: string): Promise<void> => {
   const user = userRows[0];
   if (!user) {
     logger.warn(`[AUTH] verifyOtp: no user found for "${email}"`);
-    throw new AppError('Invalid OTP', 400);
+    throw new AppError(OTP_REJECTED, 400);
   }
 
   const { rows: tokenRows } = await query<PasswordResetToken>(
@@ -240,20 +249,20 @@ export const verifyOtp = async (email: string, code: string): Promise<void> => {
     [user.id]
   );
   const token = tokenRows[0];
-  if (!token) throw new AppError('Invalid OTP', 400);
+  if (!token) throw new AppError(OTP_REJECTED, 400);
 
   if (new Date(token.expires_at) < new Date()) {
     await query('UPDATE password_reset_tokens SET used = TRUE WHERE id = $1', [token.id]);
-    throw new AppError('Expired OTP. Please request a new one.', 400);
+    throw new AppError(OTP_REJECTED, 400);
   }
 
   const attemptNo = await reserveOtpAttempt('password_reset_tokens', token.id);
-  if (attemptNo === null) throw new AppError(OTP_TOO_MANY_ATTEMPTS, 400);
+  if (attemptNo === null) throw new AppError(OTP_REJECTED, 400);
 
   const valid = await bcrypt.compare(code, token.code_hash);
   if (!valid) {
     logger.warn(`[AUTH] verifyOtp: invalid OTP code for "${email}" (attempt ${attemptNo}/${OTP_MAX_ATTEMPTS})`);
-    await rejectWrongOtp('password_reset_tokens', token.id, attemptNo, 'Invalid OTP. Please check and try again.');
+    await rejectWrongOtp('password_reset_tokens', token.id, attemptNo);
   }
 
   // Mark verified — token is NOT consumed yet, only consumed after password reset
@@ -282,7 +291,7 @@ export const resetPasswordWithOtp = async (
     [email.toLowerCase()]
   );
   const user = userRows[0];
-  if (!user) throw new AppError('No account found with that email address', 400);
+  if (!user) throw new AppError(OTP_REJECTED, 400);
 
   // Require a token that is verified, not yet used, and still inside its
   // lifetime. verifyOtp does not consume the token, so without the expires_at
@@ -294,7 +303,7 @@ export const resetPasswordWithOtp = async (
     [user.id]
   );
   const token = tokenRows[0];
-  if (!token) throw new AppError('OTP not verified or expired. Please request a new code.', 400);
+  if (!token) throw new AppError(OTP_REJECTED, 400);
 
   const password_hash = await hashPassword(newPassword);
 
@@ -309,7 +318,7 @@ export const resetPasswordWithOtp = async (
       [token.id]
     );
     if (consumed.rowCount !== 1) {
-      throw new AppError('OTP not verified or expired. Please request a new code.', 400);
+      throw new AppError(OTP_REJECTED, 400);
     }
     await client.query(
       'UPDATE users SET password_hash = $1 WHERE id = $2',
@@ -377,6 +386,8 @@ const validateSignupInput = (name: string, email: string, password: string): voi
 };
 
 // ── SIGNUP: INITIATE ───────────────────────────────────
+const SIGNUP_CODE_SENT = 'A verification code has been sent to your email address.';
+
 export const signupUser = async (
   name: string,
   email: string,
@@ -385,16 +396,40 @@ export const signupUser = async (
   // Validate before touching the database: cheaper, and it keeps invalid input
   // from reaching the users table at all.
   validateSignupInput(name, email, password);
+  const normalizedEmail = email.trim().toLowerCase();
 
-  const existing = await query<User>('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
-  if (existing.rows[0]) throw new AppError('Email already in use', 409);
-
+  // Hash first, whether or not the address is taken, so both paths take about
+  // as long.
   const password_hash = await hashPassword(password);
+
+  const existing = await query<User>('SELECT * FROM users WHERE email = $1', [normalizedEmail]);
+  const existingUser = existing.rows[0];
+  if (existingUser) {
+    // Answer exactly as for a fresh signup so this form cannot be used to find
+    // out which addresses are registered; the real reason stays in the log. The
+    // stored password is never touched (overwriting it would let a stranger
+    // pre-set the password on someone else's unverified account).
+    logger.warn(`[AUTH] signupUser: email already registered — "${normalizedEmail}" (no new account created)`);
+    try {
+      if (existingUser.is_verified) {
+        if (env.EMAIL.USER && env.EMAIL.PASSWORD) await sendAccountExistsNotice(existingUser.email, existingUser.name);
+      } else {
+        // Never finished verifying: just give them a fresh code.
+        const otp = await issueEmailVerificationOtp(existingUser.id);
+        if (env.NODE_ENV !== 'production') logger.info(`[DEV] Signup (re-signup) OTP for ${existingUser.email}: ${otp}`);
+        if (env.EMAIL.USER && env.EMAIL.PASSWORD) await sendSignupVerificationOtp(existingUser.email, existingUser.name, otp);
+      }
+    } catch (followUpErr) {
+      logger.warn(`[AUTH] signupUser: follow-up email failed for "${normalizedEmail}"`, followUpErr);
+    }
+    return { email: normalizedEmail, message: SIGNUP_CODE_SENT };
+  }
+
   const { rows } = await query<User>(
     `INSERT INTO users (name, email, password_hash, is_verified)
      VALUES ($1, $2, $3, FALSE)
      RETURNING id, name, email, avatar_url, created_at`,
-    [name.trim(), email.toLowerCase(), password_hash]
+    [name.trim(), normalizedEmail, password_hash]
   );
   const user = rows[0];
 
@@ -404,24 +439,31 @@ export const signupUser = async (
     logger.info(`[DEV] Signup OTP for ${user.email}: ${otp}`);
   }
 
-  let message = 'A verification code has been sent to your email address.';
   if (env.EMAIL.USER && env.EMAIL.PASSWORD) {
     try {
       await sendSignupVerificationOtp(user.email, user.name, otp);
-    } catch {
-      message = 'Account created. The verification email failed to send — use "Resend code" to try again.';
+    } catch (emailErr) {
+      // Same response as a delivered code (an existing account never reports
+      // delivery trouble either); the form's "Resend code" is the recovery path.
+      logger.warn(`[AUTH] signupUser: verification email failed for "${normalizedEmail}"`, emailErr);
     }
   }
 
-  return { email: user.email, message };
+  return { email: user.email, message: SIGNUP_CODE_SENT };
 };
 
 // ── SIGNUP: RESEND OTP ────────────────────────────────
 export const resendSignupOtp = async (email: string): Promise<void> => {
   const { rows } = await query<User>('SELECT * FROM users WHERE email = $1', [email.toLowerCase()]);
   const user = rows[0];
-  if (!user) throw new AppError('Email not found', 404);
-  if (user.is_verified) throw new AppError('Email is already verified', 400);
+  // Unknown and already-verified addresses get the same silent success as a real
+  // pending signup, so this endpoint cannot be used to probe accounts. The real
+  // reason stays in the log.
+  if (!user || user.is_verified) {
+    logger.warn(`[AUTH] resendSignupOtp: nothing to resend for "${email}" (${user ? 'already verified' : 'unknown email'})`);
+    await bcrypt.hash('x', 12);
+    return;
+  }
 
   const otp = await issueEmailVerificationOtp(user.id);
 
@@ -445,8 +487,11 @@ export const resendSignupOtp = async (email: string): Promise<void> => {
 export const resendLoginOtp = async (email: string): Promise<number> => {
   const { rows } = await query<User>('SELECT * FROM users WHERE email = $1', [email.toLowerCase()]);
   const user = rows[0];
-  if (!user) throw new AppError('Email not found', 404);
-  if (user.is_verified) throw new AppError('Email is already verified', 400);
+  if (!user || user.is_verified) {
+    logger.warn(`[AUTH] resendLoginOtp: nothing to resend for "${email}" (${user ? 'already verified' : 'unknown email'})`);
+    await bcrypt.hash('x', 12);
+    return RESEND_COOLDOWN_SECONDS;
+  }
 
   // Check for existing valid OTP
   const { rows: existingTokens } = await query<EmailVerificationToken>(
@@ -494,7 +539,7 @@ export const verifySignupOtp = async (
   const user = userRows[0];
   if (!user) {
     logger.warn(`[AUTH] verifySignupOtp: no user found for "${email}"`);
-    throw new AppError('Invalid OTP', 400);
+    throw new AppError(OTP_REJECTED, 400);
   }
 
   const { rows: tokenRows } = await query<EmailVerificationToken>(
@@ -504,20 +549,20 @@ export const verifySignupOtp = async (
     [user.id]
   );
   const token = tokenRows[0];
-  if (!token) throw new AppError('Invalid OTP', 400);
+  if (!token) throw new AppError(OTP_REJECTED, 400);
 
   if (new Date(token.expires_at) < new Date()) {
     await query('UPDATE email_verification_tokens SET used = TRUE WHERE id = $1', [token.id]);
-    throw new AppError('Expired OTP. Please request a new one.', 400);
+    throw new AppError(OTP_REJECTED, 400);
   }
 
   const attemptNo = await reserveOtpAttempt('email_verification_tokens', token.id);
-  if (attemptNo === null) throw new AppError(OTP_TOO_MANY_ATTEMPTS, 400);
+  if (attemptNo === null) throw new AppError(OTP_REJECTED, 400);
 
   const valid = await bcrypt.compare(code, token.code_hash);
   if (!valid) {
     logger.warn(`[AUTH] verifySignupOtp: invalid OTP code for "${email}" (attempt ${attemptNo}/${OTP_MAX_ATTEMPTS})`);
-    await rejectWrongOtp('email_verification_tokens', token.id, attemptNo, 'Invalid OTP');
+    await rejectWrongOtp('email_verification_tokens', token.id, attemptNo);
   }
 
   // Atomic: consume token + mark user verified. The token is consumed first and
@@ -530,7 +575,7 @@ export const verifySignupOtp = async (
       'UPDATE email_verification_tokens SET used = TRUE WHERE id = $1 AND used = FALSE',
       [token.id]
     );
-    if (consumed.rowCount !== 1) throw new AppError('Invalid OTP', 400);
+    if (consumed.rowCount !== 1) throw new AppError(OTP_REJECTED, 400);
     await client.query('UPDATE users SET is_verified = TRUE WHERE id = $1', [user.id]);
     await client.query('COMMIT');
   } catch (err) {

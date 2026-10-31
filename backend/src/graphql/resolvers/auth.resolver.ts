@@ -72,7 +72,7 @@ export const resolvers = {
       checkRateLimit(ctx.req, 'rpr', 2, 60_000);
       await AuthService.requestPasswordReset(input.email).catch(toGQL);
       logger.info(`[GRAPHQL] ✅ requestPasswordReset: OTP issued for "${input.email}"`);
-      return { success: true, message: 'OTP sent to your email. Valid for 5 minutes.' };
+      return { success: true, message: 'If an account exists for that email, a code has been sent. It is valid for 5 minutes.' };
     },
 
     // 2 req/min
@@ -86,7 +86,7 @@ export const resolvers = {
       checkRateLimit(ctx.req, 'rrpo', 2, 60_000);
       await AuthService.resendPasswordResetOtp(input.email).catch(toGQL);
       logger.info(`[GRAPHQL] ✅ resendPasswordResetOtp: new OTP issued for "${input.email}"`);
-      return { success: true, message: 'New OTP sent to your email.' };
+      return { success: true, message: 'If an account exists for that email, a new code has been sent.' };
     },
 
     // 3 req/min
@@ -147,7 +147,7 @@ export const resolvers = {
       checkRateLimit(ctx.req, 'rsuo', 2, 60_000);
       await AuthService.resendSignupOtp(input.email).catch(toGQL);
       logger.info(`[GRAPHQL] ✅ resendSignupOtp: new OTP sent to "${input.email}"`);
-      return { success: true, message: 'New verification code sent to your email.' };
+      return { success: true, message: 'If a pending signup exists for that email, a new code has been sent.' };
     },
 
     // 3 req/min
