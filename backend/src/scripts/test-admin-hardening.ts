@@ -37,7 +37,7 @@ import { parse, validate, specifiedRules } from 'graphql';
 import { makeExecutableSchema } from '@graphql-tools/schema';
 import { ApolloServer } from '@apollo/server';
 import { applyMigrations } from './db-setup';
-import { getRecentQuestions, getRecentQuestionsPage } from '../services/analytics.service';
+import { getRecentQuestions, getRecentQuestionsPage, getContentGaps, CONTENT_GAPS_MAX_QUESTIONS } from '../services/analytics.service';
 import { queryLimitsRule } from '../graphql/query-limits';
 import { typeDefs } from '../graphql/typeDefs';
 import datasetRoutes from '../routes/dataset.routes';
@@ -675,6 +675,29 @@ const run = async () => {
     check('AD3-1. A cancel during the embedding pass: the post-embed step leaves status FAILED and last_error "Cancelled by an admin." unchanged',
       row.status === 'FAILED' && row.last_error === CANCEL && r.outcome !== 'ACTIVATED',
       `outcome=${r.outcome} status=${row.status} last_error=${JSON.stringify(row.last_error)} embedCalls=${calls}`);
+  }
+
+  // ── AD4: Content Gaps reads a bounded, windowed sample ───────────────
+  {
+    const lec = (await query<{ id: number }>(`INSERT INTO lectures (title, youtube_url, youtube_video_id, status) VALUES ('[ad4] gaps', 'https://youtu.be/xxxxxxxxxxx', 'xxxxxxxxxxx', 'READY') RETURNING id`)).rows[0].id;
+    const stu = (await query<{ id: string }>(`INSERT INTO users (name, email, password_hash, is_verified, role) VALUES ('AD4', $1, 'x', TRUE, 'STUDENT') RETURNING id`, [`ad4-${Date.now()}@example.test`])).rows[0].id;
+    await query(`INSERT INTO student_questions (student_id, lecture_id, question)
+                 SELECT $1, $2, 'what is tokenization number ' || g FROM generate_series(1, 25000) g`, [stu, lec]);
+    // Outside the 90-day window: never counted or analysed.
+    await query(`INSERT INTO student_questions (student_id, lecture_id, question, created_at)
+                 SELECT $1, $2, 'ancient question', NOW() - INTERVAL '100 days' FROM generate_series(1, 50)`, [stu, lec]);
+    try {
+      const t0 = Date.now();
+      const gaps = await getContentGaps();
+      const ms = Date.now() - t0;
+      const mine = gaps.find(g => g.lectureId === lec);
+      const processed = gaps.reduce((n, g) => n + g.answeredFromLecture + g.notInLecture, 0);
+      check('AD4-1. 25,000 questions seeded: at most 20,000 are processed, sampled=true, windowDays=90, questionsAsked stays exact (old ones excluded)',
+        !!mine && processed <= CONTENT_GAPS_MAX_QUESTIONS && mine.sampled === true && mine.windowDays === 90 && mine.questionsAsked === 25000,
+        `processed=${processed} asked=${mine?.questionsAsked} sampled=${mine?.sampled} ms=${ms}`);
+    } finally {
+      await query('DELETE FROM student_questions WHERE lecture_id = $1', [lec]);
+    }
   }
 
 };

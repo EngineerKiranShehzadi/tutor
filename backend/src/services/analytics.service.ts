@@ -305,22 +305,45 @@ function tokenize(text: string): Set<string> {
   );
 }
 
+// Content Gaps is bounded: it reads at most the newest CONTENT_GAPS_MAX_QUESTIONS
+// questions from the last CONTENT_GAPS_WINDOW_DAYS days and at most
+// CONTENT_GAPS_MAX_CHUNKS chunks, and tokenises them one by one — it used to load
+// every question ever asked plus every active chunk and tokenise one giant joined
+// string, stalling the shared event loop (and every student's chat) as both grew.
+export const CONTENT_GAPS_WINDOW_DAYS = 90;
+export const CONTENT_GAPS_MAX_QUESTIONS = 20_000;
+export const CONTENT_GAPS_MAX_CHUNKS = 20_000;
+
 export const getContentGaps = async () => {
   logger.info('[ANALYTICS] getContentGaps: comparing student questions vs AI training data');
 
-  // Only analyse lectures that have a trained AI agent (READY status)
-  const { rows: studentQs } = await query<{
-    lecture_id: number; lecture_title: string; question: string;
-  }>(
-    `SELECT sq.lecture_id, l.title AS lecture_title, sq.question
+  // Exact per-lecture counts for the window — the headline number never
+  // depends on the sample below. Only lectures with a trained AI agent (READY).
+  const { rows: askedRows } = await query<{ lecture_id: number; lecture_title: string; asked: string }>(
+    `SELECT sq.lecture_id, l.title AS lecture_title, COUNT(*) AS asked
      FROM student_questions sq
      JOIN lectures l ON l.id = sq.lecture_id
-     WHERE l.status = 'READY'`
+     WHERE l.status = 'READY'
+       AND sq.created_at >= NOW() - make_interval(days => $1)
+     GROUP BY sq.lecture_id, l.title`,
+    [CONTENT_GAPS_WINDOW_DAYS]
   );
+  if (askedRows.length === 0) return [];
+  const totalInWindow = askedRows.reduce((n, r) => n + Number(r.asked), 0);
 
-  if (studentQs.length === 0) return [];
+  const { rows: studentQs } = await query<{ lecture_id: number; question: string }>(
+    `SELECT sq.lecture_id, sq.question
+     FROM student_questions sq
+     JOIN lectures l ON l.id = sq.lecture_id
+     WHERE l.status = 'READY'
+       AND sq.created_at >= NOW() - make_interval(days => $1)
+     ORDER BY sq.created_at DESC
+     LIMIT $2`,
+    [CONTENT_GAPS_WINDOW_DAYS, CONTENT_GAPS_MAX_QUESTIONS]
+  );
+  const sampled = totalInWindow > studentQs.length;
 
-  const lectureIds = [...new Set(studentQs.map(q => q.lecture_id))];
+  const lectureIds = askedRows.map(r => r.lecture_id);
 
   // Get training data (QNA chunks) for those lectures
   const { rows: chunks } = await query<{
@@ -329,8 +352,9 @@ export const getContentGaps = async () => {
     `SELECT lecture_id, topic, question, keywords
      FROM lecture_qna_chunks c
      WHERE lecture_id = ANY($1::int[])
-       AND c.id IN (SELECT d.chunk_id FROM dataset_version_chunks d JOIN lectures l ON l.active_version_id = d.version_id WHERE l.id = c.lecture_id)`,
-    [lectureIds]
+       AND c.id IN (SELECT d.chunk_id FROM dataset_version_chunks d JOIN lectures l ON l.active_version_id = d.version_id WHERE l.id = c.lecture_id)
+     LIMIT $2`,
+    [lectureIds, CONTENT_GAPS_MAX_CHUNKS]
   );
 
   // Get chunk counts per lecture
@@ -344,12 +368,11 @@ export const getContentGaps = async () => {
   );
   const chunkCountMap = new Map(countRows.map(r => [r.lecture_id, Number(r.count)]));
 
-  // Build per-lecture maps
-  const lectureStudentQs = new Map<number, { title: string; questions: string[] }>();
+  // Per-lecture sampled questions
+  const lectureStudentQs = new Map<number, string[]>();
   for (const q of studentQs) {
-    if (!lectureStudentQs.has(q.lecture_id))
-      lectureStudentQs.set(q.lecture_id, { title: q.lecture_title, questions: [] });
-    lectureStudentQs.get(q.lecture_id)!.questions.push(q.question);
+    if (!lectureStudentQs.has(q.lecture_id)) lectureStudentQs.set(q.lecture_id, []);
+    lectureStudentQs.get(q.lecture_id)!.push(q.question);
   }
 
   // Build chunk vocabulary per lecture
@@ -367,12 +390,27 @@ export const getContentGaps = async () => {
 
   const results = [];
 
-  for (const [lectureId, { title, questions }] of lectureStudentQs.entries()) {
+  for (const { lecture_id: lectureId, lecture_title: title, asked } of askedRows) {
+    const questions = lectureStudentQs.get(lectureId) ?? [];
     const chunkVocab = chunkVocabMap.get(lectureId) ?? new Set<string>();
     const chunkCount = chunkCountMap.get(lectureId) ?? 0;
 
-    // Extract all keywords from student questions for this lecture
-    const studentKeywords = tokenize(questions.join(' '));
+    // Each question is tokenised once: its keywords go into the lecture-wide
+    // set, and it counts as "answered from lecture" if ANY of them appears in
+    // the chunk vocabulary (otherwise it was unanswerable from lecture content).
+    const studentKeywords = new Set<string>();
+    let answeredFromLecture = 0;
+    let notInLecture = 0;
+    for (const q of questions) {
+      const qKeywords = tokenize(q);
+      let hasMatch = false;
+      for (const kw of qKeywords) {
+        studentKeywords.add(kw);
+        if (chunkVocab.has(kw)) hasMatch = true;
+      }
+      if (hasMatch) answeredFromLecture++;
+      else notInLecture++;
+    }
 
     // Partition: covered vs gap
     const covered: string[] = [];
@@ -385,21 +423,10 @@ export const getContentGaps = async () => {
     const coverageScore = total > 0 ? Math.round((covered.length / total) * 100) : 100;
     const status = coverageScore >= 70 ? 'GOOD' : coverageScore >= 40 ? 'MODERATE' : 'POOR';
 
-    // Per-question coverage: a question is "answered from lecture" if ANY of its keywords
-    // appear in the chunk vocabulary, otherwise it was unanswerable from lecture content
-    let answeredFromLecture = 0;
-    let notInLecture = 0;
-    for (const q of questions) {
-      const qKeywords = tokenize(q);
-      const hasMatch = [...qKeywords].some(kw => chunkVocab.has(kw));
-      if (hasMatch) answeredFromLecture++;
-      else notInLecture++;
-    }
-
     results.push({
       lectureId,
       lectureTitle:        title,
-      questionsAsked:      questions.length,
+      questionsAsked:      Number(asked),
       chunkCount,
       coverageScore,
       gapTopics:           gaps.slice(0, 20),
@@ -407,6 +434,10 @@ export const getContentGaps = async () => {
       status,
       answeredFromLecture,
       notInLecture,
+      // True when the window held more questions than were analysed (the
+      // newest CONTENT_GAPS_MAX_QUESTIONS were used).
+      sampled,
+      windowDays:          CONTENT_GAPS_WINDOW_DAYS,
     });
   }
 

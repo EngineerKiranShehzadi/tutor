@@ -225,6 +225,10 @@ export const typeDefs = `#graphql
     status:              String!
     answeredFromLecture: Int!
     notInLecture:        Int!
+    # Analysis covers questions from the last windowDays days; sampled = the
+    # window held more questions than were analysed (newest 20,000 used).
+    sampled:             Boolean!
+    windowDays:          Int!
   }
 
   type DayActivity {

@@ -106,6 +106,8 @@ export const GET_CONTENT_GAPS = gql`
       status
       answeredFromLecture
       notInLecture
+      sampled
+      windowDays
     }
   }
 `;
