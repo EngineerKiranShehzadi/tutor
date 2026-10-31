@@ -30,7 +30,7 @@ import { matchRows, FileRow, ActiveQa, QaFields } from '../services/dataset-plan
 import {
   prepareDatasetVersion, finishDatasetVersion, resumePendingVersions, rollbackDataset, exportActiveDataset,
   listDatasetVersions, RemovalConfirmationRequired, getLectureReadiness, validateVersion, retryMissingEmbeddings,
-  cleanupOldVersions, failDatasetVersion, cancelDatasetBuild, FinishResult as FinishResultT,
+  cleanupOldVersions, failDatasetVersion, cancelDatasetBuild, reconcileLectureStatuses, FinishResult as FinishResultT,
 } from '../services/dataset-version.service';
 import { searchChunks } from '../services/vector-search.service';
 import { lookupAnswerMemory, writeAnswerMemory } from '../services/rag-answer-memory.service';
@@ -1103,12 +1103,12 @@ const run = async () => {
       `multi=${rows2[0]?.question} single=${rows1[0]?.question}`);
   }
   {
-    // First-version upload: if the build is refused after beforeBuild set DATASET_UPLOADED, the status goes back.
+    // First-version upload refused by buildVersion: the lecture status is only ever changed
+    // inside the build transaction (A8), so a refused build leaves it exactly as it was.
     const L = await newLecture('p7-status');
     const before = (await lectureState(L)).status;
     const res = await expectReject(prepareDatasetVersion(L, makeXlsx(baseRows(3)), {
       beforeBuild: async () => {
-        await query(`UPDATE lectures SET status = 'DATASET_UPLOADED' WHERE id = $1`, [L]);
         // A concurrent BUILDING version makes buildVersion refuse with a 409.
         await query(
           `INSERT INTO dataset_versions (lecture_id, version_no, status, mode, embedding_model_version, chunking_config_version, stats)
@@ -1116,8 +1116,8 @@ const run = async () => {
       },
     }));
     const after = (await lectureState(L)).status;
-    check('21g. First-version upload refused in buildVersion (409) restores the lecture status',
-      res.rejected && (res.err as { statusCode?: number }).statusCode === 409 && before !== 'DATASET_UPLOADED' && after === before,
+    check('21g. First-version upload refused in buildVersion (409) leaves the lecture status unchanged',
+      res.rejected && (res.err as { statusCode?: number }).statusCode === 409 && after === before,
       `rejected=${res.rejected} before=${before} after=${after}`);
   }
 
@@ -1374,6 +1374,78 @@ const run = async () => {
         && f1.kind === 'CREATED' && cf.versionId === f1.versionId && stF.status === 'FAILED' && stF.active_version_id === null
         && f2.kind === 'CREATED' && (await lectureState(Lf)).status === 'READY' && (await getLectureReadiness(Lf)).ready,
       `none=${none.rejected}/${(none.err as { statusCode?: number })?.statusCode} firstCancel→${stF.status} reupload=${f2.kind} → ${(await lectureState(Lf)).status}`);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 26. Batch 3: preview tells the whole truth (A7), status changes only inside the build (A8), indexed purge (A14)
+  // ─────────────────────────────────────────────────────────────────────
+  {
+    // (a) skipped + truncated rows; real sheet row numbers survive a blank row
+    const La = await newLecture('26a preview');
+    const long = Array.from({ length: 480 }, (_, i) => `Sentence ${i} explains another detail of the topic at length.`).join(' ');
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['question', 'answer'],
+      ['Q one?', 'A one.'],          // row 2
+      ['Q two?', ''],                // row 3 — empty answer
+      [],                            // row 4 — blank row (not data)
+      ['', 'orphan answer'],         // row 5 — empty question
+      ['Q six (long)?', long],       // row 6 — more than 20 pieces
+    ]);
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'S');
+    const dry = await prepareDatasetVersion(La, XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer, { dryRun: true });
+    const p = dry.preview;
+    check('26a. Preview: rowsInFile is the sheet\'s data rows, rowsUsed what became Q&As; skipped rows listed with their REAL sheet row (blank row in between); the truncated long answer listed',
+      p.rowsInFile === 4 && p.rowsUsed === 2 && p.skippedRows === 2
+        && JSON.stringify(p.skippedSamples) === JSON.stringify([{ sheetRow: 3, reason: 'EMPTY_ANSWER' }, { sheetRow: 5, reason: 'EMPTY_QUESTION' }])
+        && p.truncatedRows === 1 && p.truncatedSamples[0].sheetRow === 6 && p.truncatedSamples[0].pieces > 20 && p.truncatedSamples[0].kept === 20,
+      `rowsInFile=${p.rowsInFile} used=${p.rowsUsed} skipped=${JSON.stringify(p.skippedSamples)} truncated=${JSON.stringify(p.truncatedSamples.map(t => ({ row: t.sheetRow, pieces: t.pieces, kept: t.kept })))}`);
+
+    // (b) first upload: status set inside the build txn; two admins racing on a dataset-less lecture
+    const Lb = await newLecture('26b first upload status');
+    embedder.reset();
+    const b1 = await prepareDatasetVersion(Lb, makeXlsx(baseRows(3)));
+    const mid = (await lectureState(Lb)).status;
+    if (b1.kind === 'CREATED') await fin(b1.versionId);
+    const Lr = await newLecture('26b race');
+    let aVersion = -1;
+    const raced = await expectReject(prepareDatasetVersion(Lr, makeXlsx(baseRows(4)), {
+      // Admin B planned against "no dataset"; admin A's upload is built AND published meanwhile.
+      beforeBuild: async () => {
+        const a = await prepareDatasetVersion(Lr, makeXlsx(baseRows(3)));
+        if (a.kind === 'CREATED') { aVersion = a.versionId; await fin(a.versionId); }
+      },
+    }));
+    const stR = await lectureState(Lr);
+    check('26b. First upload is EMBEDDING from inside its own transaction; when another admin publishes first, the refused upload leaves the lecture READY on that version (not stuck DATASET_UPLOADED)',
+      b1.kind === 'CREATED' && mid === 'EMBEDDING' && (await lectureState(Lb)).status === 'READY'
+        && raced.rejected && (raced.err as { statusCode?: number }).statusCode === 409
+        && stR.status === 'READY' && stR.active_version_id === aVersion && (await getLectureReadiness(Lr)).ready,
+      `midStatus=${mid} raced=${(raced.err as { statusCode?: number })?.statusCode} status=${stR.status} active=${stR.active_version_id} (A=${aVersion})`);
+
+    // (c) startup repair of the state the old race left behind
+    await query(`UPDATE lectures SET status = 'DATASET_UPLOADED' WHERE id = $1`, [Lr]);
+    const Lnone = await newLecture('26c no dataset');
+    await query(`UPDATE lectures SET status = 'FAILED' WHERE id = $1`, [Lnone]);
+    const repaired = await reconcileLectureStatuses();
+    check('26c. reconcileLectureStatuses: a lecture with a live version but a stale status → READY; a lecture without one is left alone',
+      repaired.includes(Lr) && (await lectureState(Lr)).status === 'READY' && !repaired.includes(Lnone) && (await lectureState(Lnone)).status === 'FAILED',
+      `repaired=${JSON.stringify(repaired)} Lr→${(await lectureState(Lr)).status} Lnone→${(await lectureState(Lnone)).status}`);
+
+    // (d) the purge's "still cited?" checks can use the GIN indexes of migration 014
+    const client = await pool.connect();
+    let plans = '';
+    try {
+      await client.query('BEGIN');
+      await client.query('SET LOCAL enable_seqscan = off');
+      for (const t of ['chat_history', 'rag_answer_memory']) {
+        const { rows } = await client.query<{ 'QUERY PLAN': string }>(`EXPLAIN SELECT 1 FROM ${t} WHERE source_chunk_ids @> ARRAY[42]`);
+        plans += rows.map(r => r['QUERY PLAN']).join(' ') + ' || ';
+      }
+      await client.query('ROLLBACK');
+    } finally { client.release(); }
+    check('26d. The purge\'s chat-history / cached-answer containment checks are served by the GIN indexes (migration 014)',
+      plans.includes('idx_chat_history_source_chunks_gin') && plans.includes('idx_rag_memory_source_chunks_gin'),
+      plans.replace(/\s+/g, ' ').slice(0, 220));
   }
 
   // ─────────────────────────────────────────────────────────────────────

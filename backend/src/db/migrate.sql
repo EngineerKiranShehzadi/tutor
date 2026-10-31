@@ -184,13 +184,30 @@ CREATE INDEX IF NOT EXISTS idx_chat_history_session
   ON chat_history(session_id);
 
 -- Migrate existing rows: create one "Previous Chats" session per (student, lecture)
--- and attach all orphaned rows to it.
+-- and attach all orphaned rows to it. Safe to re-run: a (student, lecture) that
+-- already has a "Previous Chats" session gets no second one (chat_sessions has
+-- no unique key for ON CONFLICT to act on, so the guard is the NOT EXISTS).
 INSERT INTO chat_sessions (student_id, lecture_id, title, created_at, updated_at)
 SELECT DISTINCT ON (student_id, lecture_id)
   student_id, lecture_id, 'Previous Chats', MIN(created_at) OVER (PARTITION BY student_id, lecture_id), NOW()
-FROM chat_history
+FROM chat_history ch
 WHERE session_id IS NULL
-ON CONFLICT DO NOTHING;
+  AND NOT EXISTS (
+    SELECT 1 FROM chat_sessions cs
+    WHERE cs.student_id = ch.student_id AND cs.lecture_id = ch.lecture_id AND cs.title = 'Previous Chats'
+  );
+
+-- Earlier re-runs (before the guard above) could leave several "Previous Chats"
+-- sessions per (student, lecture). Remove the EMPTY extra ones only — never a
+-- session that holds chat history, and always keeping at least one.
+DELETE FROM chat_sessions cs
+WHERE cs.title = 'Previous Chats'
+  AND NOT EXISTS (SELECT 1 FROM chat_history h WHERE h.session_id = cs.id)
+  AND EXISTS (
+    SELECT 1 FROM chat_sessions o
+    WHERE o.student_id = cs.student_id AND o.lecture_id = cs.lecture_id AND o.title = 'Previous Chats'
+      AND (EXISTS (SELECT 1 FROM chat_history h2 WHERE h2.session_id = o.id) OR o.id < cs.id)
+  );
 
 UPDATE chat_history ch
 SET session_id = cs.id

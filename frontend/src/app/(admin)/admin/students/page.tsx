@@ -1,5 +1,6 @@
 'use client';
 import { useState } from 'react';
+import { downloadCsv } from '@/lib/csv';
 import { useRouter } from 'next/navigation';
 import { useQuery, useMutation } from '@apollo/client';
 import { cn } from '@/lib/cn';
@@ -30,11 +31,7 @@ function exportCSV(students: Student[]) {
     s.name, s.email, s.status, String(s.questionCount),
     new Date(s.createdAt).toLocaleDateString(),
   ]));
-  const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n');
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-  a.download = 'students.csv';
-  a.click();
+  downloadCsv('students.csv', rows);
 }
 
 export default function AdminStudents() {

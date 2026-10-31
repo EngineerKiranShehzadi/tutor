@@ -12,6 +12,8 @@ import { verifyAccessToken } from '../utils/jwt';
 import { query } from '../config/database';
 import { AuthenticatedRequest } from '../types';
 import { logger } from '../utils/logger';
+import { env } from '../config/env';
+import { queryLimitsRule } from './query-limits';
 
 const mergedResolvers = {
   Query: {
@@ -33,6 +35,10 @@ export const setupApollo = async (app: Express): Promise<void> => {
   const server = new ApolloServer<GraphQLContext>({
     typeDefs,
     resolvers: mergedResolvers,
+    // Apollo Server 4 leaves introspection on regardless of NODE_ENV; the
+    // schema is not published in production (GRAPHQL_INTROSPECTION overrides).
+    introspection: env.GRAPHQL.INTROSPECTION,
+    validationRules: [queryLimitsRule({ maxDepth: env.GRAPHQL.MAX_DEPTH, maxFields: env.GRAPHQL.MAX_FIELDS })],
     formatError: (err, originalError) => {
       const cause = (originalError as Error)?.message ?? err.message;
       logger.error(`[GRAPHQL] ❌ ${err.message} | cause: ${cause}`, { extensions: err.extensions });

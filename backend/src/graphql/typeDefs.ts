@@ -116,9 +116,16 @@ export const typeDefs = `#graphql
     id:           Int!
     studentName:  String!
     studentEmail: String!
+    lectureId:    Int!
     lectureTitle: String!
     question:     String!
     createdAt:    String!
+  }
+
+  type RecentQuestionPage {
+    items:   [RecentQuestion!]!
+    total:   Int!
+    hasMore: Boolean!
   }
 
   type LectureStatusEntry {
@@ -267,7 +274,10 @@ export const typeDefs = `#graphql
     searchChatHistory(lectureId: Int!, query: String!):                      [ChatHistoryEntry!]!
     analyticsSummary:                AnalyticsSummary!
     questionsPerLecture:             [QuestionPerLecture!]!
+    # Newest first. limit defaults to 10 and is capped at 100.
     recentQuestions(limit: Int):     [RecentQuestion!]!
+    # One page (limit capped at 200), filtered by question/student-name text and lecture.
+    recentQuestionsPage(limit: Int!, offset: Int!, search: String, lectureId: Int): RecentQuestionPage!
     lectureStatusList:               [LectureStatusEntry!]!
     registeredStudents:              [StudentEntry!]!
     allUsers:                        [UserManagementEntry!]!

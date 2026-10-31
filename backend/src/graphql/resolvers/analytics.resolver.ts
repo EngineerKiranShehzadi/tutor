@@ -5,6 +5,7 @@ import {
   getAnalyticsSummary,
   getQuestionsPerLecture,
   getRecentQuestions,
+  getRecentQuestionsPage,
   getLectureStatusList,
   getRegisteredStudents,
   getLectureChunks,
@@ -47,11 +48,22 @@ export const analyticsResolvers = {
       return getQuestionsPerLecture();
     },
 
-    recentQuestions: (_: unknown, __: unknown, ctx: GraphQLContext) => {
+    recentQuestions: (_: unknown, { limit }: { limit?: number | null }, ctx: GraphQLContext) => {
       requireAdmin(ctx);
       const user = (ctx.req as AuthenticatedRequest).user;
-      logger.info(`[GRAPHQL] recentQuestions query by admin "${user?.email}"`);
-      return getRecentQuestions();
+      logger.info(`[GRAPHQL] recentQuestions(limit=${limit ?? 'default'}) query by admin "${user?.email}"`);
+      return getRecentQuestions(limit);
+    },
+
+    recentQuestionsPage: (
+      _: unknown,
+      args: { limit: number; offset: number; search?: string | null; lectureId?: number | null },
+      ctx: GraphQLContext
+    ) => {
+      requireAdmin(ctx);
+      const user = (ctx.req as AuthenticatedRequest).user;
+      logger.info(`[GRAPHQL] recentQuestionsPage(limit=${args.limit}, offset=${args.offset}) query by admin "${user?.email}"`);
+      return getRecentQuestionsPage(args);
     },
 
     lectureStatusList: (_: unknown, __: unknown, ctx: GraphQLContext) => {

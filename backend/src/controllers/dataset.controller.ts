@@ -1,6 +1,6 @@
 import { Response, NextFunction } from 'express';
 import { AuthenticatedRequest } from '../types';
-import { getLectureById, updateLectureStatus, updateLectureDatasetLocation } from '../services/lecture.service';
+import { getLectureById, updateLectureDatasetLocation } from '../services/lecture.service';
 import { AppError } from '../middleware/errorHandler';
 import {
   prepareDatasetVersion, finishDatasetVersion, rollbackDataset, listDatasetVersions, exportActiveDataset,
@@ -76,9 +76,11 @@ export const uploadDataset = async (
         } else {
           logger.warn(`[UPLOAD] S3 not configured — skipping raw dataset archive for lecture #${lectureId}`);
         }
-        // Only a lecture with no dataset yet shows the upload stages; a lecture
-        // that already has one stays READY and keeps serving it.
-        if (firstVersion) await updateLectureStatus(lectureId, 'DATASET_UPLOADED');
+        // No lecture status change here: this runs outside the build
+        // transaction, so a write here could race another admin's upload (A8).
+        // buildVersion sets a first-ever lecture to EMBEDDING inside its
+        // transaction; a lecture that already has a dataset stays READY.
+        void firstVersion;
       },
     });
 

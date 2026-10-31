@@ -1,5 +1,6 @@
 'use client';
 import { useState } from 'react';
+import { downloadCsv } from '@/lib/csv';
 import { useQuery, useMutation } from '@apollo/client';
 import { GET_ALL_USERS } from '@/graphql/admin.queries';
 import { DELETE_USER_MUTATION, UPDATE_USER_ROLE_MUTATION } from '@/graphql/admin.mutations';
@@ -21,11 +22,7 @@ function exportCSV(users: User[]) {
     u.isVerified ? 'Yes' : 'No',
     new Date(u.createdAt).toLocaleDateString(),
   ]));
-  const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n');
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-  a.download = 'users.csv';
-  a.click();
+  downloadCsv('users.csv', rows);
 }
 
 export default function AdminUsersPage() {

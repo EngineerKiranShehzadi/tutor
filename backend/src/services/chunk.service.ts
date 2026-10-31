@@ -17,6 +17,9 @@ export interface RawRow {
   llm_name?: string;
 }
 
+// Non-enumerable key holding a parsed row's real spreadsheet row number.
+const SHEET_ROW = Symbol('sheetRow');
+
 export interface ChunkPiece {
   chunkIndex: number;
   chunkText: string;
@@ -86,9 +89,15 @@ const splitter = new RecursiveCharacterTextSplitter({
 // row's topic/question re-prefixed onto every piece so each one is still
 // self-contained if retrieved on its own.
 export async function buildChunkPieces(row: RawRow): Promise<ChunkPiece[]> {
+  return (await buildChunkPiecesReport(row)).pieces;
+}
+
+// Same as buildChunkPieces, plus how many pieces the answer split into before
+// the MAX_PIECES_PER_ROW cap — so the upload preview can show truncated rows.
+export async function buildChunkPiecesReport(row: RawRow): Promise<{ pieces: ChunkPiece[]; splitInto: number }> {
   const whole = buildChunkText(row);
   if (whole.length <= SPLIT_THRESHOLD_CHARS) {
-    return [{ chunkIndex: 0, chunkText: whole }];
+    return { pieces: [{ chunkIndex: 0, chunkText: whole }], splitInto: 1 };
   }
 
   const answer = String(row.answer ?? '');
@@ -97,9 +106,10 @@ export async function buildChunkPieces(row: RawRow): Promise<ChunkPiece[]> {
     parts = await splitter.splitText(answer);
   } catch (err) {
     logger.error('[CHUNK] ⚠️  Splitter failed, falling back to a single unsplit chunk', err);
-    return [{ chunkIndex: 0, chunkText: whole }];
+    return { pieces: [{ chunkIndex: 0, chunkText: whole }], splitInto: 1 };
   }
 
+  const splitInto = parts.length;
   if (parts.length > MAX_PIECES_PER_ROW) {
     logger.warn(
       `[CHUNK] ⚠️  Row split into ${parts.length} pieces, exceeding the ${MAX_PIECES_PER_ROW}-piece cap — ` +
@@ -108,7 +118,7 @@ export async function buildChunkPieces(row: RawRow): Promise<ChunkPiece[]> {
     parts = parts.slice(0, MAX_PIECES_PER_ROW);
   }
 
-  return parts.map((part, chunkIndex) => ({
+  const pieces = parts.map((part, chunkIndex) => ({
     chunkIndex,
     chunkText: [
       row.topic ? `Topic: ${row.topic}` : null,
@@ -120,6 +130,7 @@ export async function buildChunkPieces(row: RawRow): Promise<ChunkPiece[]> {
       .join('\n')
       .trim(),
   }));
+  return { pieces, splitInto };
 }
 
 function normaliseKey(k: string): string {
@@ -176,7 +187,14 @@ export function parseExcel(buffer: Buffer): RawRow[] {
 
   if (rawRows.length === 0) throw new AppError('Excel file is empty', 400);
 
-  const rows = rawRows.map(normaliseRow);
+  // The real 1-based spreadsheet row of each record (sheet_to_json skips blank
+  // rows, so the array index alone is wrong once there is a gap).
+  const rows = rawRows.map(r => {
+    const n = normaliseRow(r);
+    const rowNum = (r as { __rowNum__?: number }).__rowNum__;
+    if (typeof rowNum === 'number') Object.defineProperty(n, SHEET_ROW, { value: rowNum + 1, enumerable: false });
+    return n;
+  });
 
   // Validate required columns exist in first row
   const first = rows[0];
@@ -192,21 +210,30 @@ export function parseExcel(buffer: Buffer): RawRow[] {
   return rows;
 }
 
+export interface SkippedRow { sheetRow: number; reason: 'EMPTY_QUESTION' | 'EMPTY_ANSWER' }
+
 // Validates the parsed rows and converts them to the normalised shape the
 // dataset planner works on. Rows with an empty question or answer are skipped
-// (logged), exactly as before. `sheetRow` is the 1-based spreadsheet row
-// (header = row 1) so error messages can point at the right line.
+// (logged, and returned in `skipped` so the upload preview can show them).
+// `sheetRow` is the 1-based spreadsheet row (header = row 1) so messages can
+// point at the right line.
 export function toFileRows(rows: RawRow[]): FileRow[] {
+  return toFileRowsReport(rows).rows;
+}
+
+export function toFileRowsReport(rows: RawRow[]): { rows: FileRow[]; skipped: SkippedRow[] } {
   const out: FileRow[] = [];
+  const skipped: SkippedRow[] = [];
   const clean = (v: unknown): string | null => String(v ?? '').trim() || null;
   rows.forEach((row, i) => {
+    const sheetRow = (row as { [SHEET_ROW]?: number })[SHEET_ROW] ?? i + 2;
     const q = String(row.question ?? '').trim();
     const a = String(row.answer   ?? '').trim();
-    if (!q) { logger.warn(`[DATASET] ⚠️  Skipping row ${i + 2}: empty question`); return; }
-    if (!a) { logger.warn(`[DATASET] ⚠️  Skipping row ${i + 2}: empty answer`);   return; }
+    if (!q) { logger.warn(`[DATASET] ⚠️  Skipping row ${sheetRow}: empty question`); skipped.push({ sheetRow, reason: 'EMPTY_QUESTION' }); return; }
+    if (!a) { logger.warn(`[DATASET] ⚠️  Skipping row ${sheetRow}: empty answer`);   skipped.push({ sheetRow, reason: 'EMPTY_ANSWER' });   return; }
     out.push({
       qaId:       clean(row.qa_id),
-      sheetRow:   i + 2,
+      sheetRow,
       topic:      clean(row.topic),
       question:   q,
       answer:     a,
@@ -216,7 +243,7 @@ export function toFileRows(rows: RawRow[]): FileRow[] {
       llm_name:   clean(row.llm_name),
     });
   });
-  return out;
+  return { rows: out, skipped };
 }
 
 // Full pipeline: parse → plan against the active dataset → build a new

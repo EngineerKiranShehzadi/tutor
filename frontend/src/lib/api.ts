@@ -67,7 +67,12 @@ export type DatasetMode = 'MERGE' | 'REPLACE';
 
 export interface DatasetPreview {
   mode: DatasetMode;
-  rowsInFile: number;
+  rowsInFile: number;    // data rows in the sheet, before skipping
+  rowsUsed?: number;     // rows that became Q&As
+  skippedRows?: number;  // empty question/answer → ignored
+  skippedSamples?: { sheetRow: number; reason: 'EMPTY_QUESTION' | 'EMPTY_ANSWER' }[];
+  truncatedRows?: number; // answer longer than the piece cap → the rest is dropped
+  truncatedSamples?: { sheetRow: number; question: string; pieces: number; kept: number }[];
   added: number;
   updated: number;
   unchanged: number;

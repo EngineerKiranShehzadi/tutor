@@ -88,6 +88,13 @@ export const env = {
   // other value is passed to Express as-is (e.g. 'loopback'). Default: 1 hop in
   // production, none otherwise. Do not trust hops you don't have — clients
   // could then pick their own IP via X-Forwarded-For.
+  // GraphQL: schema introspection is on outside production only; every
+  // operation is rejected beyond these limits (graphql/query-limits.ts).
+  GRAPHQL: {
+    INTROSPECTION: optional('GRAPHQL_INTROSPECTION', optional('NODE_ENV', 'development') === 'production' ? 'false' : 'true') === 'true',
+    MAX_DEPTH:  Math.max(1, parseInt(optional('GRAPHQL_MAX_DEPTH', '10'), 10) || 10),
+    MAX_FIELDS: Math.max(1, parseInt(optional('GRAPHQL_MAX_FIELDS', '200'), 10) || 200),
+  },
   TRUST_PROXY: ((): boolean | number | string => {
     const raw = optional('TRUST_PROXY', optional('NODE_ENV', 'development') === 'production' ? '1' : 'false').trim();
     if (raw === 'false' || raw === '0' || raw === '') return false;

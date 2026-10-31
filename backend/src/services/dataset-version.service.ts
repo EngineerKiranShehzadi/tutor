@@ -9,7 +9,7 @@ import {
   EmbeddingUnavailableError, EmbeddingRateLimitedError, EmbeddingQuotaExceededError,
 } from './embedding.service';
 import { env } from '../config/env';
-import { parseExcel, toFileRows, buildChunkPieces, CHUNKING_CONFIG_VERSION } from './chunk.service';
+import { parseExcel, toFileRowsReport, buildChunkPiecesReport, CHUNKING_CONFIG_VERSION, MAX_PIECES_PER_ROW, SkippedRow } from './chunk.service';
 import { getLectureById, updateLectureProgress, updateLectureStatus } from './lecture.service';
 import { matchRows, fieldsEqual, findPossibleDuplicates, PossibleDuplicate, ActiveQa, QaFields, FileRow } from './dataset-plan';
 
@@ -50,7 +50,17 @@ const EXPECTED_DIMS = 1024;
 
 export interface UpdatePreview {
   mode: DatasetMode;
+  // Data rows in the sheet (header excluded), BEFORE any row is skipped.
   rowsInFile: number;
+  // Rows that became Q&As (rowsInFile - skippedRows).
+  rowsUsed: number;
+  // Rows ignored because the question or answer cell is empty.
+  skippedRows: number;
+  skippedSamples: SkippedRow[];
+  // Rows whose answer is so long it splits into more than MAX_PIECES_PER_ROW
+  // pieces: only the first MAX_PIECES_PER_ROW are kept, the rest is dropped.
+  truncatedRows: number;
+  truncatedSamples: { sheetRow: number; question: string; pieces: number; kept: number }[];
   added: number;
   updated: number;
   unchanged: number;
@@ -185,7 +195,8 @@ const planUpdate = async (
   mode: DatasetMode,
   fileHash: string,
   filename: string | null,
-  fileHasQaIdColumn: boolean
+  fileHasQaIdColumn: boolean,
+  intake: { rowsInSheet: number; skipped: SkippedRow[] } = { rowsInSheet: fileRows.length, skipped: [] }
 ): Promise<Plan> => {
   const { versionId, chunks } = await loadActiveChunks(lectureId);
 
@@ -209,15 +220,19 @@ const planUpdate = async (
   let added = 0, updated = 0, unchanged = 0;
   const addedRows: FileRow[] = [];
   const matchedQaIds = new Set<string>();
+  const truncated: UpdatePreview['truncatedSamples'] = [];
 
   for (let i = 0; i < fileRows.length; i++) {
     const row = fileRows[i];
     const m = matches[i];
     matchedQaIds.add(m.qaId);
     const old = oldByQa.get(m.qaId) ?? [];
-    const pieces = await buildChunkPieces({
+    const { pieces, splitInto } = await buildChunkPiecesReport({
       topic: row.topic ?? undefined, question: row.question, answer: row.answer, keywords: row.keywords ?? undefined,
     });
+    if (splitInto > MAX_PIECES_PER_ROW) {
+      truncated.push({ sheetRow: row.sheetRow, question: row.question.slice(0, 200), pieces: splitInto, kept: MAX_PIECES_PER_ROW });
+    }
 
     let allReused = true;
     for (const piece of pieces) {
@@ -275,7 +290,12 @@ const planUpdate = async (
 
   const preview: UpdatePreview = {
     mode,
-    rowsInFile: fileRows.length,
+    rowsInFile: intake.rowsInSheet,
+    rowsUsed: fileRows.length,
+    skippedRows: intake.skipped.length,
+    skippedSamples: intake.skipped.slice(0, 20),
+    truncatedRows: truncated.length,
+    truncatedSamples: truncated.slice(0, 20),
     added, updated, unchanged,
     carriedOver: carriedQaIds.length,
     reembeddedForModel,
@@ -431,10 +451,11 @@ export async function prepareDatasetVersion(
   logger.info(`[DATASET] 🚀 Preparing ${mode} update for lecture #${lectureId}`);
   const rawRows = parseExcel(buffer);
   const fileHasQaIdColumn = rawRows.length > 0 && 'qa_id' in rawRows[0];
-  const fileRows = toFileRows(rawRows);
+  const { rows: fileRows, skipped } = toFileRowsReport(rawRows);
   if (fileRows.length === 0) throw new AppError('No valid rows found in the dataset', 400);
 
-  const plan = await planUpdate(lectureId, fileRows, mode, sha256(buffer), opts.filename ?? null, fileHasQaIdColumn);
+  const plan = await planUpdate(lectureId, fileRows, mode, sha256(buffer), opts.filename ?? null, fileHasQaIdColumn,
+    { rowsInSheet: rawRows.length, skipped });
   const p = plan.preview;
 
   if (opts.dryRun) return { kind: 'DRY_RUN', preview: p };
@@ -446,23 +467,11 @@ export async function prepareDatasetVersion(
   }
 
   const firstVersion = plan.activeVersionId === null;
-  const previousStatus = firstVersion ? (await getLectureById(lectureId)).status : null;
   if (opts.beforeBuild) await opts.beforeBuild({ firstVersion });
-  let built: { versionId: number; versionNo: number };
-  try {
-    built = await buildVersion(plan);
-  } catch (err) {
-    // beforeBuild may have moved a dataset-less lecture to DATASET_UPLOADED; if
-    // the build never started, put the status back instead of leaving it stuck.
-    if (previousStatus !== null && previousStatus !== 'DATASET_UPLOADED') {
-      await query(
-        `UPDATE lectures SET status = $2, updated_at = NOW() WHERE id = $1 AND status = 'DATASET_UPLOADED' AND active_version_id IS NULL`,
-        [lectureId, previousStatus]
-      ).catch(() => undefined);
-    }
-    throw err;
-  }
-  const { versionId, versionNo } = built;
+  // Every lecture status change of an upload happens inside buildVersion's
+  // transaction, under the lecture lock and after the "dataset changed
+  // meanwhile" check — so a refused build changes nothing at all.
+  const { versionId, versionNo } = await buildVersion(plan);
   return { kind: 'CREATED', versionId, versionNo, preview: p };
 }
 
@@ -915,7 +924,26 @@ export async function cancelDatasetBuild(lectureId: number): Promise<{ versionId
 // Server start: continue any version that was mid-build when the process
 // died. Safe to call repeatedly — finishDatasetVersion only embeds chunks that
 // still have no vector, and a version already being worked on is skipped.
+// A lecture that has an active version is serving it, and its status must say
+// READY (only a lecture with NO active version shows the upload/failed states).
+// Repairs lectures left in a stale state, e.g. by the pre-A8 upload race that
+// could leave one at DATASET_UPLOADED with a live dataset (chat gated off, no
+// error shown). Safe to run any time.
+export async function reconcileLectureStatuses(): Promise<number[]> {
+  const { rows } = await query<{ id: number; status: string }>(
+    `UPDATE lectures l SET status = 'READY', updated_at = NOW()
+     FROM (SELECT id, status FROM lectures
+           WHERE active_version_id IS NOT NULL AND status IN ('DATASET_UPLOADED','PROCESSING','EMBEDDING','FAILED')
+           FOR UPDATE) old
+     WHERE l.id = old.id
+     RETURNING l.id, old.status`
+  );
+  for (const r of rows) logger.warn(`[DATASET] 🩹 Lecture #${r.id}: status ${r.status} → READY (it has a live dataset version)`);
+  return rows.map(r => r.id);
+}
+
 export async function resumePendingVersions(deps: FinishDeps = {}): Promise<number[]> {
+  await reconcileLectureStatuses().catch(err => logger.warn(`[DATASET] status reconcile failed: ${(err as Error).message}`));
   const { rows } = await query<{ id: number; lecture_id: number }>(
     `SELECT id, lecture_id FROM dataset_versions WHERE status IN ('BUILDING','READY_TO_ACTIVATE') ORDER BY id`
   );
@@ -957,8 +985,9 @@ const purgeVersions = async (client: PoolClient, versionIds: number[]): Promise<
       `DELETE FROM lecture_qna_chunks c
        WHERE c.id = ANY($1::int[])
          AND NOT EXISTS (SELECT 1 FROM dataset_version_chunks d WHERE d.chunk_id = c.id)
-         AND NOT EXISTS (SELECT 1 FROM chat_history h WHERE c.id = ANY(h.source_chunk_ids))
-         AND NOT EXISTS (SELECT 1 FROM rag_answer_memory m WHERE c.id = ANY(m.source_chunk_ids))`,
+         -- '@> ARRAY[id]' (not 'id = ANY(...)') so the GIN indexes of migration 014 apply.
+         AND NOT EXISTS (SELECT 1 FROM chat_history h WHERE h.source_chunk_ids @> ARRAY[c.id])
+         AND NOT EXISTS (SELECT 1 FROM rag_answer_memory m WHERE m.source_chunk_ids @> ARRAY[c.id])`,
       [chunkIds]
     );
     await client.query(

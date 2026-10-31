@@ -53,29 +53,68 @@ export const getQuestionsPerLecture = async () => {
   }));
 };
 
-export const getRecentQuestions = async (limit = 10000) => {
-  logger.info(`[ANALYTICS] getRecentQuestions: fetching up to ${limit} questions`);
-  const { rows } = await query<{
-    id: number; name: string; email: string; title: string; question: string; created_at: Date;
-  }>(
-    `SELECT sq.id, u.name, u.email, l.title, sq.question, sq.created_at
-     FROM student_questions sq
-     JOIN users u ON u.id = sq.student_id
-     JOIN lectures l ON l.id = sq.lecture_id
-     ORDER BY sq.created_at DESC
-     LIMIT $1`,
-    [limit]
-  );
-  logger.info(`[ANALYTICS] recentQuestions: returned ${rows.length} question(s)`);
-  return rows.map(r => ({
-    id:           r.id,
-    studentName:  r.name,
-    studentEmail: r.email,
-    lectureTitle: r.title,
-    question:     r.question,
-    createdAt:    r.created_at.toISOString(),
-  }));
+// Student questions include names and e-mails, so they are only ever served a
+// page at a time (A11): the list returns at most RECENT_QUESTIONS_MAX, a page at
+// most RECENT_QUESTIONS_PAGE_MAX rows.
+export const RECENT_QUESTIONS_MAX = 100;
+export const RECENT_QUESTIONS_PAGE_MAX = 200;
+
+const clampInt = (v: unknown, def: number, min: number, max: number): number => {
+  const n = typeof v === 'number' && Number.isFinite(v) ? Math.trunc(v) : def;
+  return Math.min(max, Math.max(min, n));
 };
+
+export interface RecentQuestionsFilter { limit?: number | null; offset?: number | null; search?: string | null; lectureId?: number | null }
+
+export const getRecentQuestionsPage = async (f: RecentQuestionsFilter) => {
+  const limit = clampInt(f.limit, 20, 1, RECENT_QUESTIONS_PAGE_MAX);
+  const offset = clampInt(f.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+  const search = (f.search ?? '').trim().slice(0, 200);
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (search) {
+    // LIKE wildcards in the search text are matched literally.
+    params.push(`%${search.replace(/[\\%_]/g, '\\$&')}%`);
+    where.push(`(sq.question ILIKE $${params.length} OR u.name ILIKE $${params.length})`);
+  }
+  if (typeof f.lectureId === 'number') {
+    params.push(f.lectureId);
+    where.push(`sq.lecture_id = $${params.length}`);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const from = `FROM student_questions sq
+     JOIN users u ON u.id = sq.student_id
+     JOIN lectures l ON l.id = sq.lecture_id`;
+
+  const [{ rows }, { rows: cnt }] = await Promise.all([
+    query<{ id: number; name: string; email: string; lecture_id: number; title: string; question: string; created_at: Date }>(
+      `SELECT sq.id, u.name, u.email, sq.lecture_id, l.title, sq.question, sq.created_at
+       ${from} ${whereSql}
+       ORDER BY sq.created_at DESC, sq.id DESC
+       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, limit, offset]
+    ),
+    query<{ n: string }>(`SELECT COUNT(*) AS n ${from} ${whereSql}`, params),
+  ]);
+  const total = Number(cnt[0]?.n ?? 0);
+  logger.info(`[ANALYTICS] recentQuestionsPage: ${rows.length} of ${total} (offset ${offset}${search ? ', search' : ''}${f.lectureId != null ? `, lecture #${f.lectureId}` : ''})`);
+  return {
+    items: rows.map(r => ({
+      id:           r.id,
+      studentName:  r.name,
+      studentEmail: r.email,
+      lectureId:    r.lecture_id,
+      lectureTitle: r.title,
+      question:     r.question,
+      createdAt:    r.created_at.toISOString(),
+    })),
+    total,
+    hasMore: offset + rows.length < total,
+  };
+};
+
+export const getRecentQuestions = async (limit?: number | null) =>
+  (await getRecentQuestionsPage({ limit: clampInt(limit, 10, 1, RECENT_QUESTIONS_MAX), offset: 0 })).items;
 
 export const getLectureStatusList = async () => {
   logger.info('[ANALYTICS] getLectureStatusList: fetching all lecture statuses');
@@ -144,7 +183,11 @@ export const getLectureAgentDetails = async () => {
     chatReady: r.status === 'READY' && r.profile_is_active === true && (readiness.get(r.id)?.ready ?? false),
     // Why the dataset is not ready (null when it is) — shown for lectures that
     // are READY by status but cannot serve chat.
-    notReadyReason: readiness.get(r.id)?.ready ? null : (readiness.get(r.id)?.reason ?? 'LECTURE_NOT_FOUND'),
+    // A ready dataset behind a non-READY status (should not happen; repaired
+    // at startup) is reported too, so chat being off is never unexplained.
+    notReadyReason: readiness.get(r.id)?.ready
+      ? (r.status === 'READY' ? null : `STATUS_NOT_READY: the dataset is live but the lecture status is ${r.status}`)
+      : (readiness.get(r.id)?.reason ?? 'LECTURE_NOT_FOUND'),
   }));
 };
 

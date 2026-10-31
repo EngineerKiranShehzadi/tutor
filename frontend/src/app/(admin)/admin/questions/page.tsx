@@ -1,53 +1,89 @@
 'use client';
-import { useState } from 'react';
-import { useQuery } from '@apollo/client';
-import { GET_RECENT_QUESTIONS } from '@/graphql/analytics.queries';
+import { useEffect, useState } from 'react';
+import { useApolloClient, useQuery } from '@apollo/client';
+import { GET_LECTURE_STATUS_LIST, GET_RECENT_QUESTIONS_PAGE } from '@/graphql/analytics.queries';
 import { AdminPageHero } from '@/components/admin/AdminPageHero';
+import { downloadCsv } from '@/lib/csv';
 
 interface RecentQuestion {
   id: number;
   studentName: string;
   studentEmail: string;
+  lectureId: number;
   lectureTitle: string;
   question: string;
   createdAt: string;
 }
 
-const PAGE_SIZE = 10;
+interface QuestionPage { items: RecentQuestion[]; total: number; hasMore: boolean }
 
-function exportCSV(questions: RecentQuestion[]) {
-  const rows = [['Student', 'Email', 'Lecture', 'Question', 'Date']];
-  questions.forEach(q =>
-    rows.push([q.studentName, q.studentEmail, q.lectureTitle, q.question, new Date(q.createdAt).toLocaleString()])
-  );
-  const csv = rows.map(r => r.map(c => `"${c.replace(/"/g, '""')}"`).join(',')).join('\n');
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-  a.download = 'student-questions.csv';
-  a.click();
+const PAGE_SIZE = 10;
+// Export pages through the same server API, 200 rows at a time.
+const EXPORT_PAGE = 200;
+const EXPORT_MAX = 20_000;
+
+// Page buttons around the current one, with the first and last always shown.
+function pageWindow(page: number, total: number): (number | '…')[] {
+  const pages = new Set([1, total, page - 2, page - 1, page, page + 1, page + 2].filter(p => p >= 1 && p <= total));
+  const sorted = [...pages].sort((a, b) => a - b);
+  const out: (number | '…')[] = [];
+  sorted.forEach((p, i) => { if (i > 0 && p - sorted[i - 1] > 1) out.push('…'); out.push(p); });
+  return out;
 }
 
 export default function AdminQuestions() {
-  const { data, loading } = useQuery(GET_RECENT_QUESTIONS, { fetchPolicy: 'network-only' });
-  const questions: RecentQuestion[] = data?.recentQuestions ?? [];
-
+  const client = useApolloClient();
+  const [searchInput,   setSearchInput]   = useState('');
   const [search,        setSearch]        = useState('');
   const [lectureFilter, setLectureFilter] = useState('ALL');
   const [page,          setPage]          = useState(1);
+  const [exporting,     setExporting]     = useState(false);
+  const [exportError,   setExportError]   = useState('');
 
-  const lectures = Array.from(new Set(questions.map(q => q.lectureTitle))).sort();
+  // Search runs on the server; wait for a pause in typing.
+  useEffect(() => {
+    const t = setTimeout(() => { setSearch(searchInput.trim()); setPage(1); }, 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
 
-  const filtered = questions.filter(q => {
-    const matchSearch  = !search || q.question.toLowerCase().includes(search.toLowerCase()) || q.studentName.toLowerCase().includes(search.toLowerCase());
-    const matchLecture = lectureFilter === 'ALL' || q.lectureTitle === lectureFilter;
-    return matchSearch && matchLecture;
+  const lectureId = lectureFilter === 'ALL' ? null : Number(lectureFilter);
+  const filters = { search: search || null, lectureId };
+  const { data, loading } = useQuery<{ recentQuestionsPage: QuestionPage }>(GET_RECENT_QUESTIONS_PAGE, {
+    variables: { limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE, ...filters },
+    fetchPolicy: 'network-only',
   });
+  const { data: lectureData } = useQuery<{ lectureStatusList: { id: number; title: string }[] }>(GET_LECTURE_STATUS_LIST);
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const paged = data?.recentQuestionsPage.items ?? [];
+  const total = data?.recentQuestionsPage.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const lectures = [...(lectureData?.lectureStatusList ?? [])].sort((a, b) => a.title.localeCompare(b.title));
+  const filtering = !!search || lectureFilter !== 'ALL';
 
-  const handleSearch = (val: string) => { setSearch(val); setPage(1); };
   const handleLecture = (val: string) => { setLectureFilter(val); setPage(1); };
+
+  // Every question matching the current filters, fetched page by page.
+  const exportCSV = async () => {
+    setExporting(true); setExportError('');
+    try {
+      const rows: unknown[][] = [['Student', 'Email', 'Lecture', 'Question', 'Date']];
+      for (let offset = 0; offset < EXPORT_MAX; offset += EXPORT_PAGE) {
+        const { data: d } = await client.query<{ recentQuestionsPage: QuestionPage }>({
+          query: GET_RECENT_QUESTIONS_PAGE,
+          variables: { limit: EXPORT_PAGE, offset, ...filters },
+          fetchPolicy: 'network-only',
+        });
+        d.recentQuestionsPage.items.forEach(q =>
+          rows.push([q.studentName, q.studentEmail, q.lectureTitle, q.question, new Date(q.createdAt).toLocaleString()]));
+        if (!d.recentQuestionsPage.hasMore) break;
+      }
+      downloadCsv('student-questions.csv', rows);
+    } catch {
+      setExportError('Export failed. Please try again.');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   return (
     <div className="max-w-[1500px]">
@@ -55,14 +91,14 @@ export default function AdminQuestions() {
         icon="fas fa-comments"
         iconGradient="from-amber-500 to-orange-600"
         title="Student Questions"
-        subtitle={loading ? 'Loading…' : `${questions.length} question${questions.length !== 1 ? 's' : ''} asked`}
+        subtitle={loading && !data ? 'Loading…' : `${total} question${total !== 1 ? 's' : ''}${filtering ? ' match' : ' asked'}`}
         action={
           <button
-            onClick={() => exportCSV(filtered)}
-            disabled={loading || filtered.length === 0}
+            onClick={() => { void exportCSV(); }}
+            disabled={loading || exporting || total === 0}
             className="flex items-center gap-2 px-4 py-2.5 bg-white/15 text-white border border-white/25 backdrop-blur-sm rounded-xl text-[14px] font-semibold hover:bg-white/25 transition-all disabled:opacity-40"
           >
-            <i className="fas fa-download text-[12px]" /> Export CSV
+            <i className={`fas ${exporting ? 'fa-spinner fa-spin' : 'fa-download'} text-[12px]`} /> {exporting ? 'Exporting…' : 'Export CSV'}
           </button>
         }
       />
@@ -72,8 +108,8 @@ export default function AdminQuestions() {
         <div className="flex-1 relative">
           <i className="fas fa-search absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-[13px]" />
           <input
-            value={search}
-            onChange={e => handleSearch(e.target.value)}
+            value={searchInput}
+            onChange={e => setSearchInput(e.target.value)}
             placeholder="Search by question or student name…"
             className="w-full pl-9 pr-4 py-3 bg-white border border-slate-200 rounded-xl text-[14px] text-slate-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all"
           />
@@ -84,11 +120,13 @@ export default function AdminQuestions() {
           className="px-4 py-3 bg-white border border-slate-200 rounded-xl text-[14px] text-slate-700 outline-none focus:border-indigo-400 transition-all min-w-[180px]"
         >
           <option value="ALL">All lectures</option>
-          {lectures.map(l => <option key={l} value={l}>{l}</option>)}
+          {lectures.map(l => <option key={l.id} value={String(l.id)}>{l.title}</option>)}
         </select>
       </div>
 
-      {loading ? (
+      {exportError && <p className="text-[14px] text-red-600 mb-3">{exportError}</p>}
+
+      {loading && !data ? (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
           {[1, 2, 3, 4].map((i) => (
             <div key={i} className="flex gap-4 px-6 py-5 border-b border-slate-100 last:border-0">
@@ -103,16 +141,16 @@ export default function AdminQuestions() {
             </div>
           ))}
         </div>
-      ) : filtered.length === 0 ? (
+      ) : total === 0 ? (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col items-center justify-center py-20 text-slate-400">
           <div className="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center mb-4">
             <i className="fas fa-comments text-2xl text-slate-400" />
           </div>
           <p className="text-[17px] font-semibold text-slate-600">
-            {search || lectureFilter !== 'ALL' ? 'No matching questions' : 'No questions yet'}
+            {filtering ? 'No matching questions' : 'No questions yet'}
           </p>
           <p className="text-[14px] mt-1">
-            {search || lectureFilter !== 'ALL' ? 'Try adjusting your filters.' : 'Questions asked by students via the AI tutor will appear here.'}
+            {filtering ? 'Try adjusting your filters.' : 'Questions asked by students via the AI tutor will appear here.'}
           </p>
         </div>
       ) : (
@@ -160,14 +198,16 @@ export default function AdminQuestions() {
 
           {/* Footer */}
           <div className="px-6 py-3.5 border-t border-slate-100 bg-slate-50/50 flex flex-col items-center gap-2">
-            <span className="text-[13px] text-slate-400">{filtered.length} question{filtered.length !== 1 ? 's' : ''}</span>
+            <span className="text-[13px] text-slate-400">{total} question{total !== 1 ? 's' : ''}</span>
             {totalPages > 1 && (
               <div className="flex items-center gap-1.5">
                 <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
                   className="w-8 h-8 rounded-lg border border-slate-200 flex items-center justify-center text-slate-500 hover:bg-slate-100 disabled:opacity-30 text-[12px]">
                   <i className="fas fa-chevron-left" />
                 </button>
-                {Array.from({ length: totalPages }, (_, i) => i + 1).map(p => (
+                {pageWindow(page, totalPages).map((p, i) => p === '…' ? (
+                  <span key={`gap-${i}`} className="w-8 text-center text-slate-400 text-[13px]">…</span>
+                ) : (
                   <button key={p} onClick={() => setPage(p)}
                     className={`w-8 h-8 rounded-lg text-[13px] font-semibold border transition-colors ${p === page ? 'bg-indigo-600 text-white border-indigo-600' : 'border-slate-200 text-slate-600 hover:bg-slate-100'}`}>
                     {p}

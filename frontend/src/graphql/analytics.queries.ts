@@ -22,14 +22,33 @@ export const GET_QUESTIONS_PER_LECTURE = gql`
 `;
 
 export const GET_RECENT_QUESTIONS = gql`
-  query RecentQuestions {
-    recentQuestions {
+  query RecentQuestions($limit: Int) {
+    recentQuestions(limit: $limit) {
       id
       studentName
       studentEmail
       lectureTitle
       question
       createdAt
+    }
+  }
+`;
+
+// One page of student questions, filtered on the server (A11).
+export const GET_RECENT_QUESTIONS_PAGE = gql`
+  query RecentQuestionsPage($limit: Int!, $offset: Int!, $search: String, $lectureId: Int) {
+    recentQuestionsPage(limit: $limit, offset: $offset, search: $search, lectureId: $lectureId) {
+      items {
+        id
+        studentName
+        studentEmail
+        lectureId
+        lectureTitle
+        question
+        createdAt
+      }
+      total
+      hasMore
     }
   }
 `;

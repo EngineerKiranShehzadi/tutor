@@ -7,6 +7,90 @@ Newest entry at the top.
 
 ---
 
+## 2026-10-31 — Admin/dataset fixes, batch 3: honest preview, upload status race, CSV injection, migrations, PII paging, GraphQL limits, CSP, indexed purge (A7–A14)
+
+**Changed by:** Kiran
+**Files:** `backend/src/services/{chunk,dataset-version,analytics}.service.ts`,
+`backend/src/controllers/dataset.controller.ts`, `backend/src/graphql/{index,typeDefs,query-limits}.ts`
+(query-limits new), `backend/src/graphql/resolvers/analytics.resolver.ts`, `backend/src/config/env.ts`,
+`backend/src/scripts/db-setup.ts`, `backend/src/db/migrate.sql`,
+`backend/src/db/migrations/014_source_chunk_ids_gin.sql` (new), `backend/package.json`, `backend/.env.example`,
+`frontend/next.config.mjs`, `frontend/src/lib/csv.ts` (new), `frontend/src/lib/api.ts`,
+`frontend/src/components/admin/DatasetManager.tsx`, `frontend/src/graphql/analytics.queries.ts`,
+`frontend/src/app/(admin)/admin/{questions,users,students,dashboard}/page.tsx`, tests in `backend/src/scripts/`
+
+**Deploy note:** run `npm run db:setup` (or `db:migrate`, now the same thing) to
+apply migration `014`. The first run on an existing database creates the
+`schema_migrations` ledger and re-applies every numbered migration once; they are
+all idempotent. After that, files that are already applied are skipped.
+
+- **A7 — the preview under-reported.**
+  - Rows with an empty question or answer are now listed in the preview, with
+    their real spreadsheet row; blank rows in between no longer shift the
+    numbers.
+  - Answers cut to 20 pieces are listed too: row, question, how many pieces,
+    how many kept.
+  - `rowsInFile` is the sheet's data-row count, and `rowsUsed` is what became
+    Q&As. The dataset manager shows both warnings and "N rows in file · M used".
+- **A8 — a lecture could be stuck at DATASET_UPLOADED with a live dataset.**
+  - The upload no longer changes the lecture status outside the build
+    transaction. `buildVersion` already sets a first-ever lecture to EMBEDDING
+    inside its transaction, under the lecture lock, so a refused build changes
+    nothing. The old status-restore code is gone.
+  - `reconcileLectureStatuses()` runs at startup and in the periodic sweep. It
+    sets any lecture that has a live version but a stale status back to READY.
+  - The admin lecture list reports `STATUS_NOT_READY: …` instead of a blank
+    reason.
+- **A9 — CSV formula injection.** New shared `frontend/src/lib/csv.ts`. Every
+  cell is quoted with quotes doubled. Cells starting with `= + - @`, tab or CR
+  get a leading apostrophe. Files have a UTF-8 BOM so Excel shows non-ASCII
+  names correctly. The users, students and questions exports all use it.
+- **A10 — migrations.**
+  - `npm run db:migrate` now runs the full setup sequence instead of only
+    `schema.sql`.
+  - Numbered migrations are recorded in a `schema_migrations` ledger (file name
+    and checksum). Each file and its ledger row commit together.
+  - The "Previous Chats" backfill in `migrate.sql` no longer adds a session per
+    re-run, and removes empty duplicates that earlier re-runs left.
+- **A11 — 10,000 student-question rows with PII in one query.**
+  - `recentQuestions(limit)` now honours `limit`: default 10, at most 100.
+  - New `recentQuestionsPage(limit, offset, search, lectureId)`: at most 200
+    rows per page, with `total` and `hasMore`. Search matches `%` and `_`
+    literally.
+  - The Student Questions page pages, searches and filters on the server. Its
+    export fetches the matching rows 200 at a time.
+  - The dashboard asks for 10.
+- **A12 — GraphQL.** Introspection is off in production (`GRAPHQL_INTROSPECTION`
+  overrides). A validation rule rejects operations deeper than
+  `GRAPHQL_MAX_DEPTH` (10) or selecting more than `GRAPHQL_MAX_FIELDS` (200)
+  fields, and fragments are expanded when counting. The app's deepest query is
+  3 levels and its largest 22 fields.
+- **A13 — no CSP.** `next.config.mjs` sends a Content-Security-Policy:
+  - Allowed: `self`, the API origin, cdnjs (FontAwesome), YouTube iframes,
+    `i.ytimg.com` and `lh3.googleusercontent.com` images, and `blob:`/`data:`
+    where the app needs them.
+  - Blocked: plugins (`object-src 'none'`), framing (`frame-ancestors 'none'`),
+    and anything outside `base-uri` and `form-action`.
+  - `'unsafe-inline'` scripts are still needed by Next's inline bootstrap
+    scripts; `'unsafe-eval'` and the websocket are allowed in development only.
+- **A14 — unindexed purge checks.** Migration `014` adds GIN indexes on
+  `chat_history.source_chunk_ids` and `rag_answer_memory.source_chunk_ids`. The
+  purge asks `source_chunk_ids @> ARRAY[id]`, which can use them;
+  `id = ANY(...)` cannot.
+- **Tests:**
+  - test-dataset-pipeline: new 26a–d (preview counts with a blank-row gap, the
+    two-admin upload race, the status repair, the purge using the GIN indexes);
+    21g updated for A8.
+  - test-admin-hardening: new A9-2, A10-1..3, A11-2, A12-1..2. A12 checks all
+    39 frontend operations against the real schema and the limits.
+  - Browser check (Playwright, dev server): about 15 student and admin pages
+    with zero CSP violations. FontAwesome, YouTube and API calls work. The
+    users and questions exports neutralise a `=HYPERLINK(…)` name. Questions
+    paging and search run on the server. The upload preview shows skipped and
+    truncated rows.
+
+---
+
 ## 2026-10-31 — Admin/dataset fixes, batch 2: stuck builds, upload limits, question limits, readiness (A2, A4, A5, A6)
 
 **Changed by:** Kiran

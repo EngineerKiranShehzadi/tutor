@@ -1,5 +1,5 @@
 /**
- * Admin/production hardening, batch 2 (A4, A5, A6):
+ * Admin/production hardening, batches 2–3 (A4, A5, A6, A9, A10, A11, A12):
  *   A4  upload limits (zip bomb, lying zip, rows, columns) and the linear
  *       possible-duplicate scan (same result as the all-pairs scan)
  *   A5  trust proxy, per-student question limits on GraphQL and /chat/ask-stream
@@ -31,6 +31,15 @@ import { generateAccessToken } from '../utils/jwt';
 import { checkProviderHealth, overallStatus, requiredComponents, ComponentHealth } from '../observability/health.service';
 import { recordProviderFailure, recordProviderSuccess, resetProviderSignals } from '../observability/provider-signal';
 import { EmbeddingUnavailableError } from '../embedding/embedding-errors';
+import { mkdtempSync, writeFileSync, rmSync, statSync } from 'fs';
+import { tmpdir } from 'os';
+import { parse, validate, specifiedRules } from 'graphql';
+import { makeExecutableSchema } from '@graphql-tools/schema';
+import { ApolloServer } from '@apollo/server';
+import { applyMigrations } from './db-setup';
+import { getRecentQuestions, getRecentQuestionsPage } from '../services/analytics.service';
+import { queryLimitsRule } from '../graphql/query-limits';
+import { typeDefs } from '../graphql/typeDefs';
 
 const results: { name: string; pass: boolean; detail: string }[] = [];
 const check = (name: string, pass: boolean, detail: string) => {
@@ -318,6 +327,126 @@ const run = async () => {
       `down=${probeDown.status}/${probeDown.errorCode} ok=${probeOk.status}`);
     resetProviderSignals();
   }
+  // ── A9: CSV encoder (frontend/src/lib/csv.ts) ────────────────────────
+  {
+    // Loaded at runtime: it lives in the frontend package, outside the backend's tsc project.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { csvCell, toCsv } = require(join(__dirname, '../../../frontend/src/lib/csv')) as
+      { csvCell: (v: unknown) => string; toCsv: (rows: unknown[][]) => string };
+    const cells = ['=1+1', '+SUM(A1)', '-2+3', '@cmd', '\tTAB', '\rCR', 'plain', 'say "hi"', null, 42];
+    const out = cells.map(csvCell);
+    const expected = [`"'=1+1"`, `"'+SUM(A1)"`, `"'-2+3"`, `"'@cmd"`, `"'\tTAB"`, `"'\rCR"`, '"plain"', '"say ""hi"""', '""', '"42"'];
+    check('A9-2. CSV cells: = + - @ tab CR get a leading apostrophe; quotes are doubled; null → empty; rows joined with CRLF',
+      JSON.stringify(out) === JSON.stringify(expected) && toCsv([['a', 'b'], ['c', '=d']]) === `"a","b"\r\n"c","'=d"`,
+      `out=${JSON.stringify(out)}`);
+  }
+
+  // ── A10: migration ledger + rerun-safe backfill ──────────────────────
+  {
+    const dir = mkdtempSync(join(tmpdir(), 'mig-'));
+    const tbl = `ledger_test_${Date.now()}`;
+    writeFileSync(join(dir, '001_a.sql'), `CREATE TABLE IF NOT EXISTS ${tbl} (n INT); INSERT INTO ${tbl} VALUES (1);`);
+    writeFileSync(join(dir, '002_b.sql'), `INSERT INTO ${tbl} VALUES (2);`);
+    const r1 = await applyMigrations(dir);
+    const r2 = await applyMigrations(dir);
+    writeFileSync(join(dir, '002_b.sql'), `INSERT INTO ${tbl} VALUES (3);`);
+    const r3 = await applyMigrations(dir);
+    writeFileSync(join(dir, '003_bad.sql'), `INSERT INTO ${tbl} VALUES (4); SELECT * FROM no_such_table_xyz;`);
+    const bad = await applyMigrations(dir).then(() => null, e => e as Error);
+    const values = (await query<{ n: number }>(`SELECT n FROM ${tbl} ORDER BY n`)).rows.map(r => r.n).join(',');
+    const ledger = (await query<{ filename: string }>(`SELECT filename FROM schema_migrations WHERE filename IN ('001_a.sql','002_b.sql','003_bad.sql') ORDER BY 1`)).rows.map(r => r.filename).join(',');
+    await query(`DROP TABLE ${tbl}`);
+    await query(`DELETE FROM schema_migrations WHERE filename IN ('001_a.sql','002_b.sql','003_bad.sql')`);
+    rmSync(dir, { recursive: true, force: true });
+    check('A10-1. Ledger: new files applied once, unchanged files skipped, a changed file re-applied, a failing file rolled back and NOT recorded',
+      r1.applied.join() === '001_a.sql,002_b.sql' && r2.skipped.length === 2 && r2.applied.length === 0
+        && r3.reapplied.join() === '002_b.sql' && r3.skipped.join() === '001_a.sql'
+        && !!bad && /003_bad\.sql/.test(bad.message) && values === '1,2,3' && ledger === '001_a.sql,002_b.sql',
+      `run1=${r1.applied} run2 skipped=${r2.skipped.length} run3 reapplied=${r3.reapplied} bad="${bad?.message.slice(0, 60)}" rows=${values} ledger=${ledger}`);
+
+    const lec = (await query<{ id: number }>(`INSERT INTO lectures (title, youtube_url, youtube_video_id) VALUES ('[a10] backfill', 'https://youtu.be/xxxxxxxxxxx', 'xxxxxxxxxxx') RETURNING id`)).rows[0].id;
+    const stu = (await query<{ id: string }>(`INSERT INTO users (name, email, password_hash, is_verified, role) VALUES ('A10', $1, 'x', TRUE, 'STUDENT') RETURNING id`, [`a10-${Date.now()}@example.test`])).rows[0].id;
+    // An empty duplicate "Previous Chats" (what old re-runs left) plus an orphaned chat row.
+    await query(`INSERT INTO chat_sessions (student_id, lecture_id, title) VALUES ($1, $2, 'Previous Chats'), ($1, $2, 'Previous Chats')`, [stu, lec]);
+    await query(`INSERT INTO chat_history (student_id, lecture_id, question, answer) VALUES ($1, $2, 'old q', 'old a')`, [stu, lec]);
+    const migrateSql = readFileSync(join(__dirname, '../db/migrate.sql'), 'utf8');
+    await pool.query(migrateSql);
+    await pool.query(migrateSql);
+    const sessions = (await query<{ n: string }>(`SELECT COUNT(*) n FROM chat_sessions WHERE student_id = $1 AND lecture_id = $2 AND title = 'Previous Chats'`, [stu, lec])).rows[0].n;
+    const orphans = (await query<{ n: string }>(`SELECT COUNT(*) n FROM chat_history WHERE student_id = $1 AND session_id IS NULL`, [stu])).rows[0].n;
+    check('A10-2. migrate.sql run twice: exactly one "Previous Chats" session per student+lecture (empty duplicates removed), orphaned rows attached',
+      sessions === '1' && orphans === '0', `previousChatsSessions=${sessions} orphanRows=${orphans}`);
+    const pkg = JSON.parse(readFileSync(join(__dirname, '../../package.json'), 'utf8')) as { scripts: Record<string, string> };
+    check('A10-3. npm run db:migrate runs the full setup sequence (not only schema.sql)',
+      pkg.scripts['db:migrate'] === pkg.scripts['db:setup'] && /db-setup\.ts/.test(pkg.scripts['db:migrate']), `db:migrate="${pkg.scripts['db:migrate']}"`);
+  }
+
+  // ── A11: student questions are served a page at a time ───────────────
+  {
+    const lec = (await query<{ id: number }>(`INSERT INTO lectures (title, youtube_url, youtube_video_id) VALUES ('[a11] questions', 'https://youtu.be/xxxxxxxxxxx', 'xxxxxxxxxxx') RETURNING id`)).rows[0].id;
+    const stu = (await query<{ id: string }>(`INSERT INTO users (name, email, password_hash, is_verified, role) VALUES ('A11 Student', $1, 'x', TRUE, 'STUDENT') RETURNING id`, [`a11-${Date.now()}@example.test`])).rows[0].id;
+    await query(`INSERT INTO student_questions (student_id, lecture_id, question)
+                 SELECT $1, $2, 'bulk question ' || g FROM generate_series(1, 260) g`, [stu, lec]);
+    await query(`INSERT INTO student_questions (student_id, lecture_id, question) VALUES ($1, $2, 'what is 100% accuracy?'), ($1, $2, 'what is 100 accuracy?')`, [stu, lec]);
+    const list = await getRecentQuestions(undefined);
+    const huge = await getRecentQuestions(10000);
+    const page = await getRecentQuestionsPage({ limit: 10000, offset: 0, lectureId: lec });
+    const pct = await getRecentQuestionsPage({ limit: 50, offset: 0, search: '100%', lectureId: lec });
+    const last = await getRecentQuestionsPage({ limit: 200, offset: 200, lectureId: lec });
+    check('A11-2. recentQuestions: default 10, capped at 100; a page is capped at 200 with the full total; "%" in search is literal; hasMore is right',
+      list.length === 10 && huge.length === 100 && page.items.length === 200 && page.total === 262 && page.hasMore
+        && pct.total === 1 && pct.items[0].question === 'what is 100% accuracy?' && last.items.length === 62 && !last.hasMore,
+      `default=${list.length} asked10000→${huge.length} page=${page.items.length}/${page.total} search"100%"→${pct.total} lastPage=${last.items.length} hasMore=${last.hasMore}`);
+  }
+
+  // ── A12: GraphQL limits and introspection ────────────────────────────
+  {
+    const schema = makeExecutableSchema({ typeDefs });
+    const rule = queryLimitsRule({ maxDepth: env.GRAPHQL.MAX_DEPTH, maxFields: env.GRAPHQL.MAX_FIELDS });
+    const errs = (q: string) => validate(schema, parse(q), [...specifiedRules, rule]).map(e => e.message);
+    const wide = `query { ${Array.from({ length: env.GRAPHQL.MAX_FIELDS + 1 }, (_, i) => `f${i}: lectureStatusList { id }`).join(' ')} }`;
+    const tooDeep = queryLimitsRule({ maxDepth: 2, maxFields: 1000 });
+    // A real 3-level query (paginatedChatHistory → entries → sources) against a 2-level limit.
+    const deepQ = `query { paginatedChatHistory(lectureId: 1, limit: 1, offset: 0) { entries { sources { id } } } }`;
+    const fragQ = `fragment E on ChatHistoryEntry { sources { id } } query { paginatedChatHistory(lectureId: 1, limit: 1, offset: 0) { entries { ...E } } }`;
+    const schemaOk = validate(schema, parse(deepQ)).length === 0 && validate(schema, parse(fragQ)).length === 0;
+    const deepErrs = validate(schema, parse(deepQ), [tooDeep]).map(e => e.message);
+    const fragDeepErrs = validate(schema, parse(fragQ), [tooDeep]).map(e => e.message);
+    const wideErrs = errs(wide);
+
+    // Every operation the frontend actually sends is valid against the schema AND inside the limits.
+    const walkDir = (d: string): string[] => readdirSync(d).flatMap(f => { const p = join(d, f); return statSync(p).isDirectory() ? walkDir(p) : /\.(ts|tsx)$/.test(f) ? [p] : []; });
+    const problems: string[] = []; let ops = 0;
+    for (const file of walkDir(join(__dirname, '../../../frontend/src'))) {
+      for (const m of readFileSync(file, 'utf8').matchAll(/gql`([\s\S]*?)`/g)) {
+        if (m[1].includes('${')) continue;
+        ops++;
+        for (const e of validate(schema, parse(m[1]), [...specifiedRules, rule])) problems.push(`${file.split('/frontend/')[1]}: ${e.message}`);
+      }
+    }
+    check('A12-1. Query limits: too deep (also through a fragment) and too many fields are rejected; all frontend operations pass schema validation and the limits',
+      schemaOk && deepErrs.some(m => /too deep/.test(m)) && fragDeepErrs.some(m => /too deep/.test(m)) && wideErrs.some(m => /too many fields/.test(m))
+        && ops > 20 && problems.length === 0,
+      `deep=${deepErrs[0]} viaFragment=${fragDeepErrs[0]} wide=${wideErrs.find(m => /too many/.test(m))} frontendOps=${ops} problems=${problems.slice(0, 3).join(' | ') || 'none'}`);
+
+    const server = new ApolloServer({ typeDefs, resolvers: {}, introspection: false, validationRules: [rule] });
+    await server.start();
+    const intro = await server.executeOperation({ query: '{ __schema { types { name } } }' });
+    await server.stop();
+    const introErr = intro.body.kind === 'single' ? intro.body.singleResult.errors?.[0]?.message ?? '' : '';
+    const probe = (extra: Record<string, string>) => {
+      const e = { ...process.env, ...extra };
+      if (!('GRAPHQL_INTROSPECTION' in extra)) delete e.GRAPHQL_INTROSPECTION;
+      const r = spawnSync(join(__dirname, '../../node_modules/.bin/ts-node'), ['--transpile-only', '-e',
+        "console.log('GI=' + JSON.stringify(require('./src/config/env').env.GRAPHQL.INTROSPECTION))"], { cwd: join(__dirname, '../..'), env: e, encoding: 'utf8' });
+      return (r.stdout.split('\n').find(l => l.startsWith('GI=')) ?? 'GI=?').slice(3);
+    };
+    const prodI = probe({ NODE_ENV: 'production' });
+    const devI = probe({ NODE_ENV: 'development' });
+    check('A12-2. Introspection is off in production by default (on in development) and a __schema query is then refused',
+      prodI === 'false' && devI === 'true' && /introspection/i.test(introErr), `production=${prodI} development=${devI} __schema→"${introErr.slice(0, 90)}"`);
+  }
+
 };
 
 (async () => {

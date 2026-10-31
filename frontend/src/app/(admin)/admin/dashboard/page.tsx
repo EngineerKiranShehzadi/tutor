@@ -49,7 +49,7 @@ function Skeleton({ className }: { className?: string }) {
 export default function AdminDashboard() {
   const { data: summaryData, loading: summaryLoading } = useQuery(GET_ANALYTICS_SUMMARY, { fetchPolicy: 'network-only' });
   const { data: perLecture, loading: perLectureLoading } = useQuery(GET_QUESTIONS_PER_LECTURE, { fetchPolicy: 'network-only' });
-  const { data: recentData, loading: recentLoading } = useQuery(GET_RECENT_QUESTIONS, { fetchPolicy: 'network-only' });
+  const { data: recentData, loading: recentLoading } = useQuery(GET_RECENT_QUESTIONS, { variables: { limit: 10 }, fetchPolicy: 'network-only' });
 
   const { data: studentsData } = useQuery(GET_REGISTERED_STUDENTS, { fetchPolicy: 'network-only' });
 

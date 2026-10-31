@@ -293,6 +293,7 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
             <div className="px-5 py-3 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
               <span className="text-[14px] font-semibold text-slate-700">
                 What this {preview.mode === 'REPLACE' ? 'replace' : 'merge'} will do · {preview.rowsInFile.toLocaleString()} rows in file
+                {(preview.skippedRows ?? 0) > 0 && <> · <span className="text-amber-700" data-testid="preview-rows-used">{(preview.rowsUsed ?? preview.rowsInFile).toLocaleString()} used</span></>}
               </span>
               <button onClick={reset} className="text-[13px] text-slate-500 hover:text-slate-800" data-testid="dataset-cancel">Cancel</button>
             </div>
@@ -315,6 +316,38 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
                 <p className="text-[13px] text-amber-700" data-testid="preview-reembedded">
                   {preview.reembeddedForModel} Q&amp;A(s) re-embedded because the embedding model changed
                 </p>
+              )}
+
+              {(preview.skippedRows ?? 0) > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex flex-col gap-2" data-testid="dataset-skipped-warning">
+                  <p className="text-[14px] text-amber-900">
+                    <b>{preview.skippedRows}</b> row(s) will be ignored because the question or answer cell is empty. Fill them in and upload again if they should be included.
+                  </p>
+                  <ul className="text-[13px] text-amber-900 list-disc pl-5 space-y-0.5">
+                    {(preview.skippedSamples ?? []).map(r => (
+                      <li key={r.sheetRow}>Row {r.sheetRow}: {r.reason === 'EMPTY_QUESTION' ? 'empty question' : 'empty answer'}</li>
+                    ))}
+                    {(preview.skippedRows ?? 0) > (preview.skippedSamples?.length ?? 0) && (
+                      <li>…and {(preview.skippedRows ?? 0) - (preview.skippedSamples?.length ?? 0)} more</li>
+                    )}
+                  </ul>
+                </div>
+              )}
+
+              {(preview.truncatedRows ?? 0) > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex flex-col gap-2" data-testid="dataset-truncated-warning">
+                  <p className="text-[14px] text-amber-900">
+                    <b>{preview.truncatedRows}</b> answer(s) are too long: only the first part of each will be searchable, the rest is dropped. Shorten or split these answers to keep all of it.
+                  </p>
+                  <ul className="text-[13px] text-amber-900 list-disc pl-5 space-y-0.5">
+                    {(preview.truncatedSamples ?? []).map(r => (
+                      <li key={r.sheetRow}>Row {r.sheetRow}: “{r.question}” — {r.pieces} pieces, first {r.kept} kept</li>
+                    ))}
+                    {(preview.truncatedRows ?? 0) > (preview.truncatedSamples?.length ?? 0) && (
+                      <li>…and {(preview.truncatedRows ?? 0) - (preview.truncatedSamples?.length ?? 0)} more</li>
+                    )}
+                  </ul>
+                </div>
               )}
 
               {preview.possibleDuplicateCount > 0 && (
