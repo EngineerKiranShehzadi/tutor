@@ -739,6 +739,25 @@ test('AU7 a user stored as "Admin@…" logs in as "admin@…" (and " ADMIN@… "
   };
 });
 
+// ── AU8: PATCH /auth/me validates name and avatar ──────────────────────
+test('AU8 updateProfile: a 150-char name or a javascript:/oversized avatar → 400; a normal name, https and data:image avatars pass', async () => {
+  const id = await insertUser(addr('profile-validate'));
+  const longName = await errOf(Auth.updateProfile(id, { name: 'x'.repeat(150) }));
+  const oneChar = await errOf(Auth.updateProfile(id, { name: ' a ' }));
+  const jsAvatar = await errOf(Auth.updateProfile(id, { avatarUrl: 'javascript:alert(1)' }));
+  const svg = await errOf(Auth.updateProfile(id, { avatarUrl: 'data:image/svg+xml;base64,PHN2Zz4=' }));
+  const huge = await errOf(Auth.updateProfile(id, { avatarUrl: `data:image/png;base64,${'A'.repeat(3_000_001)}` }));
+  const okName = await errOf(Auth.updateProfile(id, { name: '  Valid Name  ' }));
+  const okHttps = await errOf(Auth.updateProfile(id, { avatarUrl: 'https://lh3.googleusercontent.com/a/photo.jpg' }));
+  const okData = await errOf(Auth.updateProfile(id, { avatarUrl: 'data:image/png;base64,iVBORw0KGgo=' }));
+  const is400 = (e: unknown) => e instanceof AppError && e.statusCode === 400;
+  return {
+    pass: is400(longName) && is400(oneChar) && is400(jsAvatar) && is400(svg) && is400(huge)
+      && (jsAvatar as AppError).message === 'Invalid avatar image' && okName === null && okHttps === null && okData === null,
+    detail: `long=${(longName as AppError)?.statusCode} js=${jsAvatar?.message} svg=${(svg as AppError)?.statusCode} huge=${(huge as AppError)?.statusCode} ok=${[okName, okHttps, okData].every(e => e === null)}`,
+  };
+});
+
 // ── runner ───────────────────────────────────────────────────────────────
 async function cleanup(): Promise<void> {
   await query(`DELETE FROM users WHERE email LIKE $1`, [`%${DOMAIN}`]);

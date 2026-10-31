@@ -887,6 +887,9 @@ const storeRefreshToken = async (userId: string, token: string) => {
 };
 
 // ── UPDATE PROFILE ────────────────────────────────────
+const AVATAR_URL_PATTERN = /^(https:\/\/|data:image\/(png|jpeg|webp|gif);base64,)/;
+const AVATAR_MAX_CHARS = 3_000_000;
+
 export const updateProfile = async (
   userId: string,
   params: { name?: string; currentPassword?: string; newPassword?: string; avatarUrl?: string },
@@ -895,6 +898,19 @@ export const updateProfile = async (
   currentRefreshToken?: string
 ): Promise<Pick<User, 'id' | 'name' | 'email' | 'role' | 'avatar_url'>> => {
   const { name, currentPassword, newPassword, avatarUrl } = params;
+
+  // Same name rule as signup (users.name is VARCHAR(100): a longer one was a
+  // Postgres error → 500). The avatar must be an https URL or a small inline
+  // image, not any string up to the 5 MB body limit.
+  if (name !== undefined && name !== null) {
+    const trimmed = String(name).trim();
+    if (trimmed.length < 2 || trimmed.length > 100) throw new AppError('Name must be between 2 and 100 characters', 400);
+  }
+  if (avatarUrl !== undefined && avatarUrl !== null) {
+    if (typeof avatarUrl !== 'string' || avatarUrl.length > AVATAR_MAX_CHARS || !AVATAR_URL_PATTERN.test(avatarUrl)) {
+      throw new AppError('Invalid avatar image', 400);
+    }
+  }
 
   const { rows } = await query<User>('SELECT * FROM users WHERE id = $1', [userId]);
   const user = rows[0];
