@@ -1,5 +1,5 @@
 'use client';
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, createElement, Fragment } from 'react';
 import { useMutation, useLazyQuery } from '@apollo/client';
 import { ChatMessage, ChunkSource } from '@/types';
 import { v4 as uuidv4 } from 'uuid';
@@ -103,7 +103,13 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
     id:        'welcome',
     role:      'ai',
     type:      'text',
-    content:   `Hi! I'm <strong>${agentName}</strong>, your AI tutor for <strong>${lectureTitle}</strong>. Ask me anything covered in this lecture!`,
+    content:   `Hi! I'm ${agentName}, your AI tutor for ${lectureTitle}. Ask me anything covered in this lecture!`,
+    // React elements, not an HTML string: agentName and lectureTitle are admin
+    // data and are escaped like any other text.
+    richContent: createElement(Fragment, null,
+      "Hi! I'm ", createElement('strong', null, agentName),
+      ', your AI tutor for ', createElement('strong', null, lectureTitle),
+      '. Ask me anything covered in this lecture!'),
     timestamp: new Date(0),
   };
 

@@ -60,7 +60,9 @@ export const MessageBubble = ({ message, onSpeak, isSpeaking }: Props) => {
               />
             </>
           ) : (
-            <span dangerouslySetInnerHTML={{ __html: message.content }} />
+            // Plain text, never HTML: answers come from admin-uploaded datasets
+            // and the model, so markup in them must show as text, not run.
+            <span className="whitespace-pre-wrap break-words">{message.richContent ?? message.content}</span>
           )}
         </div>
 

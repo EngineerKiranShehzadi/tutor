@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react';
+
 // ── Auth ──────────────────────────────────────────────
 export type UserRole = 'STUDENT' | 'ADMIN';
 
@@ -71,6 +73,9 @@ export interface ChatMessage {
   role:        MessageRole;
   type:        MessageType;
   content:     string;
+  // Optional formatted rendering of `content`, built as React elements (never an
+  // HTML string). `content` stays the plain text used for speech and copying.
+  richContent?: ReactNode;
   citation?:   string;
   timestamp:   Date;
   sources?:    ChunkSource[];
