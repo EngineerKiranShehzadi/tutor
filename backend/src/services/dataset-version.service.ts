@@ -84,7 +84,9 @@ export interface UpdatePreview {
 }
 
 export type PrepareResult =
-  | { kind: 'DRY_RUN'; preview: UpdatePreview }
+  // `previews` holds the same file planned in both modes, so the dataset page
+  // can switch MERGE/REPLACE without uploading and parsing the file again.
+  | { kind: 'DRY_RUN'; preview: UpdatePreview; previews: Record<DatasetMode, UpdatePreview> }
   | { kind: 'NOOP'; preview: UpdatePreview }
   | { kind: 'CREATED'; versionId: number; versionNo: number; preview: UpdatePreview };
 
@@ -189,15 +191,18 @@ const loadActiveChunks = async (lectureId: number): Promise<{ versionId: number 
   return { versionId, chunks: rows };
 };
 
-const planUpdate = async (
+// Plans the file against the active dataset once, then finishes one plan per
+// requested mode: only what happens to the Q&As missing from the file differs
+// between MERGE and REPLACE, so a dry run can preview both from one parse.
+const planUpdates = async (
   lectureId: number,
   fileRows: FileRow[],
-  mode: DatasetMode,
+  modes: DatasetMode[],
   fileHash: string,
   filename: string | null,
   fileHasQaIdColumn: boolean,
   intake: { rowsInSheet: number; skipped: SkippedRow[] } = { rowsInSheet: fileRows.length, skipped: [] }
-): Promise<Plan> => {
+): Promise<Map<DatasetMode, Plan>> => {
   const { versionId, chunks } = await loadActiveChunks(lectureId);
 
   const oldByQa = new Map<string, ActiveChunkRow[]>();
@@ -215,7 +220,7 @@ const planUpdate = async (
     throw new AppError(`Dataset not applied — ${errors.length} problem(s) found, nothing was changed:\n${shown}${more}`, 400);
   }
 
-  const newChunks: NewChunkSpec[] = [];
+  const baseNewChunks: NewChunkSpec[] = [];
   const reused: Plan['reused'] = [];
   let added = 0, updated = 0, unchanged = 0;
   const addedRows: FileRow[] = [];
@@ -248,7 +253,7 @@ const planUpdate = async (
       // exactly right (only metadata such as timestamps changed), so copy it
       // instead of calling the embedding model.
       const canCopy = !!o && sameModel && (o.content_hash ?? sha256(o.chunk_text)) === contentHash;
-      newChunks.push({
+      baseNewChunks.push({
         qaId: m.qaId, chunkIndex: piece.chunkIndex, fields: row, chunkText: piece.chunkText, contentHash,
         copyFromChunkId: canCopy ? o!.id : null,
       });
@@ -260,56 +265,61 @@ const planUpdate = async (
   }
 
   const missing = activeQas.filter(q => !matchedQaIds.has(q.qaId));
-  // MERGE carries missing Q&As over as memberships of their existing chunk rows —
-  // but only if every piece still has a vector from the CURRENT model. Otherwise
-  // the version would mix models, so all of that Q&A's pieces are embedded fresh
-  // as NEW rows (same qa_id / fields / chunk_text); the active version's rows are
-  // never touched.
-  const carriedQaIds: string[] = [];
-  let reembeddedForModel = 0;
-  let duplicates: PossibleDuplicate[] = [];
-  if (mode === 'MERGE') {
-    // Every missing Q&A stays live under MERGE (carried over or re-embedded).
-    duplicates = findPossibleDuplicates(addedRows, missing.map(q => ({ qaId: q.qaId, question: q.fields.question, answer: q.fields.answer })));
-    for (const q of missing) {
-      const pieces = oldByQa.get(q.qaId)!;
-      if (pieces.every(c => c.has_embedding && c.embedding_model_version === EMBEDDING_MODEL_VERSION)) {
-        carriedQaIds.push(q.qaId);
-        continue;
-      }
-      reembeddedForModel++;
-      for (const c of pieces) {
-        newChunks.push({
-          qaId: q.qaId, chunkIndex: c.chunk_index, fields: c, chunkText: c.chunk_text,
-          contentHash: c.content_hash ?? sha256(c.chunk_text), copyFromChunkId: null,
-        });
+  const plans = new Map<DatasetMode, Plan>();
+  for (const mode of modes) {
+    const newChunks: NewChunkSpec[] = [...baseNewChunks];
+    // MERGE carries missing Q&As over as memberships of their existing chunk rows —
+    // but only if every piece still has a vector from the CURRENT model. Otherwise
+    // the version would mix models, so all of that Q&A's pieces are embedded fresh
+    // as NEW rows (same qa_id / fields / chunk_text); the active version's rows are
+    // never touched.
+    const carriedQaIds: string[] = [];
+    let reembeddedForModel = 0;
+    let duplicates: PossibleDuplicate[] = [];
+    if (mode === 'MERGE') {
+      // Every missing Q&A stays live under MERGE (carried over or re-embedded).
+      duplicates = findPossibleDuplicates(addedRows, missing.map(q => ({ qaId: q.qaId, question: q.fields.question, answer: q.fields.answer })));
+      for (const q of missing) {
+        const pieces = oldByQa.get(q.qaId)!;
+        if (pieces.every(c => c.has_embedding && c.embedding_model_version === EMBEDDING_MODEL_VERSION)) {
+          carriedQaIds.push(q.qaId);
+          continue;
+        }
+        reembeddedForModel++;
+        for (const c of pieces) {
+          newChunks.push({
+            qaId: q.qaId, chunkIndex: c.chunk_index, fields: c, chunkText: c.chunk_text,
+            contentHash: c.content_hash ?? sha256(c.chunk_text), copyFromChunkId: null,
+          });
+        }
       }
     }
+    const removedList = mode === 'REPLACE' ? missing : [];
+
+    const preview: UpdatePreview = {
+      mode,
+      rowsInFile: intake.rowsInSheet,
+      rowsUsed: fileRows.length,
+      skippedRows: intake.skipped.length,
+      skippedSamples: intake.skipped.slice(0, 20),
+      truncatedRows: truncated.length,
+      truncatedSamples: truncated.slice(0, 20),
+      added, updated, unchanged,
+      carriedOver: carriedQaIds.length,
+      reembeddedForModel,
+      removed: removedList.length,
+      removedSamples: removedList.slice(0, 10).map(q => ({ qaId: q.qaId, question: q.fields.question })),
+      chunksToEmbed: newChunks.filter(c => c.copyFromChunkId === null).length,
+      chunksCopied: newChunks.filter(c => c.copyFromChunkId !== null).length,
+      chunksReused: reused.length,
+      fileHasQaIdColumn,
+      possibleDuplicates: duplicates.slice(0, 20),
+      possibleDuplicateCount: duplicates.length,
+    };
+
+    plans.set(mode, { lectureId, mode, activeVersionId: versionId, fileHash, filename, newChunks, reused, carriedQaIds, preview });
   }
-  const removedList = mode === 'REPLACE' ? missing : [];
-
-  const preview: UpdatePreview = {
-    mode,
-    rowsInFile: intake.rowsInSheet,
-    rowsUsed: fileRows.length,
-    skippedRows: intake.skipped.length,
-    skippedSamples: intake.skipped.slice(0, 20),
-    truncatedRows: truncated.length,
-    truncatedSamples: truncated.slice(0, 20),
-    added, updated, unchanged,
-    carriedOver: carriedQaIds.length,
-    reembeddedForModel,
-    removed: removedList.length,
-    removedSamples: removedList.slice(0, 10).map(q => ({ qaId: q.qaId, question: q.fields.question })),
-    chunksToEmbed: newChunks.filter(c => c.copyFromChunkId === null).length,
-    chunksCopied: newChunks.filter(c => c.copyFromChunkId !== null).length,
-    chunksReused: reused.length,
-    fileHasQaIdColumn,
-    possibleDuplicates: duplicates.slice(0, 20),
-    possibleDuplicateCount: duplicates.length,
-  };
-
-  return { lectureId, mode, activeVersionId: versionId, fileHash, filename, newChunks, reused, carriedQaIds, preview };
+  return plans;
 };
 
 // ── Building a version ──────────────────────────────────────────────────
@@ -454,11 +464,15 @@ export async function prepareDatasetVersion(
   const { rows: fileRows, skipped } = toFileRowsReport(rawRows);
   if (fileRows.length === 0) throw new AppError('No valid rows found in the dataset', 400);
 
-  const plan = await planUpdate(lectureId, fileRows, mode, sha256(buffer), opts.filename ?? null, fileHasQaIdColumn,
+  const modes: DatasetMode[] = opts.dryRun ? ['MERGE', 'REPLACE'] : [mode];
+  const plans = await planUpdates(lectureId, fileRows, modes, sha256(buffer), opts.filename ?? null, fileHasQaIdColumn,
     { rowsInSheet: rawRows.length, skipped });
+  const plan = plans.get(mode)!;
   const p = plan.preview;
 
-  if (opts.dryRun) return { kind: 'DRY_RUN', preview: p };
+  if (opts.dryRun) {
+    return { kind: 'DRY_RUN', preview: p, previews: { MERGE: plans.get('MERGE')!.preview, REPLACE: plans.get('REPLACE')!.preview } };
+  }
   if (p.removed > 0 && opts.confirmRemovals !== p.removed) throw new RemovalConfirmationRequired(p);
 
   if (p.added === 0 && p.updated === 0 && p.removed === 0 && p.reembeddedForModel === 0) {

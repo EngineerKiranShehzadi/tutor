@@ -65,6 +65,9 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
   const [file, setFile] = useState<File | null>(null);
   const [phase, setPhase] = useState<Phase>('idle');
   const [preview, setPreview] = useState<DatasetPreview | null>(null);
+  // The dry run plans the file in both modes; switching mode reads from here
+  // instead of uploading and parsing the file again.
+  const [previews, setPreviews] = useState<Partial<Record<DatasetMode, DatasetPreview>>>({});
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [confirmed, setConfirmed] = useState(false);
@@ -128,10 +131,12 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
   }, [inFlight, versions]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const analyse = useCallback(async (f: File, m: DatasetMode) => {
-    setPhase('analysing'); setError(''); setNotice(''); setPreview(null); setConfirmed(false);
+    setPhase('analysing'); setError(''); setNotice(''); setPreview(null); setPreviews({}); setConfirmed(false);
     try {
       const res = await datasetApi.upload(lectureId, f, { mode: m, dryRun: true });
-      setPreview(res.data.data.preview as DatasetPreview);
+      const data = res.data.data as { preview: DatasetPreview; previews?: Record<DatasetMode, DatasetPreview> };
+      setPreviews(data.previews ?? { [m]: data.preview });
+      setPreview(data.preview);
       setPhase('preview');
     } catch (err) {
       setError(apiMessage(err, 'Could not analyse the file.'));
@@ -149,11 +154,17 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
 
   const changeMode = (m: DatasetMode) => {
     setMode(m);
-    if (file && phase !== 'applying') void analyse(file, m);
+    if (!file || phase === 'applying') return;
+    const known = previews[m];
+    if (known && phase === 'preview') {
+      setPreview(known); setConfirmed(false); setError('');
+    } else {
+      void analyse(file, m);
+    }
   };
 
   const reset = () => {
-    setFile(null); setPreview(null); setPhase('idle'); setConfirmed(false);
+    setFile(null); setPreview(null); setPreviews({}); setPhase('idle'); setConfirmed(false);
     if (fileRef.current) fileRef.current.value = '';
   };
 
@@ -171,7 +182,7 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
       onChanged();
     } catch (err) {
       const p = previewFromError(err);
-      if (p) setPreview(p);               // the server's own removal count wins
+      if (p) { setPreview(p); setPreviews(all => ({ ...all, [mode]: p })); }   // the server's own removal count wins
       setError(apiMessage(err, 'Upload failed.'));
       setPhase('preview');
     }

@@ -380,6 +380,17 @@ const run = async () => {
         && (await activeChunks(L)).length === currentCount && /remove 4/.test(noConfirm.message),
       `wouldRemove=${removed} wrongCount(1)Rejected=${wrongConfirm.rejected} dryRunRemoved=${dry.kind === 'DRY_RUN' ? dry.preview.removed : '-'} versions ${versionsBefore}→${versionsAfter} msg="${noConfirm.message.slice(0, 90)}…"`);
 
+    // R8: one dry run previews both modes, identical to a dry run in each mode.
+    const both = await prepareDatasetVersion(L, makeXlsx(keep), { dryRun: true });
+    const mergeOnly = await prepareDatasetVersion(L, makeXlsx(keep), { mode: 'MERGE', dryRun: true });
+    const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+    check('5a-R8. A dry run returns the MERGE and the REPLACE preview of the same file (the page switches mode without re-uploading); each equals a dry run in that mode',
+      both.kind === 'DRY_RUN' && dry.kind === 'DRY_RUN' && mergeOnly.kind === 'DRY_RUN'
+        && same(both.previews.REPLACE, dry.preview) && same(both.previews.MERGE, mergeOnly.preview) && same(both.preview, both.previews.MERGE)
+        && both.previews.REPLACE.removed === 4 && both.previews.MERGE.removed === 0 && both.previews.MERGE.carriedOver === 4
+        && (await versionRows(L)).length === versionsBefore,
+      both.kind === 'DRY_RUN' ? `MERGE removed=${both.previews.MERGE.removed} carried=${both.previews.MERGE.carriedOver}; REPLACE removed=${both.previews.REPLACE.removed}` : both.kind);
+
     const ok = await prepareDatasetVersion(L, makeXlsx(keep), { mode: 'REPLACE', confirmRemovals: 4 });
     if (ok.kind === 'CREATED') await fin(ok.versionId);
     const after = await activeChunks(L);

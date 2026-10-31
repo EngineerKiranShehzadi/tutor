@@ -90,7 +90,7 @@ export const uploadDataset = async (
     });
 
     if (result.kind === 'DRY_RUN') {
-      sendSuccess(res, 'Dry run — nothing was changed.', { lectureId, preview: result.preview });
+      sendSuccess(res, 'Dry run — nothing was changed.', { lectureId, preview: result.preview, previews: result.previews });
       return;
     }
     if (result.kind === 'NOOP') {
