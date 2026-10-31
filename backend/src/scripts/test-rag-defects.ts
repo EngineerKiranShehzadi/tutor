@@ -31,7 +31,7 @@ import { askLectureAgent, LECTURE_NOT_FOUND_MESSAGE, type AskLectureAgentDeps } 
 import { VERIFICATION_UNAVAILABLE_MESSAGE } from '../rag/guardrails/output/output-guardrail.service';
 import type { OutputGuardrailResult } from '../rag/guardrails/output/answer-verification.types';
 import type { FinishedTrace } from '../observability/types';
-import { generateLectureSummary, LECTURE_SUMMARY_FAILED_MESSAGE, PARTIAL_SUMMARY_NOTE } from '../services/lecture-summary.service';
+import { generateLectureSummary, LECTURE_SUMMARY_FAILED_MESSAGE, PARTIAL_SUMMARY_NOTE, buildSummaryBatches, summaryEntryText, MAX_CHARS_PER_BATCH } from '../services/lecture-summary.service';
 
 interface CaseResult { pass: boolean; detail?: string }
 interface Case { label: string; run: () => Promise<CaseResult> }
@@ -604,6 +604,33 @@ cases.push({
     const pass = answer === 'combined(partial-1+partial-2+partial-3)' && !answer.includes(PARTIAL_SUMMARY_NOTE.trim())
       && !(empty instanceof Error) && db.history.length === 1 && spies.traces[0]?.attributes.notFoundReason === 'EMPTY_LECTURE';
     return { pass, detail: `answer="${answer}", empty=${(empty as { answer?: string }).answer}` };
+  },
+});
+
+// ── S5: summary batches are sized on the text actually sent ─────────────
+cases.push({
+  label: 'S5a. Three chunks with short chunk_text but 10,000-char answers land in three batches; no batch exceeds the budget',
+  run: async () => {
+    const cs = [1, 2, 3].map(i => ({ ...chunk(i, 'Q: short'), answer: 'a'.repeat(10_000) }));
+    const batches = buildSummaryBatches(cs);
+    const size = (b: QnaChunk[]) => b.reduce((n, c) => n + summaryEntryText(c).length + 2, 0);
+    const pass = batches.length === 3 && batches.every(b => size(b) <= MAX_CHARS_PER_BATCH);
+    return { pass, detail: `batches=${batches.length}, sizes=${batches.map(size).join(',')}` };
+  },
+});
+
+cases.push({
+  label: 'S5b. An entry over budget on its own gets its own batch with the answer cut (ellipsis); the prompt sent is exactly those entries',
+  run: async () => {
+    const cs = [{ ...chunk(1, 'x'), answer: 'b'.repeat(30_000) }, { ...chunk(2, 'x'), answer: 'short answer' }];
+    const batches = buildSummaryBatches(cs);
+    const first = batches[0]?.[0];
+    const { requests } = await withFakeLlm(env.LLM.LECTURE_SUMMARY.PROVIDER, ['partial'], () => generateLectureSummary(cs, 'Lecture'));
+    const prompt0 = requests[0]?.userPrompt ?? '';
+    const pass = batches.length === 2 && batches[0].length === 1 && first.answer.endsWith('…')
+      && summaryEntryText(first).length + 2 <= MAX_CHARS_PER_BATCH && cs[0].answer.length === 30_000
+      && prompt0.endsWith(summaryEntryText(first)) && prompt0.length < MAX_CHARS_PER_BATCH + 100;
+    return { pass, detail: `batches=${batches.map(b => b.length).join(',')}, firstEntry=${summaryEntryText(first).length}, prompt0=${prompt0.length}` };
   },
 });
 

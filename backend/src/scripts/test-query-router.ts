@@ -186,7 +186,8 @@ cases.push({
 cases.push({
   label: '21. Long content is split into multiple batches, and hierarchical summarization combines them (no network)',
   run: async () => {
-    const chunks: QnaChunk[] = Array.from({ length: 6 }, (_, i) => fakeChunk(i, { chunk_text: 'X'.repeat(1000) }));
+    // Batches are sized on the prompt text (topic/question/answer), not chunk_text (S5).
+    const chunks: QnaChunk[] = Array.from({ length: 6 }, (_, i) => fakeChunk(i, { answer: 'X'.repeat(1000) }));
     const batches = buildSummaryBatches(chunks, 3000);
     const totalAcrossBatches = batches.reduce((sum, b) => sum + b.length, 0);
 

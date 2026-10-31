@@ -54,21 +54,41 @@ export const getAllLectureChunks = async (lectureId: number, datasetVersionId?: 
 // and comfortably within context limits regardless of lecture length.
 export const MAX_CHARS_PER_BATCH = 12000;
 
-// Pure — safe to unit-test without hitting the network or DB.
+// The exact text one chunk contributes to a summary prompt. Batches are sized
+// on this, not on chunk_text: only chunk_index = 0 rows are summarised, and for
+// a split row chunk_text holds just its first piece while answer holds the
+// whole answer, so sizing on chunk_text let a batch run ~20x over budget.
+export const summaryEntryText = (c: Pick<QnaChunk, 'topic' | 'question' | 'answer'>): string =>
+  `Topic: ${c.topic ?? 'General'}\nQ: ${c.question}\nA: ${c.answer}`;
+const ENTRY_SEPARATOR = '\n\n';
+const entryCost = (c: QnaChunk): number => summaryEntryText(c).length + ENTRY_SEPARATOR.length;
+
+// An entry that is over budget on its own gets its answer cut (with an
+// ellipsis) so that it fits; it then always travels in a batch by itself.
+const fitToBudget = (c: QnaChunk, maxChars: number): QnaChunk => {
+  if (entryCost(c) <= maxChars) return c;
+  const overhead = entryCost({ ...c, answer: '' });
+  const keep = Math.max(0, maxChars - overhead - 1);
+  return { ...c, answer: `${c.answer.slice(0, keep)}…` };
+};
+
+// Pure — safe to unit-test without hitting the network or DB. No batch's
+// summed entryCost exceeds maxChars.
 export const buildSummaryBatches = (chunks: QnaChunk[], maxChars = MAX_CHARS_PER_BATCH): QnaChunk[][] => {
   const batches: QnaChunk[][] = [];
   let current: QnaChunk[] = [];
   let currentChars = 0;
 
-  for (const chunk of chunks) {
-    const len = chunk.chunk_text.length;
-    if (current.length > 0 && currentChars + len > maxChars) {
+  for (const original of chunks) {
+    const chunk = fitToBudget(original, maxChars);
+    const cost = entryCost(chunk);
+    if (current.length > 0 && currentChars + cost > maxChars) {
       batches.push(current);
       current = [];
       currentChars = 0;
     }
     current.push(chunk);
-    currentChars += len;
+    currentChars += cost;
   }
   if (current.length > 0) batches.push(current);
 
@@ -87,7 +107,7 @@ const summarizeBatchWithGemini = async (
   timeoutMs: number
 ): Promise<string | null> => {
   try {
-    const content = chunks.map(c => `Topic: ${c.topic ?? 'General'}\nQ: ${c.question}\nA: ${c.answer}`).join('\n\n');
+    const content = chunks.map(summaryEntryText).join(ENTRY_SEPARATOR);
     const prompt = `Lecture: "${lectureTitle}"\n\nContent:\n${content}`;
 
     const provider = resolveLlmProvider(env.LLM.LECTURE_SUMMARY.PROVIDER);
