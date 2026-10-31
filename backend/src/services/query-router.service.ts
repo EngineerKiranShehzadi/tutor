@@ -4,6 +4,7 @@ import { withLlmDiagnostic, extractLlmUsage } from '../llm/llm-observability.ser
 import type { LlmSchema } from '../llm/llm.types';
 import { isContextDependent } from './query-rewriter.service';
 import { logger } from '../utils/logger';
+import { FORMAT_REQUEST_WORDS } from '../rag/guardrails/output/format/response-format.detector';
 
 export type LectureQueryRoute =
   | 'FACT_QUESTION'
@@ -76,21 +77,39 @@ const isGreeting = (trimmed: string): boolean => {
 const SUMMARY_SIGNAL = /\b(?:summar(?:y|ize|ise|izing|ising|ies)|key\s+(?:points|takeaways|ideas)|main\s+(?:points|topics|ideas)|overview|recap|tl;?dr)\b/gi;
 const WHOLE_LECTURE = /\b(?:this|the|whole|entire|full|today'?s)\s+(?:lecture|video|class|session|lesson)\b/gi;
 const SUMMARY_FILLER = /\b(?:give|me|a|an|the|please|can|could|you|of|it|this|quick|short|brief|lecture|what|are|is)\b/gi;
+// Phrases that only shape the answer — "in a table", "in the form of a
+// numbered list", "in 5 bullet points", "in simple words", "in plain English",
+// "as a list", "for me" — are not what is being asked about, so they are
+// removed before looking for a topic. The output-format words come from the
+// format detector, so a format it recognises ("in a table") can never again
+// read as a topic here. They only count after "in"/"as": "the lecture on list
+// comprehensions" is a topic.
+const COUNT = String.raw`(?:\d+|a\s+few|one|two|three|four|five|six|seven|eight|nine|ten)`;
+const SHAPE_WORD = `(?:${[
+  ...FORMAT_REQUEST_WORDS, 'form', 'format', 'simple', 'plain', 'short', 'brief', 'detail', 'english', 'urdu',
+  'sentences?', 'paragraphs?', 'words?', 'lines?', 'order', 'sequence',
+].join('|')})`;
+const ANSWER_SHAPE = new RegExp(
+  String.raw`\b(?:in|as)\s+(?:the\s+form\s+of\s+)?(?:(?:a|an|the|your|my)\s+)?(?:own\s+)?(?:${COUNT}\s+)?(?:${SHAPE_WORD}\s+)*${SHAPE_WORD}\b`
+  + String.raw`|\bfor\s+(?:me|us)\b`,
+  'gi');
 // "about X", "on X", "of X", "in X", "for X", "regarding X" — unless X is the
-// whole lecture itself ("of this lecture") or only shapes the answer
-// ("for me", "in 5 bullet points", "in simple words", "in detail").
-const TOPIC_QUALIFIER = /\b(?:about|regarding|concerning)\b|\b(?:of|on|in|for)\s+(?!(?:this|the|whole|entire|full|today'?s)\s+(?:lecture|video|class|session|lesson)\b)(?!(?:me|us|\d+|a\s+few|simple|short|brief|bullets?|points?|detail|one|two|three|five|english|urdu)\b)[a-z0-9]/i;
+// whole lecture itself ("of this lecture") or a count ("in 5 minutes").
+const TOPIC_QUALIFIER = new RegExp(
+  String.raw`\b(?:about|regarding|concerning)\b|\b(?:of|on|in|for)\s+(?!(?:this|the|whole|entire|full|today'?s)\s+(?:lecture|video|class|session|lesson)\b)(?!${COUNT}\b)[a-z0-9]`,
+  'i');
 
 const isLectureSummaryRequest = (trimmed: string): boolean => {
   const lower = trimmed.toLowerCase();
   if (!new RegExp(SUMMARY_SIGNAL.source, 'i').test(lower)) return false;
+  const asked = lower.replace(ANSWER_SHAPE, ' ');
   // Nothing left once the summary words, whole-lecture phrases and filler are
   // removed: "summarize", "summary please", "summarize it", "give me the key points".
-  const rest = lower.replace(SUMMARY_SIGNAL, ' ').replace(WHOLE_LECTURE, ' ').replace(SUMMARY_FILLER, ' ')
+  const rest = asked.replace(SUMMARY_SIGNAL, ' ').replace(WHOLE_LECTURE, ' ').replace(SUMMARY_FILLER, ' ')
     .replace(/[^a-z0-9]+/g, '');
   if (rest === '') return true;
   // Otherwise the whole lecture must be named, with no narrower topic.
-  return new RegExp(WHOLE_LECTURE.source, 'i').test(lower) && !TOPIC_QUALIFIER.test(lower);
+  return new RegExp(WHOLE_LECTURE.source, 'i').test(asked) && !TOPIC_QUALIFIER.test(asked);
 };
 
 // A message "reads as" a well-formed question/request when it ends with '?'

@@ -957,6 +957,46 @@ cases.push({
   },
 });
 
+// ── ST3: naming an output format keeps the whole-lecture summary route ──
+const SUMMARY_FORMAT_TABLE: { q: string; summary: boolean }[] = [
+  { q: 'Summarize this lecture in a table', summary: true },
+  { q: 'Summarize this lecture in a list', summary: true },
+  { q: 'Summarize this lecture in a numbered list', summary: true },
+  { q: 'Summarize this lecture in a bulleted list', summary: true },
+  { q: 'Summarize this lecture in tabular form', summary: true },
+  { q: 'Summarize this lecture in columns', summary: true },
+  { q: 'What are the key points of this lecture in a table?', summary: true },
+  { q: 'Summarize the lecture in the form of a table', summary: true },
+  { q: 'Summarize this lecture as a list', summary: true },
+  { q: 'Summarize the lecture in 3 sentences', summary: true },
+  { q: 'Summarize this lecture in one paragraph', summary: true },
+  { q: 'Summarize this lecture in plain English', summary: true },
+  { q: 'Summarize this lecture in your own words', summary: true },
+  { q: 'Summarize this lecture in point form', summary: true },
+  { q: 'Give me a summary in bullet points', summary: true },
+  { q: 'Summarize it in a table', summary: true },
+  { q: 'Summarize the lecture on list comprehensions', summary: false },
+  { q: 'Summarize the part on hash tables in this lecture', summary: false },
+  { q: 'Give me the key points of linked lists in this lecture', summary: false },
+  { q: 'Summarize tokenization in a table', summary: false },
+  { q: 'Can you summarize what the lecture said about tables?', summary: false },
+];
+
+cases.push({
+  label: `ST3. A whole-lecture summary that names a format ("in a table", "in a numbered list", …) stays a summary; a topic still does not (table of ${SUMMARY_FORMAT_TABLE.length} inputs)`,
+  run: async () => {
+    const { value: got } = await withFakeLlm(env.LLM.QUERY_ROUTER.PROVIDER, ['{"route":"FACT_QUESTION"}'], async () => {
+      const out: string[] = [];
+      for (const row of SUMMARY_FORMAT_TABLE) out.push((await classifyRoute(row.q)).route);
+      return out;
+    });
+    const wrong = SUMMARY_FORMAT_TABLE.filter((row, i) => (got[i] === 'LECTURE_SUMMARY') !== row.summary);
+    // Every format the detector recognises in these asks must also keep the summary route.
+    const formatAsks = SUMMARY_FORMAT_TABLE.filter(r => r.summary && detectExpectedResponseFormat(r.q) !== 'NATURAL_TEXT').length;
+    return { pass: wrong.length === 0 && formatAsks >= 10, detail: wrong.length ? wrong.map(w => `"${w.q}"→${got[SUMMARY_FORMAT_TABLE.indexOf(w)]}`).join(' | ') : `ok, ${formatAsks} format-named summary asks` };
+  },
+});
+
 // ── ST2: a PII-masked question never reads or writes answer memory ──────
 cases.push({
   label: 'ST2. Masked question ("What is [PHONE]?") → no memory lookup, no memory write, memoryResult NOT_ATTEMPTED; an unmasked one still uses memory',

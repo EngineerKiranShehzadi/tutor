@@ -11,6 +11,15 @@ import type { ExpectedResponseFormat } from './response-format.types';
 // ("Compare zero-shot and few-shot prompting.") also stays NATURAL_TEXT;
 // TABLE only fires when a table is explicitly asked for.
 
+// The words that name an output format; the signals below are phrased around
+// them. query-router.service.ts imports this list, so that "Summarize this
+// lecture in a table" keeps the whole-lecture summary route — a format is not
+// a topic. Add a word here when a signal below starts keying on a new one.
+export const FORMAT_REQUEST_WORDS = [
+  'table', 'tables', 'tabular', 'column', 'columns',
+  'list', 'lists', 'numbered', 'bulleted', 'bullet', 'bullets', 'point', 'points',
+] as const;
+
 // Request phrasing only — never the bare nouns, which are often the subject
 // matter ("What is a linked list?", "How does a lookup table work?"): a
 // correct prose answer to those must not be sent for a format "repair".
