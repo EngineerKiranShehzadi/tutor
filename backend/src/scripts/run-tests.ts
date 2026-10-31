@@ -70,6 +70,7 @@ const SUITES: Suite[] = [
   { name: 'trace-ids', script: 'src/scripts/test-trace-ids.ts' },
   { name: 'log-safety', script: 'src/scripts/test-log-safety.ts' },
   { name: 'record-trace', script: 'src/scripts/test-record-trace.ts' },
+  { name: 'auth-hardening', script: 'src/scripts/test-auth-hardening.ts' },
 ];
 
 function main(): void {
