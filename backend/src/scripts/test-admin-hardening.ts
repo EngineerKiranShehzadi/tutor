@@ -51,7 +51,8 @@ import { rateLimitStore } from '../graphql/resolvers/auth.resolver';
 import { ExpiringMap } from '../utils/expiring-map';
 import { globalLimiter, userLimiter } from '../middleware/rateLimiter';
 import { startMaintenanceScheduler, stopMaintenanceScheduler, maintenanceSchedulerState, runRetention } from '../observability/maintenance.scheduler';
-import { finishDatasetVersion } from '../services/dataset-version.service';
+import { finishDatasetVersion, rollbackDataset } from '../services/dataset-version.service';
+import { EMBEDDING_MODEL_VERSION } from '../services/embedding.service';
 
 const results: { name: string; pass: boolean; detail: string }[] = [];
 const check = (name: string, pass: boolean, detail: string) => {
@@ -900,6 +901,41 @@ const run = async () => {
       zero.status !== 0 && /OBSERVABILITY_RETENTION_DAYS must be a positive integer \(got "0"\)/.test(zero.stderr ?? '')
         && word.status !== 0 && /got "ninety"/.test(word.stderr ?? '') && kept > 0,
       `zero=${zero.status} word=${word.status} recentRowsKept=${kept}`);
+  }
+
+  // ── AD9: rollback validates inside its own transaction ───────────────
+  {
+    const lec = (await query<{ id: number }>(`INSERT INTO lectures (title, youtube_url, youtube_video_id) VALUES ('[ad9] rollback', 'https://youtu.be/xxxxxxxxxxx', 'xxxxxxxxxxx') RETURNING id`)).rows[0].id;
+    const mkVersion = async (no: number, status: string) => (await query<{ id: number }>(
+      `INSERT INTO dataset_versions (lecture_id, version_no, status, mode, embedding_model_version, chunking_config_version, stats)
+       VALUES ($1, $2, $3, 'MERGE', $4, 'c', '{}'::jsonb) RETURNING id`, [lec, no, status, EMBEDDING_MODEL_VERSION])).rows[0].id;
+    const previous = await mkVersion(1, 'SUPERSEDED');
+    const current = await mkVersion(2, 'ACTIVE');
+    // Two embedded chunks per version, each with its own (distinct) vector.
+    for (const [v, base] of [[previous, 1], [current, 3]] as const) {
+      for (let i = 0; i < 2; i++) {
+        const vec = `[${Array.from({ length: 1024 }, (_, j) => (j === base + i ? 1 : 0.001 * ((j * (base + i)) % 7))).join(',')}]`;
+        const c = (await query<{ id: number }>(
+          `INSERT INTO lecture_qna_chunks (lecture_id, question, answer, chunk_text, local_embedding, embedding_model_version)
+           VALUES ($1, $2, 'a', $2, $3::vector, $4) RETURNING id`, [lec, `ad9 q${base}-${i}`, vec, EMBEDDING_MODEL_VERSION])).rows[0].id;
+        await query('INSERT INTO dataset_version_chunks (version_id, chunk_id, qa_id, chunk_index) VALUES ($1, $2, $3, 0)', [v, c, `ad9-${v}-${i}`]);
+      }
+    }
+    await query(`UPDATE lectures SET active_version_id = $1, status = 'READY' WHERE id = $2`, [current, lec]);
+    // While rolling back, the module query helper (a second pool connection) is off limits.
+    const realQuery = pool.query;
+    let poolQueries = 0;
+    (pool as unknown as { query: unknown }).query = async () => { poolQueries++; throw new Error('pool.query used during rollback'); };
+    let result: { activeVersionId: number } | Error;
+    try {
+      result = await rollbackDataset(lec).catch(e => e as Error);
+    } finally {
+      (pool as unknown as { query: unknown }).query = realQuery;
+    }
+    const after = (await query<{ active_version_id: number }>('SELECT active_version_id FROM lectures WHERE id = $1', [lec])).rows[0];
+    check('AD9-1. Rollback validates the target inside its own transaction (no second pool connection) and still switches the pointer',
+      !(result instanceof Error) && result.activeVersionId === previous && after.active_version_id === previous && poolQueries === 0,
+      `result=${result instanceof Error ? result.message : result.activeVersionId} active=${after.active_version_id} poolQueries=${poolQueries}`);
   }
 
 };

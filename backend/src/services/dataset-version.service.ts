@@ -566,13 +566,23 @@ export async function failDatasetVersion(versionId: number, message: string): Pr
 }
 
 // Checks that must all pass before a version may go live.
-export const validateVersion = async (versionId: number): Promise<string[]> => {
+// What validateVersion reads through: the module pool helper by default, or a
+// transaction's client so the checks see that transaction's snapshot.
+export interface VersionReader {
+  query: <T extends Record<string, unknown> = Record<string, unknown>>(text: string, params?: unknown[]) => Promise<{ rows: T[] }>;
+}
+
+// db: rollbackDataset passes its own transaction client, so the last gate
+// before the pointer switch reads the locked snapshot and does not ask the
+// pool for a second connection while holding one (which could deadlock a
+// saturated pool). Other callers keep the default.
+export const validateVersion = async (versionId: number, db: VersionReader = { query }): Promise<string[]> => {
   const problems: string[] = [];
 
   // The model check uses the LIVE model (the one chat and readiness check
   // against), not the version's own stamp: a version built under a previous
   // model is internally consistent but would be refused by every question.
-  const { rows: cnt } = await query<{ members: string; no_vec: string; bad_dims: string; bad_vec: string; wrong_model: string }>(
+  const { rows: cnt } = await db.query<{ members: string; no_vec: string; bad_dims: string; bad_vec: string; wrong_model: string }>(
     `SELECT COUNT(*) AS members,
             COUNT(*) FILTER (WHERE c.embedding_model_version IS DISTINCT FROM $2) AS wrong_model,
             COUNT(*) FILTER (WHERE c.local_embedding IS NULL) AS no_vec,
@@ -590,7 +600,7 @@ export const validateVersion = async (versionId: number): Promise<string[]> => {
   if (Number(c.bad_vec) > 0) problems.push(`${c.bad_vec} chunk(s) have an empty/invalid vector`);
 
   // Every Q&A must have its pieces 0..N-1 with none missing.
-  const { rows: gaps } = await query<{ qa_id: string }>(
+  const { rows: gaps } = await db.query<{ qa_id: string }>(
     `SELECT qa_id FROM dataset_version_chunks WHERE version_id = $1
      GROUP BY qa_id HAVING MIN(chunk_index) <> 0 OR MAX(chunk_index) <> COUNT(*) - 1
      LIMIT 5`,
@@ -601,12 +611,12 @@ export const validateVersion = async (versionId: number): Promise<string[]> => {
   // Searchability self-check: a sample of the version's own vectors must find
   // themselves when searched within this version.
   if (problems.length === 0) {
-    const { rows: sample } = await query<{ chunk_id: number }>(
+    const { rows: sample } = await db.query<{ chunk_id: number }>(
       `SELECT chunk_id FROM dataset_version_chunks WHERE version_id = $1 ORDER BY random() LIMIT ${SELF_CHECK_SAMPLE}`,
       [versionId]
     );
     for (const s of sample) {
-      const { rows } = await query<{ sim: number }>(
+      const { rows } = await db.query<{ sim: number }>(
         `SELECT 1 - (c.local_embedding <=> (SELECT local_embedding FROM lecture_qna_chunks WHERE id = $2)) AS sim
          FROM dataset_version_chunks d JOIN lecture_qna_chunks c ON c.id = d.chunk_id
          WHERE d.version_id = $1
@@ -1082,7 +1092,7 @@ export async function rollbackDataset(lectureId: number): Promise<{ activeVersio
 
     // The same checks a new version must pass before going live (model, vectors,
     // numbering, self-retrieval): the previous version may have aged since it was built.
-    const problems = await validateVersion(target);
+    const problems = await validateVersion(target, client);
     if (problems.length > 0) {
       throw new AppError(`The previous version cannot be restored: ${problems.join('; ')}`, 409);
     }
