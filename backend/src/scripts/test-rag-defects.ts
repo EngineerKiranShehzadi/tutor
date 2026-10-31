@@ -857,6 +857,29 @@ cases.push({
   },
 });
 
+// ── S13: a rerank reply that drops candidates is a fault, not "not found" ──
+cases.push({
+  label: 'S13. Rerank returning fewer scores than candidates → adapter throws; through the orchestrator → ERROR / RERANKER_FAILURE (never NOT_FOUND)',
+  run: async () => {
+    const rr = createLocalHttpRerankProvider(noWait);
+    const cands = [{ id: 1, text: 'a' }, { id: 2, text: 'b' }, { id: 3, text: 'c' }];
+    const short = await withFetch([{ status: 200, body: { results: [{ id: 1, score: 0.9 }] } }], () => settle(rr.rerank('q', cands)));
+    const empty = await withFetch([{ status: 200, body: { results: [] } }], () => settle(rr.rerank('q', cands)));
+    // Orchestrator: the real rerankChunks on the configured provider, reply stubbed.
+    const { rerankChunks } = await import('../services/rerank.service');
+    const { deps, spies } = orchestratorDeps({ rerankChunks });
+    const reply = env.RETRIEVAL.RERANK_PROVIDER === 'voyage'
+      ? { object: 'list', data: [{ index: 0, relevance_score: 0.9 }], model: 'rerank-3', usage: { total_tokens: 1 } }
+      : { results: [{ id: 1, score: 0.9 }] };
+    const { value: asked } = await withFetch([{ status: 200, body: reply }], () => withFakeDb(() => askOrchestrator(deps)));
+    const t = spies.traces[0];
+    const pass = short.value instanceof Error && /Rerank returned 1 scores for 3 candidates/.test(short.value.message)
+      && empty.value instanceof Error && /Rerank returned 0 scores for 3 candidates/.test(empty.value.message)
+      && asked.value instanceof Error && t?.attributes.responseStatus === 'ERROR' && t.attributes.notFoundReason === 'RERANKER_FAILURE';
+    return { pass, detail: `short="${(short.value as Error).message}", trace=${t?.attributes.responseStatus}/${t?.attributes.notFoundReason}` };
+  },
+});
+
 async function main(): Promise<void> {
   let failures = 0;
   for (const c of cases) {

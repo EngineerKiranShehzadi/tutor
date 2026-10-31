@@ -156,7 +156,7 @@ async function main() {
   const rrResp = (data: { index: number; relevance_score: number }[]) => json({ object: 'list', data, model: 'rerank-3', usage: { total_tokens: 9 } });
   cases.push({ label: 'voyage: model version is voyage:<model>', run: () => voyage().modelVersion === 'voyage:rerank-3' && voyage().name === 'voyage' });
   cases.push({ label: 'voyage: request shape — URL, POST, Bearer key, {query, documents[], model}', run: async () => {
-    stub(() => rrResp([{ index: 0, relevance_score: 0.5 }]));
+    stub(() => rrResp([{ index: 0, relevance_score: 0.5 }, { index: 1, relevance_score: 0.3 }, { index: 2, relevance_score: 0.2 }]));
     await voyage().rerank('what is x?', cands);
     const c = sent[0];
     return c.url === VOYAGE_RERANK_URL && c.url === 'https://api.voyageai.com/v1/rerank' && c.method === 'POST'
@@ -168,22 +168,25 @@ async function main() {
     const r = await voyage().rerank('q', cands);
     return JSON.stringify(r) === '[{"id":33,"score":0.9},{"id":22,"score":0.7},{"id":11,"score":0.4}]';
   } });
-  cases.push({ label: 'voyage: an out-of-order response is re-sorted; bad/duplicate index is rejected', run: async () => {
-    stub(() => rrResp([{ index: 0, relevance_score: 0.1 }, { index: 1, relevance_score: 0.8 }]));
+  cases.push({ label: 'voyage: an out-of-order response is re-sorted; bad/duplicate index is rejected; a reply missing a document is rejected (S13)', run: async () => {
+    stub(() => rrResp([{ index: 0, relevance_score: 0.1 }, { index: 1, relevance_score: 0.8 }, { index: 2, relevance_score: 0.5 }]));
     const ok = await voyage().rerank('q', cands);
+    stub(() => rrResp([{ index: 0, relevance_score: 0.1 }, { index: 1, relevance_score: 0.8 }]));
+    const short = await rejects(voyage().rerank('q', cands));
     stub(() => rrResp([{ index: 5, relevance_score: 0.1 }]));
     const bad = await rejects(voyage().rerank('q', cands));
     stub(() => rrResp([{ index: 1, relevance_score: 0.1 }, { index: 1, relevance_score: 0.2 }]));
     const dup = await rejects(voyage().rerank('q', cands));
-    return ok[0].id === 22 && /invalid or duplicate/.test(bad.message) && /invalid or duplicate/.test(dup.message);
+    return ok[0].id === 22 && /invalid or duplicate/.test(bad.message) && /invalid or duplicate/.test(dup.message)
+      && /Rerank returned 2 scores for 3 candidates/.test(short.message);
   } });
   cases.push({ label: 'voyage: 429 retried then ok; persistent 503 ends as a clear error after retries', run: async () => {
-    stub((_c, n) => n === 1 ? json({ detail: 'rate' }, 429) : rrResp([{ index: 0, relevance_score: 0.5 }]));
+    stub((_c, n) => n === 1 ? json({ detail: 'rate' }, 429) : rrResp([{ index: 0, relevance_score: 0.5 }, { index: 1, relevance_score: 0.3 }, { index: 2, relevance_score: 0.2 }]));
     const ok = await voyage().rerank('q', cands);
     const n429 = sent.length;
     stub(() => json({ detail: 'busy' }, 503));
     const e = await rejects(voyage().rerank('q', cands));
-    return ok.length === 1 && n429 === 2 && sent.length === 4 && /unavailable \(503\)/.test(e.message);
+    return ok.length === 3 && n429 === 2 && sent.length === 4 && /unavailable \(503\)/.test(e.message);
   } });
   cases.push({ label: 'voyage: unreachable → clear error; 401 names VOYAGE_API_KEY and hides the key; 400 not retried', run: async () => {
     stub(() => { throw new TypeError('fetch failed'); });

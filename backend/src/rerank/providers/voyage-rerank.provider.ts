@@ -77,6 +77,11 @@ export function createVoyageRerankProvider(config: VoyageRerankConfig): RerankPr
         seen.add(i);
         return { id: candidates[i].id, score: r.relevance_score };
       });
+      // Every document must come back scored (no top_k is sent): a short reply
+      // is an infrastructure fault, never "not in this lecture".
+      if (scores.length !== candidates.length) {
+        throw new Error(`Rerank returned ${scores.length} scores for ${candidates.length} candidates`);
+      }
       // Documented as already descending; sort anyway because callers keep the head.
       return scores.sort((a, b) => b.score - a.score);
     },
