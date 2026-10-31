@@ -324,7 +324,11 @@ export const resendPasswordResetOtp = async (email: string): Promise<void> => {
 };
 
 // ── OTP: VERIFY ───────────────────────────────────────
-export const verifyOtp = async (email: string, code: string): Promise<void> => {
+// Returns a single-use reset ticket for the caller's browser (the resolver puts
+// it in the httpOnly reset_ticket cookie). Only its hash is stored, and only the
+// holder of the ticket can then set the new password — knowing the email is
+// not enough.
+export const verifyOtp = async (email: string, code: string): Promise<string> => {
   logger.info(`[AUTH] verifyOtp: password reset OTP verification for "${email}"`);
   const { rows: userRows } = await query<User>(
     'SELECT * FROM users WHERE email = $1',
@@ -359,21 +363,35 @@ export const verifyOtp = async (email: string, code: string): Promise<void> => {
     await rejectWrongOtp('password_reset_tokens', token.id, attemptNo);
   }
 
-  // Mark verified — token is NOT consumed yet, only consumed after password reset
-  await query(
-    'UPDATE password_reset_tokens SET verified = TRUE WHERE id = $1 AND used = FALSE',
-    [token.id]
+  // Mark verified and bind it to this browser's ticket — the token is NOT
+  // consumed yet, only after the password reset. Requiring this call to be the
+  // one that flipped it means a concurrent or repeated verify can never report
+  // success for a code it did not verify.
+  const ticket = crypto.randomBytes(32).toString('base64url');
+  const marked = await query(
+    `UPDATE password_reset_tokens SET verified = TRUE, ticket_hash = $2
+     WHERE id = $1 AND used = FALSE AND verified = FALSE`,
+    [token.id, hashToken(ticket)]
   );
+  if (marked.rowCount !== 1) throw new AppError(OTP_REJECTED, 400);
   logger.info(`[AUTH] ✅ Password reset OTP verified for "${email}"`);
+  return ticket;
 };
 
 // ── OTP: RESET PASSWORD ───────────────────────────────
 export const resetPasswordWithOtp = async (
   email: string,
   newPassword: string,
-  confirmPassword: string
+  confirmPassword: string,
+  // The reset_ticket cookie verifyOtp issued to this browser.
+  ticket: string | undefined
 ): Promise<void> => {
   logger.info(`[AUTH] resetPasswordWithOtp: password reset for "${email}"`);
+  if (!ticket) {
+    logger.warn(`[AUTH] resetPasswordWithOtp: no reset ticket presented for "${email}"`);
+    throw new AppError(OTP_REJECTED, 400);
+  }
+  const ticketHash = hashToken(ticket);
   if (newPassword !== confirmPassword) {
     logger.warn(`[AUTH] resetPasswordWithOtp: passwords do not match for "${email}"`);
     throw new AppError('Passwords do not match', 400);
@@ -387,14 +405,16 @@ export const resetPasswordWithOtp = async (
   const user = userRows[0];
   if (!user) throw new AppError(OTP_REJECTED, 400);
 
-  // Require a token that is verified, not yet used, and still inside its
-  // lifetime. verifyOtp does not consume the token, so without the expires_at
-  // predicate a verified token stayed usable for as long as the row existed.
+  // Require a token that is verified, not yet used, still inside its
+  // lifetime, and verified by THIS browser (ticket). verifyOtp does not consume
+  // the token, so without the expires_at predicate a verified token stayed
+  // usable for as long as the row existed.
   const { rows: tokenRows } = await query<PasswordResetToken>(
     `SELECT * FROM password_reset_tokens
      WHERE user_id = $1 AND used = FALSE AND verified = TRUE AND expires_at > NOW()
+       AND ticket_hash = $2
      ORDER BY created_at DESC LIMIT 1`,
-    [user.id]
+    [user.id, ticketHash]
   );
   const token = tokenRows[0];
   if (!token) throw new AppError(OTP_REJECTED, 400);
@@ -408,8 +428,8 @@ export const resetPasswordWithOtp = async (
     // Consume first and require that this call is the one that flipped it, so
     // two concurrent resets cannot both spend the same verified token.
     const consumed = await client.query(
-      'UPDATE password_reset_tokens SET used = TRUE WHERE id = $1 AND used = FALSE',
-      [token.id]
+      'UPDATE password_reset_tokens SET used = TRUE WHERE id = $1 AND used = FALSE AND ticket_hash = $2',
+      [token.id, ticketHash]
     );
     if (consumed.rowCount !== 1) {
       throw new AppError(OTP_REJECTED, 400);

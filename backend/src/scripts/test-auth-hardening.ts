@@ -119,9 +119,9 @@ test('#9 a verified reset token past expires_at cannot reset the password', asyn
   const id = await insertUser(email);
   await Auth.requestPasswordReset(email);
   await setCode('password_reset_tokens', id, '222222');
-  await Auth.verifyOtp(email, '222222');
+  const ticket = await Auth.verifyOtp(email, '222222');
   await query(`UPDATE password_reset_tokens SET expires_at = NOW() - INTERVAL '1 hour' WHERE user_id = $1`, [id]);
-  const e = await errOf(Auth.resetPasswordWithOtp(email, 'NewPass12', 'NewPass12'));
+  const e = await errOf(Auth.resetPasswordWithOtp(email, 'NewPass12', 'NewPass12', ticket));
   const u = await userByEmail(email);
   return { pass: !!e && await bcrypt.compare(PW, u.password_hash!), detail: e?.message };
 });
@@ -132,9 +132,9 @@ test('#9 an unexpired verified token resets once, revokes sessions, then is spen
   await login(email);
   await Auth.requestPasswordReset(email);
   await setCode('password_reset_tokens', id, '333333');
-  await Auth.verifyOtp(email, '333333');
-  await Auth.resetPasswordWithOtp(email, 'NewPass12', 'NewPass12');
-  const again = await errOf(Auth.resetPasswordWithOtp(email, 'Other123', 'Other123'));
+  const ticket = await Auth.verifyOtp(email, '333333');
+  await Auth.resetPasswordWithOtp(email, 'NewPass12', 'NewPass12', ticket);
+  const again = await errOf(Auth.resetPasswordWithOtp(email, 'Other123', 'Other123', ticket));
   const u = await userByEmail(email);
   const sessions = await count('SELECT COUNT(*) n FROM refresh_tokens WHERE user_id = $1', [id]);
   return { pass: await bcrypt.compare('NewPass12', u.password_hash!) && !!again && sessions === 0, detail: `second=${again?.message} sessions=${sessions}` };
@@ -145,10 +145,10 @@ test('#9 two concurrent resets with one verified token: exactly one succeeds', a
   const id = await insertUser(email);
   await Auth.requestPasswordReset(email);
   await setCode('password_reset_tokens', id, '444444');
-  await Auth.verifyOtp(email, '444444');
+  const ticket = await Auth.verifyOtp(email, '444444');
   const results = await Promise.allSettled([
-    Auth.resetPasswordWithOtp(email, 'RaceAaa11', 'RaceAaa11'),
-    Auth.resetPasswordWithOtp(email, 'RaceBbb22', 'RaceBbb22'),
+    Auth.resetPasswordWithOtp(email, 'RaceAaa11', 'RaceAaa11', ticket),
+    Auth.resetPasswordWithOtp(email, 'RaceBbb22', 'RaceBbb22', ticket),
   ]);
   const ok = results.filter(r => r.status === 'fulfilled').length;
   return { pass: ok === 1, detail: `fulfilled=${ok}` };
@@ -159,8 +159,8 @@ test('R3 a reset on a squatted unverified account verifies it in one step', asyn
   const s = await pendingSignup(email);               // squatter's unverified account + pending code
   await Auth.requestPasswordReset(email);             // the inbox owner
   await setCode('password_reset_tokens', s.id, '777777');
-  await Auth.verifyOtp(email, '777777');
-  await Auth.resetPasswordWithOtp(email, 'OwnerPass9', 'OwnerPass9');
+  const ticket = await Auth.verifyOtp(email, '777777');
+  await Auth.resetPasswordWithOtp(email, 'OwnerPass9', 'OwnerPass9', ticket);
   const u = await userByEmail(email);
   const pending = await count('SELECT COUNT(*) n FROM email_verification_tokens WHERE user_id = $1 AND used = FALSE', [s.id]);
   const r = await Auth.loginUser(email, 'OwnerPass9');
@@ -208,10 +208,10 @@ test('#10 reset rejects a weak password and one over 72 bytes', async () => {
   const id = await insertUser(email);
   await Auth.requestPasswordReset(email);
   await setCode('password_reset_tokens', id, '555555');
-  await Auth.verifyOtp(email, '555555');
-  const weak = await errOf(Auth.resetPasswordWithOtp(email, 'a', 'a'));
+  const ticket = await Auth.verifyOtp(email, '555555');
+  const weak = await errOf(Auth.resetPasswordWithOtp(email, 'a', 'a', ticket));
   const long = 'Aa1' + 'x'.repeat(70);
-  const tooLong = await errOf(Auth.resetPasswordWithOtp(email, long, long));
+  const tooLong = await errOf(Auth.resetPasswordWithOtp(email, long, long, ticket));
   const u = await userByEmail(email);
   return { pass: !!weak && !!tooLong && await bcrypt.compare(PW, u.password_hash!), detail: `${weak?.message} | ${tooLong?.message}` };
 });
@@ -270,7 +270,7 @@ test('#2 every OTP failure returns one message (unknown email, wrong, expired)',
   const wrong = await errOf(Auth.verifyOtp(email, '000000'));
   await query(`UPDATE password_reset_tokens SET expires_at = NOW() - INTERVAL '1 minute' WHERE user_id = $1`, [id]);
   const expired = await errOf(Auth.verifyOtp(email, '000000'));
-  const resetUnknown = await errOf(Auth.resetPasswordWithOtp(addr('nobody'), 'NewPass12', 'NewPass12'));
+  const resetUnknown = await errOf(Auth.resetPasswordWithOtp(addr('nobody'), 'NewPass12', 'NewPass12', 'some-ticket'));
   const msgs = new Set([unknown?.message, wrong?.message, expired?.message, resetUnknown?.message]);
   return { pass: msgs.size === 1 && !msgs.has(undefined), detail: [...msgs].join(' | ') };
 });
@@ -547,6 +547,73 @@ test('POST /login for an unverified account sets verify_ticket as httpOnly and o
   const body = await res.json() as { data?: Record<string, unknown> };
   const raw = (res.headers.getSetCookie?.() ?? []).find(c => c.startsWith('verify_ticket=')) ?? '';
   return { pass: res.status === 200 && body.data?.status === 'EMAIL_VERIFICATION_REQUIRED' && !('verificationTicket' in (body.data ?? {})) && /HttpOnly/i.test(raw), detail: raw };
+});
+
+
+// ── AU1: the reset step needs the ticket of the browser that verified the code ──
+test('AU1 reset without a ticket, or with the wrong one, fails; the verifying browser\'s ticket succeeds', async () => {
+  const email = addr('reset-ticket');
+  const id = await insertUser(email);
+  await Auth.requestPasswordReset(email);
+  await setCode('password_reset_tokens', id, '121212');
+  const ticket = await Auth.verifyOtp(email, '121212');
+  const none = await errOf(Auth.resetPasswordWithOtp(email, 'Attacker99', 'Attacker99', undefined));
+  const wrong = await errOf(Auth.resetPasswordWithOtp(email, 'Attacker99', 'Attacker99', 'not-the-ticket'));
+  const stillOld = await bcrypt.compare(PW, (await userByEmail(email)).password_hash!);
+  const ok = await errOf(Auth.resetPasswordWithOtp(email, 'OwnerNew77', 'OwnerNew77', ticket));
+  const u = await userByEmail(email);
+  const stored = await latestCode('password_reset_tokens', id) as { ticket_hash?: string | null };
+  return {
+    pass: none instanceof AppError && wrong instanceof AppError && stillOld && ok === null
+      && await bcrypt.compare('OwnerNew77', u.password_hash!) && stored.ticket_hash === hashToken(ticket) && ticket.length >= 40,
+    detail: `none=${none?.message} wrong=${wrong?.message} ok=${ok?.message ?? 'ok'}`,
+  };
+});
+
+test('AU1/AU9 a second verifyOtp on an already-verified code fails (never "verified" again)', async () => {
+  const email = addr('reverify');
+  const id = await insertUser(email);
+  await Auth.requestPasswordReset(email);
+  await setCode('password_reset_tokens', id, '131313');
+  const first = await Auth.verifyOtp(email, '131313');
+  const second = await errOf(Auth.verifyOtp(email, '131313'));
+  const parallelEmail = addr('reverify-race');
+  const pid = await insertUser(parallelEmail);
+  await Auth.requestPasswordReset(parallelEmail);
+  await setCode('password_reset_tokens', pid, '141414');
+  const race = await Promise.allSettled([Auth.verifyOtp(parallelEmail, '141414'), Auth.verifyOtp(parallelEmail, '141414')]);
+  const won = race.filter(r => r.status === 'fulfilled').length;
+  return { pass: typeof first === 'string' && second instanceof AppError && second.statusCode === 400 && won === 1,
+    detail: `second=${second?.message} raceWinners=${won}` };
+});
+
+test('AU1 GraphQL: verifyOtp sets reset_ticket (httpOnly, not in the body); resetPassword needs that cookie and clears it', async (base) => {
+  const email = addr('gql-reset');
+  const id = await insertUser(email);
+  await Auth.requestPasswordReset(email);
+  await setCode('password_reset_tokens', id, '151515');
+  const gql = (q: string, variables: unknown, cookie?: string) => fetch(`${base}/graphql`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}) },
+    body: JSON.stringify({ query: q, variables }),
+  });
+  const verify = await gql('mutation($i: VerifyOtpInput!) { verifyOtp(input: $i) { success message } }', { i: { email, code: '151515' } });
+  const vBody = await verify.text();
+  const rawCookie = (verify.headers.getSetCookie?.() ?? []).find(c => c.startsWith('reset_ticket=')) ?? '';
+  const ticket = cookieValue(verify, 'reset_ticket');
+  const RESET = 'mutation($i: ResetPasswordInput!) { resetPassword(input: $i) { success } }';
+  const input = { i: { email, newPassword: 'ViaGraph88', confirmPassword: 'ViaGraph88' } };
+  const noCookie = await (await gql(RESET, input)).json() as { errors?: unknown[] };
+  const withCookie = await gql(RESET, input, `reset_ticket=${ticket}`);
+  const wBody = await withCookie.json() as { data?: { resetPassword?: { success: boolean } } };
+  const cleared = (withCookie.headers.getSetCookie?.() ?? []).find(c => c.startsWith('reset_ticket=')) ?? '';
+  const u = await userByEmail(email);
+  return {
+    pass: !!ticket && /HttpOnly/i.test(rawCookie) && !vBody.includes(ticket) && !!noCookie.errors
+      && wBody.data?.resetPassword?.success === true && /Expires=Thu, 01 Jan 1970/i.test(cleared)
+      && await bcrypt.compare('ViaGraph88', u.password_hash!),
+    detail: `cookie=${rawCookie.slice(0, 60)} noCookieErr=${!!noCookie.errors} cleared=${cleared.slice(0, 40)}`,
+  };
 });
 
 // ── runner ───────────────────────────────────────────────────────────────
