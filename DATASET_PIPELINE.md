@@ -68,9 +68,9 @@ Two new migration files, both safe to run more than once. They add things and do
 
 These migrations have NOT been run on the live Neon database. Running them needs a separate approval. The order matters: database first, then the backend, then the frontend, because the new backend code does not work on a database without the migrations. A step by step plan with backup, restore check and rollback is in backend/ops/neon-migration/RUNBOOK.md.
 
-## Temporary Groq provider
+## Temporary Groq provider (removed)
 
-Because the Gemini key ran out of quota during testing, a Groq option was added only for testing. It has its own rate limits and a token budget per run so a test cannot use up the daily allowance. Gemini stays the default everywhere. The Groq key lives only in the local .env file and is not part of the commit.
+Because the Gemini key ran out of quota during testing, a Groq option was added only for testing. It had its own rate limits and a token budget per run so a test could not use up the daily allowance. Both Groq and Gemini were removed on 2026-11-01: every LLM task now runs on OpenAI `gpt-6-luna` (see CHANGES.md).
 
 ## How it was tested
 

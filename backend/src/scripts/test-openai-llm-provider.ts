@@ -101,7 +101,7 @@ const rejects = async (p: Promise<unknown>): Promise<Error> => p.then(() => new 
     const schemas = [DECOMPOSITION_RESPONSE_SCHEMA, ADAPTIVE_RETRIEVAL_RESPONSE_SCHEMA, GROUNDEDNESS_RESPONSE_SCHEMA].map(s => toJsonSchema(s, { strict: true }));
     const adaptive = schemas[1] as any;
     const loose = toJsonSchema(ADAPTIVE_RETRIEVAL_RESPONSE_SCHEMA) as any;
-    check('4. Strict schema: every object lists ALL its properties in required with additionalProperties:false; a property the schema leaves optional becomes nullable (adaptive retrievalQuery/targetAspect); without strict, required is as written (Groq unchanged)',
+    check('4. Strict schema: every object lists ALL its properties in required with additionalProperties:false; a property the schema leaves optional becomes nullable (adaptive retrievalQuery/targetAspect); without strict, required is as written',
       schemas.every(closed) && JSON.stringify(adaptive.properties.retrievalQuery.type) === '["string","null"]'
         && JSON.stringify(adaptive.properties.action.type) === '"string"' && JSON.stringify(loose.required) === '["action","reason"]',
       `adaptive.required=${JSON.stringify(adaptive.required)} retrievalQuery=${JSON.stringify(adaptive.properties.retrievalQuery)}`);

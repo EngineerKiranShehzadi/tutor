@@ -44,7 +44,7 @@ export const requiredComponents = (): ComponentName[] => [
 // Probes the provider that answers questions (RAG_LLM_PROVIDER / RAG_ANSWER_MODEL),
 // never with a paid call, and never by switching on the provider's name:
 //  - a provider with a probe() (openai: GET /models/{model}, no tokens): run it;
-//  - one without (groq): degraded UNVERIFIED_PROVIDER — never "healthy" unchecked.
+//  - an adapter without one: degraded UNVERIFIED_PROVIDER — never "healthy" unchecked.
 // Pure: it does not consult the real-call signal. checkReadiness caches this
 // result and applies the signal after the cache (see withProviderSignal), so
 // both a failure and a recovery of real answer calls show at once.

@@ -1,7 +1,7 @@
 import type { LlmRequest, LlmResponse } from '../llm.types';
 
-// Every provider adapter (openai-llm.provider.ts, groq-llm.provider.ts, and
-// any future one) implements exactly this.
+// Every provider adapter (openai-llm.provider.ts, and any future one)
+// implements exactly this.
 // Business services never see the provider's own SDK types — only this
 // interface and the plain types in llm.types.ts.
 export interface LlmProvider {

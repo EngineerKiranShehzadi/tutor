@@ -311,28 +311,10 @@ export const env = {
     CACHE_TTL_MS:          nonNegativeInt('HEALTH_CHECK_CACHE_TTL_MS', 60000),
   },
 
-  // ── Groq (TEMPORARY free-tier test provider; see llm/providers/groq-llm.provider.ts) ──
-  // Only used when a service's *_PROVIDER is set to 'groq'. OpenAI stays the default everywhere.
-  // The limits below are CLIENT-SIDE ceilings kept under the free-tier numbers for openai/gpt-oss-120b
-  // (about 30 requests/min, 8,000 tokens/min, 200,000 tokens/day); Groq's own response headers tighten them further.
-  GROQ: {
-    API_KEY:            optional('GROQ_API_KEY', ''),
-    BASE_URL:           optional('GROQ_BASE_URL', 'https://api.groq.com/openai/v1'),
-    MAX_RPM:            positiveInt('GROQ_MAX_RPM', 20),
-    MAX_TPM:            positiveInt('GROQ_MAX_TPM', 7000),
-    // Hard stop for one process lifetime so a test run can never eat the whole daily allowance.
-    RUN_TOKEN_BUDGET:   positiveInt('GROQ_RUN_TOKEN_BUDGET', 120000),
-    // A retry-after longer than this is a daily/long limit: fail clearly instead of sleeping for hours.
-    MAX_WAIT_MS:        positiveInt('GROQ_MAX_WAIT_MS', 90000),
-    REASONING_EFFORT:   optional('GROQ_REASONING_EFFORT', 'low'),
-    // gpt-oss counts its reasoning inside max_completion_tokens: never ask for less than this floor.
-    MIN_COMPLETION_TOKENS: positiveInt('GROQ_MIN_COMPLETION_TOKENS', 1024),
-  },
-
   // ── Provider-neutral LLM configuration ─────────────────────────
   // Every LLM-dependent service picks its provider+model from here rather
   // than hardcoding either — see src/llm/llm-provider.resolver.ts, which has
-  // the registered adapters (openai, groq) and throws a clear error
+  // the registered adapter (openai) and throws a clear error
   // for any other PROVIDER value. config/llm-providers.ts checks the selected
   // providers' keys at startup.
   LLM: {
@@ -464,7 +446,7 @@ export const env = {
     // Hosted-provider settings. Each key is only required when its provider is
     // selected — checked once at startup (see config/retrieval-providers.ts).
     // Blank = the provider's own default (embedding-provider.resolver.ts:
-    // text-embedding-3-small for openai, voyage-4 for voyage).
+    // text-embedding-3-small for openai).
     EMBEDDING_MODEL:      nonBlank('EMBEDDING_MODEL', ''),
     // Must equal the database column (vector(1024)); anything else is rejected at startup.
     EMBEDDING_DIMENSIONS: positiveInt('EMBEDDING_DIMENSIONS', 1024),
@@ -472,8 +454,7 @@ export const env = {
     // local-http reranker ignores it.
     RERANK_MODEL:         nonBlank('RERANK_MODEL', 'rerank-3'),
     OPENAI_API_KEY:       nonBlank('OPENAI_API_KEY', ''),
-    // The Voyage key: rerank in production; embedding too only if
-    // EMBEDDING_PROVIDER=voyage (registered, unused).
+    // The Voyage key: rerank only.
     VOYAGE_API_KEY:       nonBlank('VOYAGE_API_KEY', ''),
     // Minimum cosine similarity for a chunk to survive vector search.
     VECTOR_SIMILARITY_THRESHOLD: finiteFloat('VECTOR_SIMILARITY_THRESHOLD', 0.55),

@@ -45,10 +45,10 @@ const text = (d: { lines: string[] }): string => d.lines.join('\n');
 cases.push({ label: 'collectLlmTargets: distinct (provider, model) across tasks, fallback model included, tasks listed', run: () => {
   const t = collectLlmTargets({
     RAG_ANSWER: { PROVIDER: 'openai', MODEL: 'a', FALLBACK_MODEL: 'b' },
-    GREETING: { PROVIDER: 'openai', MODEL: 'a' }, ROUTER: { PROVIDER: 'groq', MODEL: 'a' }, BROKEN: {},
+    GREETING: { PROVIDER: 'openai', MODEL: 'a' }, ROUTER: { PROVIDER: 'other', MODEL: 'a' }, BROKEN: {},
   });
   return t.length === 3 && t[0].model === 'a' && t[0].tasks.join() === 'RAG_ANSWER,GREETING'
-    && t[1].model === 'b' && t[1].tasks.join() === 'RAG_ANSWER (fallback)' && t[2].provider === 'groq';
+    && t[1].model === 'b' && t[1].tasks.join() === 'RAG_ANSWER (fallback)' && t[2].provider === 'other';
 } });
 cases.push({ label: 'cost math: tokens / 1M x price; worst case uses the full output cap', run: () => {
   const p: LlmPrice = { inputPer1M: 1, outputPer1M: 10 };

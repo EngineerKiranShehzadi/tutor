@@ -3,7 +3,7 @@ import type { LlmSchema } from './llm.types';
 export type JsonSchema = Record<string, unknown>;
 
 // The one place LlmSchema is mapped onto JSON Schema, for the providers that
-// take JSON Schema (Groq, OpenAI): lower-case types, every object closed
+// take JSON Schema (OpenAI): lower-case types, every object closed
 // (additionalProperties: false).
 //
 // strict: true produces what OpenAI's strict Structured Outputs requires:

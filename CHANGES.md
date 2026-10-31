@@ -7,7 +7,7 @@ Newest entry at the top.
 
 ---
 
-## 2026-11-01 — Final stack: gpt-6-luna on every LLM task; Gemini removed
+## 2026-11-01 — Final stack: gpt-6-luna on every LLM task; Gemini, Groq and the Voyage embedder removed
 
 **Changed by:** Kiran
 **Files:** `config/env.ts`, `llm/providers/openai-llm.provider.ts`, `llm/llm-provider.resolver.ts`,
@@ -16,14 +16,19 @@ Newest entry at the top.
 `package.json` (`@google/genai` removed); deleted `llm/providers/gemini-llm.provider.ts`, `gemini-thinking.ts`,
 `services/gemini-provider.service.ts`, `observability/gemini-diagnostics.ts`; `.env.example`,
 `docs/OPENAI_SWITCH.md`, `docs/OBSERVABILITY.md`, `START_HERE.md`, `e2e/README.md`; frontend landing page, Status
-banner and Retrieval inspector wording; scripts in `backend/src/scripts/` (new `live-llm.ts`)
+banner and Retrieval inspector wording; scripts in `backend/src/scripts/` (new `live-llm.ts`); deleted
+`llm/providers/groq-llm.provider.ts`, `groq-rate-limiter.ts`, `embedding/providers/voyage-embedding.provider.ts`,
+`scripts/test-groq-provider.ts`, `groq-real-check.ts`, `groq-verifier-check.ts`, `e2e/browser-groq.js`,
+`e2e/groq-env.sh`; `embedding/embedding-provider.resolver.ts`, `utils/voyage-api.ts`, `e2e/up.sh`,
+`DATASET_PIPELINE.md`
 
 **Final stack:** embedding OpenAI `text-embedding-3-small` at 1024 dimensions, rerank Voyage `rerank-3`, all ten
 LLM tasks OpenAI `gpt-6-luna`.
 
 **Deploy note:** no migration. Set every `*_LLM_MODEL`, `RAG_ANSWER_MODEL` and `RAG_ANSWER_FALLBACK_MODEL` to
-`gpt-6-luna` (as in `.env.example`), and drop any `LLM_PRICING_JSON` entry for the old model. `GEMINI_API_KEY`
-and `HEALTH_GEMINI_CHECK_ENABLED` are no longer read: remove them. Run `npm install` (one dependency fewer).
+`gpt-6-luna` (as in `.env.example`), and drop any `LLM_PRICING_JSON` entry for the old model.
+`GEMINI_API_KEY`, `HEALTH_GEMINI_CHECK_ENABLED` and the `GROQ_*` settings are no longer read: remove them.
+`EMBEDDING_PROVIDER=voyage` now stops startup as an unknown provider. Run `npm install` (one dependency fewer).
 Traces written before this keep the old span names (`gemini_answer_call` and so on); new ones use the new names.
 
 - **The model identifier was wrong everywhere.** The repo named an older, different model. That broke three
@@ -46,6 +51,11 @@ Traces written before this keep the old span names (`gemini_answer_call` and so 
 - **Scripts.** The evaluation scripts (`eval:rag`, the dedup and reorder comparisons, the judge check) and the
   live router/rewriter/memory checks use the configured provider: the judge is the answer-verification model, and
   a missing key stops them with one line. The e2e server and the offline tests stub the OpenAI adapter.
+- **Groq and the Voyage embedder removed.** Groq was a temporary free-tier test provider; the Voyage embedding
+  adapter came from a superseded plan in which Voyage did the embedding. The registries are now: LLM `openai`;
+  embedding `openai` and `local-http`; rerank `voyage` and `local-http`. `utils/voyage-api.ts` keeps what the
+  reranker uses (base URL and the free probe). `local-http` stays: the test suite and offline development run on
+  it without paid keys. `E2E_LLM=groq` is gone from the e2e run; `E2E_LLM=real` uses the configured provider.
 
 ---
 

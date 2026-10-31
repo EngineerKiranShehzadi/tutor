@@ -12,8 +12,7 @@ npm run -s db:setup > "$OUT/logs/db-setup.log" 2>&1
 ./node_modules/.bin/ts-node --transpile-only e2e/seed.ts 2>/dev/null | grep lectureId > "$OUT/ctx.json"
 echo 0 > "$OUT/llm_delay"
 node e2e/embed-proxy.js 5101 > "$OUT/logs/proxy.log" 2>&1 & echo $! > "$OUT/proxy.pid"
-# E2E_LLM=groq -> no stub: every LLM service uses Groq openai/gpt-oss-120b (key from backend/.env), free-tier limiter active.
-if [ "${E2E_LLM:-stub}" = "groq" ]; then source e2e/groq-env.sh; export E2E_LLM=real; fi
+# E2E_LLM=real -> no stub: every LLM service calls the configured provider (OPENAI_API_KEY from backend/.env; spends tokens).
 # E2E_PHOENIX=1 -> export this backend's traces to the e2e Phoenix (e2e/phoenix-up.sh, :6016); prompt/answer content captured (test data only).
 if [ "${E2E_PHOENIX:-0}" = "1" ]; then
   export OBSERVABILITY_ENABLED=true PHOENIX_ENABLED=true PHOENIX_ENDPOINT=http://localhost:6016/v1/traces PHOENIX_BASE_URL=http://localhost:6016 \

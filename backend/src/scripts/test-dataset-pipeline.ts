@@ -199,8 +199,8 @@ const workerMain = async () => {
       version: EMBEDDING_MODEL_VERSION, readyBefore, chat, prepKind: prep.kind, embedCalls: emb.calls.length, readyAfter, models,
     }));
   } else if (mode === 'reembed') {
-    // Runs under EMBEDDING_PROVIDER=voyage (V2): the lecture was last built
-    // under another model, so reembed:all must plan and then rebuild all of it.
+    // Runs under EMBEDDING_MODEL=text-embedding-3-large (V2): the lecture was
+    // last built under another model, so reembed:all must plan and then rebuild all of it.
     const lectureId = Number(process.argv[5]);
     const { reembedLectures } = await import('../services/reembed.service');
     const dry = await reembedLectures({ apply: false, lectureIds: [lectureId] });
@@ -1182,9 +1182,10 @@ const run = async () => {
         && !parentAfter.ready && /^STALE_EMBEDDING_MODEL: /.test(parentAfter.reason),
       `after=${JSON.stringify(o?.readyAfter)} parentNow=${parentAfter.reason}`);
 
-    // V2: the same switch to Voyage, done by reembed:all (dry run, then apply).
+    // V2: another model change (text-embedding-3-small → -3-large), done by reembed:all (dry run, then apply).
+    const LARGE = 'openai:text-embedding-3-large:1024';
     const vw = spawnSync(TSNODE, ['--transpile-only', __filename, '--worker', 'reembed', '0', String(Ls)], {
-      env: { ...process.env, EMBEDDING_PROVIDER: 'voyage', VOYAGE_API_KEY: 'pa-test-not-used', EMBEDDING_MODEL: '' }, encoding: 'utf8',
+      env: { ...process.env, EMBEDDING_PROVIDER: 'openai', OPENAI_API_KEY: 'sk-test-not-used', EMBEDDING_MODEL: 'text-embedding-3-large' }, encoding: 'utf8',
     });
     const vline = (vw.stdout ?? '').split('\n').find(l => l.startsWith('WORKER reembedded '));
     type R = { outcome: string; chunksToEmbed: number; qaPairs: number }[];
@@ -1192,12 +1193,12 @@ const run = async () => {
       version: string; dry: R; versionsBefore: number; applied: R; again: R; ready: { ready: boolean; reason: string }; embedCalls: number;
     } : null;
     const versionsAfterDry = v ? v.versionsBefore : -1;
-    check('22e. reembed:all under EMBEDDING_PROVIDER=voyage: the dry run plans every piece and writes nothing; --apply rebuilds and activates; a second dry run finds it up to date and the lecture is ready under voyage:voyage-4:1024',
-      !!v && v.version === 'voyage:voyage-4:1024'
+    check('22e. reembed:all after a model change (EMBEDDING_MODEL=text-embedding-3-large): the dry run plans every piece and writes nothing; --apply rebuilds and activates; a second dry run finds it up to date and the lecture is ready under openai:text-embedding-3-large:1024',
+      !!v && v.version === LARGE
         && v.dry[0]?.outcome === 'PLANNED' && v.dry[0]?.chunksToEmbed === total && v.dry[0]?.qaPairs === 6
         && v.applied[0]?.outcome === 'ACTIVATED' && v.embedCalls === total
         && v.again[0]?.outcome === 'UP_TO_DATE' && v.again[0]?.chunksToEmbed === 0
-        && v.ready.ready && v.ready.reason.includes('voyage:voyage-4:1024') && versionsAfterDry >= 1,
+        && v.ready.ready && v.ready.reason.includes(LARGE) && versionsAfterDry >= 1,
       v ? `dry=${JSON.stringify(v.dry)} applied=${JSON.stringify(v.applied)} again=${JSON.stringify(v.again)} ready=${v.ready.reason} embedCalls=${v.embedCalls}/${total}` : `no worker output; stderr=${(vw.stderr ?? '').slice(0, 300)}`);
   }
 

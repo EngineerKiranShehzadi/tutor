@@ -1,10 +1,10 @@
 import { classifyErrorCode } from './tracer';
 
 // Passive health signal from REAL provider calls (embedding, rerank, the
-// answer LLM). Used by the readiness probe for hosted providers that have no
-// free endpoint to probe (e.g. Voyage rerank, Groq): a config check alone
-// would report a dead provider as healthy. Costs nothing — it only records
-// outcomes of calls already made.
+// answer LLM). Readiness applies it on top of each probe: a free probe can
+// pass while real calls fail (e.g. a rate-limited or used-up key), and a config
+// check alone would report a dead provider as healthy. Costs nothing — it only
+// records outcomes of calls already made.
 //
 // Only availability failures count (unreachable, timeout, rate limit/quota,
 // 5xx); a bad input is not the provider being down. A success resets it.

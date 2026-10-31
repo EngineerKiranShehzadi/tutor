@@ -1,7 +1,6 @@
 import { AppError } from '../middleware/errorHandler';
 import { env } from '../config/env';
 import { createOpenAiEmbeddingProvider } from './providers/openai-embedding.provider';
-import { createVoyageEmbeddingProvider } from './providers/voyage-embedding.provider';
 import { localHttpEmbeddingProvider } from './providers/local-http-embedding.provider';
 import type { EmbeddingProvider } from './providers/embedding-provider.interface';
 
@@ -12,7 +11,6 @@ import type { EmbeddingProvider } from './providers/embedding-provider.interface
 // blank value can never send one provider's model name to another.
 export const DEFAULT_EMBEDDING_MODELS: Record<string, string> = {
   openai: 'text-embedding-3-small',
-  voyage: 'voyage-4',
 };
 const modelFor = (name: string): string => env.RETRIEVAL.EMBEDDING_MODEL || DEFAULT_EMBEDDING_MODELS[name];
 
@@ -23,11 +21,6 @@ const FACTORIES: Record<string, () => EmbeddingProvider> = {
   openai: () => createOpenAiEmbeddingProvider({
     apiKey: env.RETRIEVAL.OPENAI_API_KEY,
     model: modelFor('openai'),
-    dimensions: env.RETRIEVAL.EMBEDDING_DIMENSIONS,
-  }),
-  voyage: () => createVoyageEmbeddingProvider({
-    apiKey: env.RETRIEVAL.VOYAGE_API_KEY,
-    model: modelFor('voyage'),
     dimensions: env.RETRIEVAL.EMBEDDING_DIMENSIONS,
   }),
 };

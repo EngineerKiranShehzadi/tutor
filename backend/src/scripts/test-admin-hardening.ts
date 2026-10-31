@@ -951,19 +951,27 @@ const run = async () => {
   }
 
   // ── AD10: readiness never claims an unprobed answer LLM is healthy ───
+  // OpenAI is the only adapter and it has a probe; an adapter without one is
+  // simulated by taking the probe off the OpenAI adapter for this block.
   {
     const rag = env.LLM.RAG_ANSWER as { PROVIDER: string };
     const saved = rag.PROVIDER;
+    const llm = resolveLlmProvider('openai') as { probe?: unknown };
+    const realProbe = llm.probe;
     try {
-      rag.PROVIDER = 'groq';
+      rag.PROVIDER = 'openai';
+      delete llm.probe;
+      resetHealthCache();
       const direct = await checkAnswerLlm();
       const r = await checkReadiness();
-      check('AD10-1. RAG_LLM_PROVIDER=groq: readiness is not healthy and answerLlm.errorCode = UNVERIFIED_PROVIDER (it used to probe no LLM at all)',
+      check('AD10-1. An answer LLM adapter with no probe: readiness is not healthy and answerLlm.errorCode = UNVERIFIED_PROVIDER (it used to probe no LLM at all)',
         direct.status === 'degraded' && direct.errorCode === 'UNVERIFIED_PROVIDER'
           && r.status !== 'healthy' && r.components.answerLlm.errorCode === 'UNVERIFIED_PROVIDER' && !('gemini' in r.components),
         `direct=${JSON.stringify(direct)} overall=${r.status} answerLlm=${JSON.stringify(r.components.answerLlm)}`);
     } finally {
+      llm.probe = realProbe;
       rag.PROVIDER = saved;
+      resetHealthCache();
     }
   }
 
@@ -1262,9 +1270,12 @@ const run = async () => {
   {
     const rag = env.LLM.RAG_ANSWER as { PROVIDER: string };
     const saved = rag.PROVIDER;
-    rag.PROVIDER = 'groq';
-    const provider = resolveLlmProvider('groq') as { generate: (...a: unknown[]) => Promise<unknown> };
+    rag.PROVIDER = 'openai';
+    // No probe (as in AD10), so the healed state is the adapter's own degraded/UNVERIFIED_PROVIDER.
+    const provider = resolveLlmProvider('openai') as { generate: (...a: unknown[]) => Promise<unknown>; probe?: unknown };
     const realGenerate = provider.generate;
+    const realProbe = provider.probe;
+    delete provider.probe;
     resetProviderSignals();
     try {
       provider.generate = async () => { throw new Error('Request timeout after 30000ms'); };
@@ -1274,19 +1285,21 @@ const run = async () => {
       resetHealthCache();
       const ready = await checkReadiness();
       const down = ready.components.answerLlm;
-      provider.generate = async (req: unknown) => ({ raw: 'ok', provider: 'groq', model: (req as { model: string }).model, finishReason: 'STOP' });
+      provider.generate = async (req: unknown) => ({ raw: 'ok', provider: 'openai', model: (req as { model: string }).model, finishReason: 'STOP' });
       await generateAnswer('What is a prompt?', [], 'Lecture', []);
       const healed = (await checkReadiness()).components.answerLlm;
       // (Overall readiness is unhealthy here anyway — no local embedding server — so the component is what is checked.)
-      check('AD-N8-1. RAG_LLM_PROVIDER=groq: two timed-out answer calls → answerLlm unhealthy (TIMEOUT) in /health/ready (a required component → 503); one success → back to degraded/UNVERIFIED_PROVIDER',
+      check('AD-N8-1. Answer LLM without a probe: two timed-out answer calls → answerLlm unhealthy (TIMEOUT) in /health/ready (a required component → 503); one success → back to degraded/UNVERIFIED_PROVIDER',
         answers.every(a => a instanceof Error) && down.status === 'unhealthy' && down.errorCode === 'TIMEOUT'
           && ready.components.answerLlm.status === 'unhealthy' && ready.status === 'unhealthy'
           && healed.status === 'degraded' && healed.errorCode === 'UNVERIFIED_PROVIDER',
         `down=${JSON.stringify(down)} readiness.answerLlm=${JSON.stringify(ready.components.answerLlm)} healed=${JSON.stringify(healed)}`);
     } finally {
       provider.generate = realGenerate;
+      provider.probe = realProbe;
       rag.PROVIDER = saved;
       resetProviderSignals();
+      resetHealthCache();
     }
   }
 
@@ -1367,10 +1380,13 @@ const run = async () => {
     const rag = env.LLM.RAG_ANSWER as { PROVIDER: string };
     const health = env.HEALTH as { CACHE_TTL_MS: number };
     const saved = { provider: rag.PROVIDER, ttl: health.CACHE_TTL_MS };
-    rag.PROVIDER = 'groq';
+    rag.PROVIDER = 'openai';
     health.CACHE_TTL_MS = 60_000;
-    const provider = resolveLlmProvider('groq') as { generate: (...a: unknown[]) => Promise<unknown> };
+    // No probe (as in AD10): the recovered state is degraded/UNVERIFIED_PROVIDER.
+    const provider = resolveLlmProvider('openai') as { generate: (...a: unknown[]) => Promise<unknown>; probe?: unknown };
     const realGenerate = provider.generate;
+    const realProbe = provider.probe;
+    delete provider.probe;
     const realSetTimeout = globalThis.setTimeout;
     resetProviderSignals();
     resetHealthCache();
@@ -1378,7 +1394,7 @@ const run = async () => {
       provider.generate = async () => { throw new Error('Request timeout after 30000ms'); };
       for (let i = 0; i < 2; i++) await generateAnswer('What is a prompt?', [], 'Lecture', []).catch(() => undefined);
       const down = await checkReadiness();          // fills the 60 s cache while the signal says down
-      provider.generate = async (req: unknown) => ({ raw: 'ok', provider: 'groq', model: (req as { model: string }).model, finishReason: 'STOP' });
+      provider.generate = async (req: unknown) => ({ raw: 'ok', provider: 'openai', model: (req as { model: string }).model, finishReason: 'STOP' });
       await generateAnswer('What is a prompt?', [], 'Lecture', []);
       const after = await checkReadiness();         // same 60 s window, cached probe
       check('R5-1. Two failed answer calls → readiness caches answerLlm; one success → the very next readiness (inside the same 60 s TTL) reports it recovered, not unhealthy until the TTL ends',
@@ -1401,6 +1417,7 @@ const run = async () => {
     } finally {
       (globalThis as { setTimeout: unknown }).setTimeout = realSetTimeout;
       provider.generate = realGenerate;
+      provider.probe = realProbe;
       rag.PROVIDER = saved.provider;
       health.CACHE_TTL_MS = saved.ttl;
       resetProviderSignals();

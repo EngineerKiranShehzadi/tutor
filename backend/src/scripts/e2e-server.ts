@@ -12,7 +12,7 @@
  *     decomposition / rewrite / planner) fails, so the code's own safe defaults apply.
  * Retrieval, reranking, embeddings, answer memory, versions, SQL are all real.
  *
- * E2E_LLM=real disables the stub entirely (real provider calls, e.g. Groq via e2e/groq-env.sh).
+ * E2E_LLM=real disables the stub entirely (real provider calls with the keys in backend/.env).
  *
  * Refuses to start unless DATABASE_URL is a local test database.
  * E2E_LLM_DELAY_FILE: optional file holding milliseconds to delay each answer
@@ -71,7 +71,7 @@ if (process.env.E2E_LLM !== 'real') {
 }
 
 console.log(process.env.E2E_LLM === 'real'
-  ? '[e2e-server] REAL LLM calls (no stub) — providers/models come from the environment (see e2e/groq-env.sh)'
+  ? '[e2e-server] REAL LLM calls (no stub) — providers/models come from the environment'
   : '[e2e-server] LLM replaced by a deterministic stub — retrieval/versions/memory are real');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 require('../server');
