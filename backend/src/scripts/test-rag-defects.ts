@@ -819,6 +819,27 @@ cases.push({
   },
 });
 
+// ── S11: the relevance-floor metric counts the floor, not the budget ────
+cases.push({
+  label: 'S11. 15 candidates all above the floor → chunksRemovedByRelevanceFloor=0, chunksBeyondContextBudget=10; 3 below → 3 and 7',
+  run: async () => {
+    const pool15 = Array.from({ length: 15 }, (_, i) => chunk(100 + i, `Q: q${i}`));
+    const spanOf = async (scoreOf: (i: number) => number) => {
+      const { deps, spies } = orchestratorDeps({
+        searchChunks: async () => pool15,
+        rerankChunks: async (_q, c) => c.map((x, i) => ({ ...x, rerankScore: scoreOf(i) })),
+      });
+      await withFakeDb(() => askOrchestrator(deps));
+      return spies.traces[0]?.spans.find(sp => sp.name === 'rerank-candidates')?.metadata ?? {};
+    };
+    const all = await spanOf(() => 0.9);
+    const some = await spanOf(i => (i < 12 ? 0.9 - i * 0.01 : 0.1));
+    const pass = all.chunksRemovedByRelevanceFloor === 0 && all.chunksBeyondContextBudget === 10 && all.rerankerOutputCount === 5
+      && some.chunksRemovedByRelevanceFloor === 3 && some.chunksBeyondContextBudget === 7;
+    return { pass, detail: `all: floor=${all.chunksRemovedByRelevanceFloor} beyond=${all.chunksBeyondContextBudget}; some: floor=${some.chunksRemovedByRelevanceFloor} beyond=${some.chunksBeyondContextBudget}` };
+  },
+});
+
 async function main(): Promise<void> {
   let failures = 0;
   for (const c of cases) {

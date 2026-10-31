@@ -892,6 +892,7 @@ export const askLectureAgent = async (
       currentStage = 'rerank-candidates';
       let dedupedAwayCount = 0;
       let belowFloorCount = 0;
+      let beyondBudgetCount = 0;
       let topRerankerScore: number | null = null;
       chunks = await trace.span(
         'rerank-candidates',
@@ -900,7 +901,11 @@ export const askLectureAgent = async (
           topRerankerScore = rankedAll[0]?.rerankScore ?? null;
           const { selected, dedupedAway } = dedupeAndSelect(rankedAll, 5);
           dedupedAwayCount = dedupedAway.length;
-          belowFloorCount = Math.max(0, rankedAll.length - selected.length - dedupedAway.length);
+          // dedupeAndSelect stops at the budget (5) before it ever reaches
+          // the floor, so "everything not selected or deduped" is NOT what the
+          // floor removed. Count the floor directly; the rest is beyond budget.
+          belowFloorCount = rankedAll.filter(c => (c.rerankScore ?? 0) < DEFAULT_MIN_RERANK_SCORE).length;
+          beyondBudgetCount = Math.max(0, rankedAll.length - belowFloorCount - selected.length - dedupedAway.length);
           return selected;
         },
         c => ({
@@ -915,6 +920,7 @@ export const askLectureAgent = async (
           topRerankerScore,
           lowestSelectedRerankerScore: c[c.length - 1]?.rerankScore ?? null,
           chunksRemovedByRelevanceFloor: belowFloorCount,
+          chunksBeyondContextBudget: beyondBudgetCount,
           chunksRemovedByDedupe: dedupedAwayCount,
           selectedChunkIds: c.map(chunk => chunk.id).join(','),
           ...(isContentCaptureEnabled() ? { [ATTR.RERANKER_QUERY]: truncateContent(retrievalQuery, 300).value } : {}),
