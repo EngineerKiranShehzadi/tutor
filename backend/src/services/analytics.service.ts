@@ -1,5 +1,6 @@
 import { query } from '../config/database';
 import { logger } from '../utils/logger';
+import { AppError } from '../middleware/errorHandler';
 import { getAllLectureReadiness } from './dataset-version.service';
 import { clampInt, likePattern, pageArgs } from '../utils/paging';
 
@@ -306,7 +307,9 @@ export const getStudentJourney = async (
   ]);
 
   const user = userRes.rows[0];
-  if (!user) throw new Error('Student not found');
+  // An expected outcome, not a crash: a plain Error was masked as "Internal
+  // server error" and logged as one.
+  if (!user) throw new AppError('Student not found', 404);
 
   const questions = questionsRes.rows.map(r => ({
     id:           r.id,

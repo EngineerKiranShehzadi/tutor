@@ -40,6 +40,7 @@ import { applyMigrations } from './db-setup';
 import { getRecentQuestions, getRecentQuestionsPage, getContentGaps, CONTENT_GAPS_MAX_QUESTIONS, getMyStats,
   getLectureChunks, getRegisteredStudents, getStudentJourney } from '../services/analytics.service';
 import { getAllUsers } from '../services/user.service';
+import { analyticsResolvers } from '../graphql/resolvers/analytics.resolver';
 import { queryLimitsRule } from '../graphql/query-limits';
 import { typeDefs } from '../graphql/typeDefs';
 import datasetRoutes from '../routes/dataset.routes';
@@ -952,6 +953,25 @@ const run = async () => {
     } finally {
       rag.PROVIDER = saved;
     }
+  }
+
+  // ── AD11: an unknown student is a 404 with its own message ──────────
+  {
+    const server = new ApolloServer({
+      typeDefs, resolvers: { Query: analyticsResolvers.Query } as never,
+      formatError: (err, original) => formatGraphQLError(err, original),
+    });
+    await server.start();
+    const res = await server.executeOperation(
+      { query: 'query($id: String!) { studentJourney(id: $id) { studentId } }', variables: { id: '00000000-0000-4000-8000-00000000dead' } },
+      { contextValue: { req: { user: { id: 'admin', email: 'admin@example.test', role: 'ADMIN' } } } as never }
+    );
+    await server.stop();
+    const errs = res.body.kind === 'single' ? res.body.singleResult.errors ?? [] : [];
+    const direct = await getStudentJourney('00000000-0000-4000-8000-00000000dead').catch(e => e as AppError);
+    check('AD11-1. studentJourney for an unknown id → "Student not found" (AppError 404), not "Internal server error"',
+      errs[0]?.message === 'Student not found' && direct instanceof AppError && direct.statusCode === 404,
+      `graphql="${errs[0]?.message}" status=${(direct as AppError).statusCode}`);
   }
 
 };
