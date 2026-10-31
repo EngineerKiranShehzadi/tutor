@@ -56,6 +56,7 @@ import { finishDatasetVersion, rollbackDataset } from '../services/dataset-versi
 import { EMBEDDING_MODEL_VERSION } from '../services/embedding.service';
 import observabilityRoutes from '../routes/observability.routes';
 import { STAGE_SPAN_KIND, OpenInferenceSpanKind } from '../observability/otel-semconv';
+import { OUTPUT_GUARDRAIL_REASONS } from '../rag/guardrails/output/answer-verification.types';
 
 const results: { name: string; pass: boolean; detail: string }[] = [];
 const check = (name: string, pass: boolean, detail: string) => {
@@ -1008,17 +1009,27 @@ const run = async () => {
     }
   }
 
-  // ── X3: every pipeline step on the monitor has a label ──
+  // ── X3/X4: monitor labels cover what the backend actually records ──────
   {
     // Loaded at runtime: it lives in the frontend package, outside the backend's tsc project.
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const labels = require(join(__dirname, '../../../frontend/src/lib/monitor-labels')) as {
-      STAGE_LABELS: Record<string, string>;
+      STAGE_LABELS: Record<string, string>; VERIFIER_REASON_LABELS: Record<string, string>; ATTENTION_VERIFIER_LABELS: Record<string, string>;
+      attentionDetailLabels: (row: Record<string, string | null>) => string[];
     };
     const stageNames = Object.entries(STAGE_SPAN_KIND).filter(([, kind]) => kind !== OpenInferenceSpanKind.LLM).map(([name]) => name);
     const missingStages = stageNames.filter(n => !Object.prototype.hasOwnProperty.call(labels.STAGE_LABELS, n));
+    const sorted = (xs: readonly string[]) => [...xs].sort().join(',');
+    const verifierKeysOk = sorted(Object.keys(labels.VERIFIER_REASON_LABELS)) === sorted(OUTPUT_GUARDRAIL_REASONS);
+    const attentionKeysOk = sorted(Object.keys(labels.ATTENTION_VERIFIER_LABELS)) === sorted(OUTPUT_GUARDRAIL_REASONS.filter(r => r !== 'VERIFIED'));
+    const outage = labels.attentionDetailLabels({ responseStatus: 'ERROR', errorCode: null, answerVerificationReason: 'VERIFIER_TIMEOUT' });
+    const wrong = labels.attentionDetailLabels({ responseStatus: 'ANSWERED', errorCode: null, answerVerificationReason: 'UNSUPPORTED_CLAIMS' });
     check('X3-1. Every non-LLM span name in STAGE_SPAN_KIND has a "Slowest pipeline steps" label (subquery-retrieval, adaptive-retrieval-iteration were "Other step")',
       missingStages.length === 0, `missing=[${missingStages.join(', ')}]`);
+    check('X4-1. Verifier label maps are keyed by OUTPUT_GUARDRAIL_REASONS; a verifier timeout reads as an outage, not as a wrong answer or "Check result unknown"',
+      verifierKeysOk && attentionKeysOk && outage.some(l => /outage/.test(l)) && !wrong.some(l => /outage|unknown/i.test(l))
+        && !outage.includes('Check result unknown'),
+      `verifierKeys=${verifierKeysOk} attentionKeys=${attentionKeysOk} outage=${JSON.stringify(outage)} wrong=${JSON.stringify(wrong)}`);
   }
 
 };

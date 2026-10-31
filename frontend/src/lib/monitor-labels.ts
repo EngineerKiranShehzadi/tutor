@@ -65,13 +65,25 @@ export const STAGE_LABELS: Record<string, string> = {
   'save-chat-entry': 'Saving the conversation',
 };
 
-// answer_verification_reason (post-generation verifier).
+// answer_verification_reason (post-generation verifier). Keys are the
+// backend's OUTPUT_GUARDRAIL_REASONS (rag/guardrails/output/
+// answer-verification.types.ts). VERIFIER_*, REVISION_FAILED and
+// FINAL_VERIFICATION_FAILED mean the check could not run (an outage), not
+// that the answer was wrong.
 export const VERIFIER_REASON_LABELS: Record<string, string> = {
   VERIFIED: 'Answer verified against the lecture',
-  GROUNDED: 'Answer verified against the lecture',
-  REVISE: 'Answer had to be rewritten',
-  UNSUPPORTED_CLAIM: 'Answer contained a claim not in the lecture',
   UNSUPPORTED_CLAIMS: 'Answer contained claims not in the lecture',
+  CONTRADICTS_EVIDENCE: 'Answer contradicted the lecture',
+  ANSWERED_UNCOVERED_ASPECT: 'Answer covered a part the lecture does not',
+  INSUFFICIENT_EVIDENCE: 'The lecture did not support the answer',
+  VERIFIER_TIMEOUT: 'Answer check timed out',
+  VERIFIER_PROVIDER_ERROR: 'Answer check service failed',
+  VERIFIER_INVALID_OUTPUT: 'Answer check gave an unreadable result',
+  REVISION_FAILED: 'Answer correction could not run',
+  FINAL_VERIFICATION_FAILED: 'Corrected answer could not be re-checked',
+  VERIFICATION_DISABLED: 'Answer check is turned off',
+  REVISED_AND_VERIFIED: 'Answer corrected, then verified',
+  REVISED_BUT_UNVERIFIED: 'Answer still unsupported after correction',
 };
 
 // Why a request needs attention (monitor attention list).
@@ -118,10 +130,21 @@ export const ATTENTION_ERROR_LABELS: Record<string, string> = {
   UNKNOWN_ERROR: 'Unknown problem',
 };
 
+// Same keys as VERIFIER_REASON_LABELS; outages say so, so a verifier outage
+// never reads like a wrong answer.
 export const ATTENTION_VERIFIER_LABELS: Record<string, string> = {
-  REVISE: 'Answer changed by verifier',
-  UNSUPPORTED_CLAIM: 'Answer had a claim not in the lecture',
   UNSUPPORTED_CLAIMS: 'Answer had claims not in the lecture',
+  CONTRADICTS_EVIDENCE: 'Answer contradicted the lecture',
+  ANSWERED_UNCOVERED_ASPECT: 'Answer went beyond what the lecture covers',
+  INSUFFICIENT_EVIDENCE: 'Lecture did not support the answer',
+  VERIFIER_TIMEOUT: 'Answer check timed out (outage)',
+  VERIFIER_PROVIDER_ERROR: 'Answer check unavailable (outage)',
+  VERIFIER_INVALID_OUTPUT: 'Answer check gave an unreadable result (outage)',
+  REVISION_FAILED: 'Answer correction could not run (outage)',
+  FINAL_VERIFICATION_FAILED: 'Corrected answer could not be re-checked (outage)',
+  VERIFICATION_DISABLED: 'Answer check is turned off',
+  REVISED_AND_VERIFIED: 'Answer was corrected, then passed the check',
+  REVISED_BUT_UNVERIFIED: 'Answer still unsupported after correction',
 };
 
 // /health/ready component keys.
