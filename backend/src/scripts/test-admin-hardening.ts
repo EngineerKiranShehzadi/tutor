@@ -1270,11 +1270,13 @@ const run = async () => {
       provider.generate = async () => { throw new Error('Request timeout after 30000ms'); };
       const answers = [];
       for (let i = 0; i < 2; i++) answers.push(await generateAnswer('What is a prompt?', [], 'Lecture', []).catch(e => e as Error));
-      const down = await checkAnswerLlm();
+      // The signal is applied by readiness (after its cache); checkAnswerLlm is the pure probe.
+      resetHealthCache();
       const ready = await checkReadiness();
+      const down = ready.components.answerLlm;
       provider.generate = async (req: unknown) => ({ raw: 'ok', provider: 'groq', model: (req as { model: string }).model, finishReason: 'STOP' });
       await generateAnswer('What is a prompt?', [], 'Lecture', []);
-      const healed = await checkAnswerLlm();
+      const healed = (await checkReadiness()).components.answerLlm;
       // (Overall readiness is unhealthy here anyway — no local embedding server — so the component is what is checked.)
       check('AD-N8-1. RAG_LLM_PROVIDER=groq: two timed-out answer calls → answerLlm unhealthy (TIMEOUT) in /health/ready (a required component → 503); one success → back to degraded/UNVERIFIED_PROVIDER',
         answers.every(a => a instanceof Error) && down.status === 'unhealthy' && down.errorCode === 'TIMEOUT'
@@ -1390,9 +1392,9 @@ const run = async () => {
       provider.generate = async () => { attempts++; throw new Error('503 Service Unavailable: high demand'); };
       (globalThis as { setTimeout: unknown }).setTimeout = ((fn: () => void) => realSetTimeout(fn, 0)) as unknown;
       await generateAnswer('What is a prompt?', [], 'Lecture', []).catch(() => undefined);
-      const oneQuestion = await checkAnswerLlm();
+      const oneQuestion = (await checkReadiness()).components.answerLlm;
       await generateAnswer('What is a prompt?', [], 'Lecture', []).catch(() => undefined);
-      const twoQuestions = await checkAnswerLlm();
+      const twoQuestions = (await checkReadiness()).components.answerLlm;
       check('R5-2. A question retried on 503 (4 attempts) counts as one failure: answerLlm stays degraded after one such question, unhealthy after two',
         attempts === 8 && oneQuestion.status === 'degraded' && twoQuestions.status === 'unhealthy' && twoQuestions.errorCode === 'SERVICE_UNAVAILABLE',
         `attempts=${attempts} one=${JSON.stringify(oneQuestion)} two=${JSON.stringify(twoQuestions)}`);
@@ -1401,6 +1403,76 @@ const run = async () => {
       provider.generate = realGenerate;
       rag.PROVIDER = saved.provider;
       health.CACHE_TTL_MS = saved.ttl;
+      resetProviderSignals();
+      resetHealthCache();
+    }
+  }
+
+  // ── C2: an OpenAI answer LLM is really probed; recovery shows at once ──
+  {
+    const rag = env.LLM.RAG_ANSWER as { PROVIDER: string; MODEL: string };
+    const health = env.HEALTH as { CACHE_TTL_MS: number };
+    const oa = env.LLM.OPENAI as { API_KEY: string; BASE_URL: string };
+    const saved = { provider: rag.PROVIDER, model: rag.MODEL, ttl: health.CACHE_TTL_MS, key: oa.API_KEY, base: oa.BASE_URL };
+    const realFetch = globalThis.fetch;
+    const realNow = Date.now;
+    let clock = realNow();
+    let probes = 0;
+    let probeStatus = 200;
+    const seenUrls: string[] = [];
+    globalThis.fetch = (async (url: unknown, init?: { headers?: Record<string, string> }) => {
+      const u = String(url);
+      if (u.startsWith('https://api.openai.test/v1/models/')) {
+        probes++; seenUrls.push(`${u} ${init?.headers?.Authorization === 'Bearer sk-health-test'}`);
+        return new Response(JSON.stringify(probeStatus === 200 ? { id: 'gpt-5.6-luna', object: 'model' } : { error: { message: 'Incorrect API key provided', code: 'invalid_api_key' } }), { status: probeStatus });
+      }
+      throw new TypeError('fetch failed');   // the local embedding/rerank servers are not running here
+    }) as typeof fetch;
+    Date.now = () => clock;
+    rag.PROVIDER = 'openai'; rag.MODEL = 'gpt-5.6-luna';
+    health.CACHE_TTL_MS = 60_000;
+    oa.API_KEY = 'sk-health-test'; oa.BASE_URL = 'https://api.openai.test/v1';
+    resetProviderSignals();
+    resetHealthCache();
+    try {
+      const first = (await checkReadiness()).components.answerLlm;
+      recordProviderFailure('answerLlm', new Error('OpenAI request timeout after 45000ms'));
+      recordProviderFailure('answerLlm', new Error('OpenAI request timeout after 45000ms'));
+      clock += 10_000;
+      const down = (await checkReadiness()).components.answerLlm;
+      const pureWhileDown = await checkAnswerLlm();
+      recordProviderSuccess('answerLlm');
+      clock += 1_000;
+      const recovered = (await checkReadiness()).components.answerLlm;
+      const probesAfterSignal = probes;
+      check('C2-1. RAG_LLM_PROVIDER=openai: readiness probes GET /models/gpt-5.6-luna with the key (was "degraded UNVERIFIED_PROVIDER" for every non-Gemini provider); cached for the TTL; two failed real calls → unhealthy at once, one success → healthy at once (same cached probe, no 60 s wait); checkAnswerLlm itself is the pure probe',
+        first.status === 'healthy' && seenUrls[0] === 'https://api.openai.test/v1/models/gpt-5.6-luna true'
+          && down.status === 'unhealthy' && down.errorCode === 'TIMEOUT' && pureWhileDown.status === 'healthy'
+          && recovered.status === 'healthy' && probesAfterSignal === 2,
+        `first=${JSON.stringify(first)} down=${JSON.stringify(down)} recovered=${JSON.stringify(recovered)} probes=${probesAfterSignal} (1 readiness probe + 1 direct)`);
+
+      // A FAILED probe (rejected key) is re-checked after 5 s, not 60 s.
+      resetHealthCache();
+      probeStatus = 401;
+      const badKey = (await checkReadiness()).components.answerLlm;
+      probeStatus = 200;
+      clock += UNHEALTHY_CACHE_TTL_MS - 1000;
+      const stillCached = (await checkReadiness()).components.answerLlm;
+      clock += 2000;
+      const fixed = (await checkReadiness()).components.answerLlm;
+      oa.API_KEY = '';
+      resetHealthCache();
+      const noKey = (await checkReadiness()).components.answerLlm;
+      check('C2-2. A failed OpenAI probe (401) is unhealthy and re-checked after 5 s (healthy again at +6 s, not after the 60 s TTL); no OPENAI_API_KEY → unhealthy NOT_CONFIGURED without a request',
+        badKey.status === 'unhealthy' && stillCached.status === 'unhealthy' && fixed.status === 'healthy'
+          && noKey.status === 'unhealthy' && noKey.errorCode === 'NOT_CONFIGURED',
+        `401=${JSON.stringify(badKey)} +4s=${stillCached.status} +6s=${fixed.status} noKey=${JSON.stringify(noKey)}`);
+    } finally {
+      globalThis.fetch = realFetch;
+      Date.now = realNow;
+      rag.PROVIDER = saved.provider; rag.MODEL = saved.model;
+      health.CACHE_TTL_MS = saved.ttl;
+      oa.API_KEY = saved.key; oa.BASE_URL = saved.base;
       resetProviderSignals();
       resetHealthCache();
     }

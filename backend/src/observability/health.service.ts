@@ -2,6 +2,7 @@ import { query } from '../config/database';
 import { env } from '../config/env';
 import { resolveEmbeddingProvider } from '../embedding/embedding-provider.resolver';
 import { resolveRerankProvider } from '../rerank/rerank-provider.resolver';
+import { resolveLlmProvider } from '../llm/llm-provider.resolver';
 import { logger } from '../utils/logger';
 import { classifyErrorCode } from './tracer';
 import { providerDownSignal, type ProviderComponent } from './provider-signal';
@@ -41,20 +42,37 @@ export const requiredComponents = (): ComponentName[] => [
   'database', 'pgvector', 'embeddingServer', 'reranker', 'answerLlm',
 ];
 
-// Probes the provider that answers questions. Only Gemini has a probe; for any
-// other provider readiness must not claim it is healthy.
-async function probeAnswerLlm(provider: string): Promise<ComponentHealth> {
-  return provider === 'gemini'
-    ? checkGemini()
-    : { status: 'degraded', latencyMs: 0, errorCode: 'UNVERIFIED_PROVIDER' };
-}
-
-// Whatever the provider, recent REAL answer calls are consulted too
-// (provider-signal.ts, fed by generateAnswer): if they keep failing the answer
-// LLM is unhealthy — otherwise a Groq outage left /health/ready at 200 while
-// every question failed.
-export async function checkAnswerLlm(provider = env.LLM.RAG_ANSWER.PROVIDER): Promise<ComponentHealth> {
-  return withProviderSignal('answerLlm')(await probeAnswerLlm(provider));
+// Probes the provider that answers questions (RAG_LLM_PROVIDER / RAG_ANSWER_MODEL),
+// never with a paid call:
+//  - gemini: countTokens, or a config check when HEALTH_GEMINI_CHECK_ENABLED=false;
+//  - a provider with a probe() (openai: GET /models/{model}, no tokens): run it;
+//  - one without (groq): degraded UNVERIFIED_PROVIDER — never "healthy" unchecked.
+// Pure: it does not consult the real-call signal. checkReadiness caches this
+// result and applies the signal after the cache (see withProviderSignal), so
+// both a failure and a recovery of real answer calls show at once.
+export async function checkAnswerLlm(
+  provider = env.LLM.RAG_ANSWER.PROVIDER,
+  model = env.LLM.RAG_ANSWER.MODEL,
+): Promise<ComponentHealth> {
+  if (provider === 'gemini') return checkGemini();
+  let llm: ReturnType<typeof resolveLlmProvider>;
+  try {
+    llm = resolveLlmProvider(provider);
+  } catch {
+    return { status: 'unhealthy', latencyMs: 0, errorCode: 'NOT_CONFIGURED' };
+  }
+  if (!llm.probe) return { status: 'degraded', latencyMs: 0, errorCode: 'UNVERIFIED_PROVIDER' };
+  try {
+    llm.assertConfigured?.();
+  } catch {
+    return { status: 'unhealthy', latencyMs: 0, errorCode: 'NOT_CONFIGURED' };
+  }
+  try {
+    const { latencyMs } = await timed(() => llm.probe!(model));
+    return { status: 'healthy', latencyMs: Math.round(latencyMs) };
+  } catch (err) {
+    return { status: 'unhealthy', latencyMs: 0, errorCode: classifyErrorCode(err) };
+  }
 }
 
 // A component whose recent real calls keep failing is unhealthy, whatever its
@@ -225,7 +243,7 @@ export async function checkReadiness(): Promise<ReadinessResult> {
       .then(withProviderSignal('embeddingServer')),
     cached('reranker', ttl, () => checkProviderHealth(resolveRerankProvider(env.RETRIEVAL.RERANK_PROVIDER)))
       .then(withProviderSignal('reranker')),
-    cached(`answerLlm:${env.LLM.RAG_ANSWER.PROVIDER}`, ttl, () => probeAnswerLlm(env.LLM.RAG_ANSWER.PROVIDER))
+    cached(`answerLlm:${env.LLM.RAG_ANSWER.PROVIDER}:${env.LLM.RAG_ANSWER.MODEL}`, ttl, () => checkAnswerLlm())
       .then(withProviderSignal('answerLlm')),
   ]);
 
