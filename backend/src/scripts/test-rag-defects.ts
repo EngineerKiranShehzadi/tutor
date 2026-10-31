@@ -26,6 +26,7 @@ import { scanForPii } from '../rag/guardrails/shared/pii/pii-detector.service';
 import { decomposedContextBudget, splitUncoveredAspects } from '../rag/query-processing/retrieval/decomposed-retrieval.service';
 import { runInputGuardrails } from '../rag/guardrails/input/input-guardrail.service';
 import { classifyRoute } from '../services/query-router.service';
+import { detectExpectedResponseFormat } from '../rag/guardrails/output/format/response-format.detector';
 import pool from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { askLectureAgent, LECTURE_NOT_FOUND_MESSAGE, type AskLectureAgentDeps } from '../services/chat.service';
@@ -713,6 +714,26 @@ cases.push({
     });
     const wrong = SUMMARY_TABLE.filter((row, i) => (got[i] === 'LECTURE_SUMMARY') !== row.summary);
     return { pass: wrong.length === 0, detail: wrong.length ? wrong.map(w => `"${w.q}"→${got[SUMMARY_TABLE.indexOf(w)]}`).join(' | ') : `routes=${got.join(',')}` };
+  },
+});
+
+// ── S9: the format detector reacts to request phrasing, not subject nouns ──
+cases.push({
+  label: 'S9. "linked list" / "lookup table" questions stay NATURAL_TEXT; "List the…" is LIST; "…in a table" is TABLE',
+  run: async () => {
+    const rows: [string, string][] = [
+      ['What is a linked list?', 'NATURAL_TEXT'],
+      ['What is a lookup table?', 'NATURAL_TEXT'],
+      ['How does a hash table store keys?', 'NATURAL_TEXT'],
+      ['List the three types of prompting', 'LIST'],
+      ['Give me 5 examples of prompt injection', 'LIST'],
+      ['Explain few-shot prompting in bullet points', 'LIST'],
+      ['Compare zero-shot and few-shot prompting in a table', 'TABLE'],
+      ['Show the parameters in tabular form', 'TABLE'],
+      ['Compare zero-shot and few-shot prompting.', 'NATURAL_TEXT'],
+    ];
+    const wrong = rows.filter(([q, want]) => detectExpectedResponseFormat(q) !== want);
+    return { pass: wrong.length === 0, detail: wrong.map(([q, want]) => `"${q}"→${detectExpectedResponseFormat(q)} (want ${want})`).join(' | ') || `${rows.length} inputs ok` };
   },
 });
 
