@@ -23,11 +23,15 @@ function wrap(fn: () => Promise<unknown>) {
 
 export const userResolvers = {
   Query: {
-    allUsers: (_: unknown, __: unknown, ctx: GraphQLContext) =>
+    allUsers: (
+      _: unknown,
+      args: { limit?: number | null; offset?: number | null; search?: string | null; role?: string | null },
+      ctx: GraphQLContext
+    ) =>
       wrap(async () => {
         const admin = requireAdmin(ctx);
-        logger.info(`[GRAPHQL] allUsers query by admin "${admin.email}"`);
-        return getAllUsers();
+        logger.info(`[GRAPHQL] allUsers(limit=${args.limit}, offset=${args.offset}) query by admin "${admin.email}"`);
+        return getAllUsers(args);
       }),
   },
 

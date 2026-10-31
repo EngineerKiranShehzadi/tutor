@@ -51,15 +51,17 @@ export default function AdminDashboard() {
   const { data: perLecture, loading: perLectureLoading } = useQuery(GET_QUESTIONS_PER_LECTURE, { fetchPolicy: 'network-only' });
   const { data: recentData, loading: recentLoading } = useQuery(GET_RECENT_QUESTIONS, { variables: { limit: 10 }, fetchPolicy: 'network-only' });
 
-  const { data: studentsData } = useQuery(GET_REGISTERED_STUDENTS, { fetchPolicy: 'network-only' });
+  // Only the summary counts are needed here; the list itself is paged (AD6).
+  const { data: studentsData } = useQuery(GET_REGISTERED_STUDENTS, { variables: { limit: 1, offset: 0 }, fetchPolicy: 'network-only' });
 
   const summary     = summaryData?.analyticsSummary;
   const qPerLecture = perLecture?.questionsPerLecture ?? [];
   const recent      = recentData?.recentQuestions ?? [];
-  const students    = studentsData?.registeredStudents ?? [];
-  const activeCount   = students.filter((s: { status: string }) => s.status === 'ACTIVE').length;
-  const inactiveCount = students.filter((s: { status: string }) => s.status === 'INACTIVE').length;
-  const activePct = students.length > 0 ? Math.round((activeCount / students.length) * 100) : 0;
+  const studentTotals: { totalStudents: number; activeCount: number; inactiveCount: number } | undefined = studentsData?.registeredStudents;
+  const totalStudents = studentTotals?.totalStudents ?? 0;
+  const activeCount   = studentTotals?.activeCount ?? 0;
+  const inactiveCount = studentTotals?.inactiveCount ?? 0;
+  const activePct = totalStudents > 0 ? Math.round((activeCount / totalStudents) * 100) : 0;
 
   return (
     <div className="max-w-[1500px]">
@@ -93,7 +95,7 @@ export default function AdminDashboard() {
       </div>
 
       {/* Student engagement strip */}
-      {students.length > 0 && (
+      {totalStudents > 0 && (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 mb-6 flex items-center gap-8">
           <div className="shrink-0">
             <p className="text-[15px] font-bold text-slate-700 mb-0.5">Student Engagement</p>

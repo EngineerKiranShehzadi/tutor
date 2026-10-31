@@ -4,20 +4,55 @@ import { comparePassword, hashPassword } from '../utils/password';
 import { validatePassword } from '../utils/password-policy';
 import { logger } from '../utils/logger';
 import { revokeOtherSessions } from './auth.service';
+import { pageArgs, likePattern } from '../utils/paging';
 
-export const getAllUsers = async () => {
-  logger.info('[USER] getAllUsers: fetching all users');
-  const { rows } = await query<{
-    id: string; name: string; email: string; role: string; is_verified: boolean; created_at: Date;
-  }>(`SELECT id, name, email, role, is_verified, created_at FROM users ORDER BY created_at DESC`);
-  return rows.map(r => ({
-    id:         r.id,
-    name:       r.name,
-    email:      r.email,
-    role:       r.role,
-    isVerified: r.is_verified,
-    createdAt:  r.created_at.toISOString(),
-  }));
+// One page of users (both roles), with server-side search over name/e-mail and
+// an optional role filter — never the whole table of e-mail addresses (AD6).
+// The summary counts cover every user.
+export const getAllUsers = async (
+  f: { limit?: number | null; offset?: number | null; search?: string | null; role?: string | null } = {}
+) => {
+  const { limit, offset, search } = pageArgs(f);
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (search) {
+    params.push(likePattern(search));
+    where.push(`(name ILIKE $${params.length} OR email ILIKE $${params.length})`);
+  }
+  if (f.role === 'STUDENT' || f.role === 'ADMIN') {
+    params.push(f.role);
+    where.push(`role = $${params.length}`);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const [{ rows }, { rows: cnt }, { rows: summary }] = await Promise.all([
+    query<{ id: string; name: string; email: string; role: string; is_verified: boolean; created_at: Date }>(
+      `SELECT id, name, email, role, is_verified, created_at FROM users ${whereSql}
+       ORDER BY created_at DESC, id
+       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, limit, offset]
+    ),
+    query<{ n: string }>(`SELECT COUNT(*) AS n FROM users ${whereSql}`, params),
+    query<{ total: string; students: string; admins: string }>(
+      `SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE role = 'STUDENT') AS students, COUNT(*) FILTER (WHERE role = 'ADMIN') AS admins FROM users`
+    ),
+  ]);
+  const total = Number(cnt[0]?.n ?? 0);
+  logger.info(`[USER] allUsers: ${rows.length} of ${total} (offset ${offset}${search ? ', search' : ''}${f.role ? `, ${f.role}` : ''})`);
+  return {
+    items: rows.map(r => ({
+      id:         r.id,
+      name:       r.name,
+      email:      r.email,
+      role:       r.role,
+      isVerified: r.is_verified,
+      createdAt:  r.created_at.toISOString(),
+    })),
+    total,
+    hasMore: offset + rows.length < total,
+    totalUsers:   Number(summary[0]?.total ?? 0),
+    studentCount: Number(summary[0]?.students ?? 0),
+    adminCount:   Number(summary[0]?.admins ?? 0),
+  };
 };
 
 export const deleteUser = async (id: string, requestingAdminId: string) => {

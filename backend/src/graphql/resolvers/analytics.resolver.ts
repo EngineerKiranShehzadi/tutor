@@ -73,18 +73,26 @@ export const analyticsResolvers = {
       return getLectureStatusList();
     },
 
-    registeredStudents: (_: unknown, __: unknown, ctx: GraphQLContext) => {
+    registeredStudents: (
+      _: unknown,
+      args: { limit?: number | null; offset?: number | null; search?: string | null; status?: string | null },
+      ctx: GraphQLContext
+    ) => {
       requireAdmin(ctx);
       const user = (ctx.req as AuthenticatedRequest).user;
-      logger.info(`[GRAPHQL] registeredStudents query by admin "${user?.email}"`);
-      return getRegisteredStudents();
+      logger.info(`[GRAPHQL] registeredStudents(limit=${args.limit}, offset=${args.offset}) query by admin "${user?.email}"`);
+      return getRegisteredStudents(args);
     },
 
-    lectureChunks: (_: unknown, { lectureId }: { lectureId: number }, ctx: GraphQLContext) => {
+    lectureChunks: (
+      _: unknown,
+      { lectureId, ...page }: { lectureId: number; limit?: number | null; offset?: number | null; search?: string | null },
+      ctx: GraphQLContext
+    ) => {
       requireAdmin(ctx);
       const user = (ctx.req as AuthenticatedRequest).user;
-      logger.info(`[GRAPHQL] lectureChunks query for lecture #${lectureId} by admin "${user?.email}"`);
-      return getLectureChunks(lectureId);
+      logger.info(`[GRAPHQL] lectureChunks query for lecture #${lectureId} (limit=${page.limit}, offset=${page.offset}) by admin "${user?.email}"`);
+      return getLectureChunks(lectureId, page);
     },
 
     lectureAgentDetails: (_: unknown, __: unknown, ctx: GraphQLContext) => {
@@ -94,11 +102,15 @@ export const analyticsResolvers = {
       return getLectureAgentDetails();
     },
 
-    studentJourney: (_: unknown, { id }: { id: string }, ctx: GraphQLContext) => {
+    studentJourney: (
+      _: unknown,
+      { id, ...page }: { id: string; limit?: number | null; offset?: number | null },
+      ctx: GraphQLContext
+    ) => {
       requireAdmin(ctx);
       const user = (ctx.req as AuthenticatedRequest).user;
       logger.info(`[GRAPHQL] studentJourney for student #${id} by admin "${user?.email}"`);
-      return getStudentJourney(id);
+      return getStudentJourney(id, page);
     },
 
     contentGaps: (_: unknown, __: unknown, ctx: GraphQLContext) => {

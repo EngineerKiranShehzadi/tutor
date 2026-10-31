@@ -302,7 +302,7 @@ cases.push({
     const summary = await getAnalyticsSummary();
     const perLecture = await getQuestionsPerLecture();
     const statusList = await getLectureStatusList();
-    const chunks = await getLectureChunks(ids.readyActive2);
+    const chunks = (await getLectureChunks(ids.readyActive2)).items; // paged since AD6
     const pass = summary.totalLectures === 7 && summary.totalStudents === 1 && summary.totalQuestions === 2
       && perLecture.length === 2
       && statusList.length === 7 && statusList.every(l => ['READY', 'NO_DATASET', 'PROCESSING', 'FAILED'].includes(l.status))

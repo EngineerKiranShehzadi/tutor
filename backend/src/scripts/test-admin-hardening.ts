@@ -37,7 +37,9 @@ import { parse, validate, specifiedRules } from 'graphql';
 import { makeExecutableSchema } from '@graphql-tools/schema';
 import { ApolloServer } from '@apollo/server';
 import { applyMigrations } from './db-setup';
-import { getRecentQuestions, getRecentQuestionsPage, getContentGaps, CONTENT_GAPS_MAX_QUESTIONS, getMyStats } from '../services/analytics.service';
+import { getRecentQuestions, getRecentQuestionsPage, getContentGaps, CONTENT_GAPS_MAX_QUESTIONS, getMyStats,
+  getLectureChunks, getRegisteredStudents, getStudentJourney } from '../services/analytics.service';
+import { getAllUsers } from '../services/user.service';
 import { queryLimitsRule } from '../graphql/query-limits';
 import { typeDefs } from '../graphql/typeDefs';
 import datasetRoutes from '../routes/dataset.routes';
@@ -717,6 +719,45 @@ const run = async () => {
       stats.mostAskedTopic === '[ad5] ten questions' && stats.lectureBreakdown[0]?.lectureId === ten
         && stats.lectureBreakdown[0]?.count === 10 && stats.peakHour === tenHour,
       `mostAsked=${stats.mostAskedTopic} breakdown=${stats.lectureBreakdown.map(b => b.count).join(',')} peakHour=${stats.peakHour} (want ${tenHour})`);
+  }
+
+  // ── AD6: admin lists are paged (limit clamped to 100, totals exact) ───
+  {
+    const lec = (await query<{ id: number }>(`INSERT INTO lectures (title, youtube_url, youtube_video_id) VALUES ('[ad6] paging', 'https://youtu.be/xxxxxxxxxxx', 'xxxxxxxxxxx') RETURNING id`)).rows[0].id;
+    const ver = (await query<{ id: number }>(
+      `INSERT INTO dataset_versions (lecture_id, version_no, status, mode, embedding_model_version, chunking_config_version, stats)
+       VALUES ($1, 1, 'ACTIVE', 'MERGE', 'm', 'c', '{}'::jsonb) RETURNING id`, [lec])).rows[0].id;
+    await query(`WITH c AS (
+                   INSERT INTO lecture_qna_chunks (lecture_id, question, answer, chunk_text)
+                   SELECT $1, 'question ' || g, CASE WHEN g = 77 THEN 'the needle_100% answer' ELSE 'answer ' || g END, 'q' || g
+                   FROM generate_series(1, 120) g RETURNING id)
+                 INSERT INTO dataset_version_chunks (version_id, chunk_id, qa_id, chunk_index) SELECT $2, id, 'ad6-' || id, 0 FROM c`, [lec, ver]);
+    await query('UPDATE lectures SET active_version_id = $2 WHERE id = $1', [lec, ver]);
+    const stu = (await query<{ id: string }>(`INSERT INTO users (name, email, password_hash, is_verified, role) VALUES ('AD6 Pager', $1, 'x', TRUE, 'STUDENT') RETURNING id`, [`ad6-${Date.now()}@example.test`])).rows[0].id;
+    await query(`INSERT INTO student_questions (student_id, lecture_id, question, created_at)
+                 SELECT $1, $2, 'journey q' || g, NOW() - g * INTERVAL '1 minute' FROM generate_series(1, 120) g`, [stu, lec]);
+
+    const chunks = await getLectureChunks(lec, { limit: 1000, offset: 0 });
+    const lastPage = await getLectureChunks(lec, { limit: 50, offset: 100 });
+    const found = await getLectureChunks(lec, { search: 'needle_100%' });
+    const literal = await getLectureChunks(lec, { search: '%' });
+    const studentsTotal = Number((await query<{ n: string }>(`SELECT COUNT(*) AS n FROM users WHERE role = 'STUDENT'`)).rows[0].n);
+    const usersTotal = Number((await query<{ n: string }>(`SELECT COUNT(*) AS n FROM users`)).rows[0].n);
+    const students = await getRegisteredStudents({ limit: 1000 });
+    const oneStudent = await getRegisteredStudents({ search: 'AD6 Pager', status: 'ACTIVE' });
+    const users = await getAllUsers({ limit: 1000 });
+    const journey = await getStudentJourney(stu, { limit: 1000 });
+    check('AD6-1. lectureChunks/registeredStudents/allUsers/studentJourney: limit=1000 is clamped to 100 and total is exact',
+      chunks.items.length === 100 && chunks.total === 120 && chunks.hasMore && lastPage.items.length === 20 && !lastPage.hasMore
+        && students.items.length === Math.min(100, studentsTotal) && students.totalStudents === studentsTotal
+        && users.items.length === Math.min(100, usersTotal) && users.totalUsers === usersTotal
+        && journey.questions.length === 100 && journey.questionCount === 120 && journey.hasMoreQuestions
+        && journey.byLecture.length === 1 && journey.byLecture[0].questionCount === 120,
+      `chunks=${chunks.items.length}/${chunks.total} students=${students.items.length}/${students.total} users=${users.items.length}/${users.total} journey=${journey.questions.length}/${journey.questionCount}`);
+    check('AD6-2. Search runs on the server (answers included, LIKE wildcards literal); a status filter narrows the total',
+      found.total === 1 && found.items[0]?.answer === 'the needle_100% answer' && literal.total === 1
+        && oneStudent.total === 1 && oneStudent.items[0]?.id === stu,
+      `needle=${found.total} literal%=${literal.total} student=${oneStudent.total}`);
   }
 
 };

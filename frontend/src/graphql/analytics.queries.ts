@@ -64,8 +64,8 @@ export const GET_LECTURE_STATUS_LIST = gql`
 `;
 
 export const GET_STUDENT_JOURNEY = gql`
-  query StudentJourney($id: String!) {
-    studentJourney(id: $id) {
+  query StudentJourney($id: String!, $limit: Int, $offset: Int) {
+    studentJourney(id: $id, limit: $limit, offset: $offset) {
       studentId
       studentName
       studentEmail
@@ -82,6 +82,7 @@ export const GET_STUDENT_JOURNEY = gql`
         lectureId
         createdAt
       }
+      hasMoreQuestions
       byLecture {
         lectureId
         lectureTitle
@@ -112,15 +113,24 @@ export const GET_CONTENT_GAPS = gql`
   }
 `;
 
+// One page of students, filtered on the server (AD6). The summary counts
+// cover every student, so a dashboard can ask for limit 1 and read them.
 export const GET_REGISTERED_STUDENTS = gql`
-  query RegisteredStudents {
-    registeredStudents {
-      id
-      name
-      email
-      createdAt
-      questionCount
-      status
+  query RegisteredStudents($limit: Int!, $offset: Int!, $search: String, $status: String) {
+    registeredStudents(limit: $limit, offset: $offset, search: $search, status: $status) {
+      items {
+        id
+        name
+        email
+        createdAt
+        questionCount
+        status
+      }
+      total
+      hasMore
+      totalStudents
+      activeCount
+      inactiveCount
     }
   }
 `;
