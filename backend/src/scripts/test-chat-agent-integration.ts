@@ -625,7 +625,7 @@ cases.push({
 cases.push({
   label: 'D9/ST2. Masked question is stored/sent to the LLM; the unmasked one is used only to embed, search and rerank; answer memory is skipped',
   run: async () => {
-    const RAW = 'What does 192.168.10.20 mean here?';
+    const RAW = 'What does 203.45.67.89 mean here?';
     const MASKED = 'What does [IP_ADDRESS] mean here?';
     const embedded: string[] = []; const reranked: string[] = [];
     const w = newWorld();

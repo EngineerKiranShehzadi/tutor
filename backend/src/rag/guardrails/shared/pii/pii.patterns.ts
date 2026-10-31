@@ -15,16 +15,19 @@ export const EMAIL_PATTERN = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA
 // Broad candidate shape for phone numbers — deliberately over-matches (a
 // bare "7:09" lecture timestamp won't match since it requires 3+ digit
 // groups separated by space/dot/dash/parens, not a colon), then
-// pii-detector.service.ts filters candidates by total digit count so short
-// coincidental numeric runs (chunk ids, timestamps already excluded by
-// shape) aren't flagged.
-export const PHONE_CANDIDATE_PATTERN = /\+?\d{1,3}[-.\s]?\(?\d{2,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}(?:[-.\s]?\d{1,4})?/g;
+// pii-detector.service.ts keeps only candidates written like a phone number
+// (see looksLikePhone), so quantities such as "4294967296" or
+// "1 000 000 000" aren't flagged. Never starts or ends inside a longer digit
+// run, so a slice of a big number can't be taken for a phone number.
+export const PHONE_CANDIDATE_PATTERN = /(?<!\d)\+?\d{1,3}[-.\s]?\(?\d{2,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}(?:[-.\s]?\d{1,4})?(?!\d)/g;
 
 // Broad candidate shape for credit-card-like numbers — pii-detector.service.ts
 // Luhn-validates each match before treating it as real PII, so an
 // unrelated 16-digit id/hash doesn't get flagged as a card number.
 export const CREDIT_CARD_CANDIDATE_PATTERN = /\b(?:\d[ -]?){13,19}\b/g;
 
+// pii-detector.service.ts drops addresses that identify no one (private,
+// loopback, netmask, …) and section/version numbers such as "10.2.3.4".
 export const IPV4_PATTERN = /\b(?:(?:25[0-5]|2[0-4]\d|1?\d{1,2})\.){3}(?:25[0-5]|2[0-4]\d|1?\d{1,2})\b/g;
 
 // Government/national-identifier formats — kept as a named group so

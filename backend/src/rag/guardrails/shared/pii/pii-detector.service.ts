@@ -23,6 +23,52 @@ function luhnValid(digits: string): boolean {
   return sum % 10 === 0;
 }
 
+// A phone-shaped match counts only when it is written like a phone number.
+// Lectures write quantities as bare digit runs ("4294967296",
+// "175000000000"), so a bare run counts only with a leading "+" or a national
+// trunk "0" ("03001234567"), and a run of only 0s and 1s is binary. A
+// separated form counts unless it reads as something else: a decimal
+// ("3.14159265358979"), a dotted quad (left to the IPv4 check), a number
+// grouped in thousands ("1 000 000 000"), or a code ending in a single check
+// digit (the ISBN "0-13-468599-1").
+function looksLikePhone(candidate: string): boolean {
+  const digits = candidate.replace(/\D/g, '');
+  if (digits.length < 7 || digits.length > 15) return false;
+  if (candidate.startsWith('+')) return true;
+
+  const separators = candidate.match(/[-.\s()]+/g) ?? [];
+  if (separators.length === 0) return /^0\d{9,10}$/.test(digits) && !/^[01]+$/.test(digits);
+
+  const groups = candidate.split(/[-.\s()]+/).filter(g => g !== '');
+  const onlySeparator = new Set(separators).size === 1 ? separators[0] : null;
+  if (onlySeparator === '.' && groups.length === 2) return false;
+  if (onlySeparator === '.' && groups.length === 4 && groups.every(g => g.length <= 3)) return false;
+  if ((onlySeparator === ' ' || onlySeparator === '.')
+    && /^[1-9]\d{0,2}$/.test(groups[0]) && groups.slice(1).every(g => g.length === 3)) return false;
+  if (groups[groups.length - 1].length === 1) return false;
+  return true;
+}
+
+// An IPv4 address counts unless it identifies no one: private, loopback,
+// link-local, carrier-grade NAT, documentation, and multicast/reserved (which
+// also covers netmasks such as 255.255.255.0) — networking lectures are full
+// of these. A short lead with single-digit parts ("Chapter 10.2.3.4",
+// "version 1.2.3.4") is a section or version number, not an address.
+function looksLikePersonalIpv4(candidate: string): boolean {
+  const parts = candidate.split('.');
+  if (parts[0].length <= 2 && parts.slice(1).every(p => p.length === 1)) return false;
+  const [a, b, c] = parts.map(Number);
+  const nonPersonal = a === 0 || a === 10 || a === 127 || a >= 224
+    || (a === 100 && b >= 64 && b <= 127)
+    || (a === 169 && b === 254)
+    || (a === 172 && b >= 16 && b <= 31)
+    || (a === 192 && b === 168)
+    || (a === 192 && b === 0 && c === 2)
+    || (a === 198 && b === 51 && c === 100)
+    || (a === 203 && b === 0 && c === 113);
+  return !nonPersonal;
+}
+
 interface Redaction {
   start: number;
   end: number;
@@ -31,10 +77,10 @@ interface Redaction {
 }
 
 // Runs every pattern against the text and collects candidate matches.
-// Numeric patterns (credit card, phone) get an extra validity check here —
-// Luhn for cards, digit-count bounds for phones — so an unrelated long
-// numeric id/hash (in a lecture question, or in a generated answer) doesn't
-// get flagged as real PII.
+// Numeric patterns (credit card, phone, IP) get an extra validity check here —
+// Luhn for cards, phone and address shape for the others — so an unrelated
+// long numeric id/hash/quantity (in a lecture question, or in a generated
+// answer) doesn't get flagged as real PII.
 function findRedactions(text: string): Redaction[] {
   const redactions: Redaction[] = [];
 
@@ -43,6 +89,7 @@ function findRedactions(text: string): Redaction[] {
   }
 
   for (const match of text.matchAll(IPV4_PATTERN)) {
+    if (!looksLikePersonalIpv4(match[0])) continue;
     redactions.push({ start: match.index!, end: match.index! + match[0].length, placeholder: '[IP_ADDRESS]', category: 'IP_ADDRESS' });
   }
 
@@ -60,8 +107,7 @@ function findRedactions(text: string): Redaction[] {
   }
 
   for (const match of text.matchAll(PHONE_CANDIDATE_PATTERN)) {
-    const digitCount = (match[0].match(/\d/g) ?? []).length;
-    if (digitCount >= 7 && digitCount <= 15) {
+    if (looksLikePhone(match[0])) {
       redactions.push({ start: match.index!, end: match.index! + match[0].length, placeholder: '[PHONE]', category: 'PHONE' });
     }
   }

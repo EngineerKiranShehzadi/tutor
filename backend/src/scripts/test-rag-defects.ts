@@ -247,7 +247,7 @@ cases.push({
 
 // ── D4: streamed draft is redacted before it is sent ────────────────────
 const PII_TEXT = 'Mail john.doe@example.com, call +92 300 1234567 or (042) 3571-2345, card 4111 1111 1111 1111, '
-  + 'CNIC 35202-1234567-1, IP 10.0.0.12. Version 2 of 3 steps, see 7:09. Done.';
+  + 'CNIC 35202-1234567-1, IP 203.45.67.89. Version 2 of 3 steps, see 7:09. Done.';
 // Matches only what the final guard would redact, so the property below is exactly "never ahead of redaction".
 const FINAL = scanForPii(PII_TEXT).sanitizedText;
 
@@ -302,9 +302,9 @@ cases.push({
 cases.push({
   label: 'D9. runInputGuardrails returns the masked text as sanitizedInput and the unmasked text as retrievalInput',
   run: async () => {
-    const pii = await runInputGuardrails('What is 192.168.10.20 used for?');
+    const pii = await runInputGuardrails('What is 203.45.67.89 used for?');
     const clean = await runInputGuardrails('What is a system prompt?');
-    const pass = pii.sanitizedInput === 'What is [IP_ADDRESS] used for?' && pii.retrievalInput === 'What is 192.168.10.20 used for?'
+    const pass = pii.sanitizedInput === 'What is [IP_ADDRESS] used for?' && pii.retrievalInput === 'What is 203.45.67.89 used for?'
       && clean.sanitizedInput === clean.retrievalInput;
     return { pass, detail: `action=${pii.action}, sanitized="${pii.sanitizedInput}"` };
   },
@@ -905,6 +905,55 @@ cases.push({
     const { value } = await withFakeDb(() => askOrchestrator(deps));
     const pass = !(value instanceof Error) && spies.memoryWrites.length === 1 && spies.memoryWrites[0].datasetVersionId === 7;
     return { pass, detail: `writes=${JSON.stringify(spies.memoryWrites)}` };
+  },
+});
+
+// ── ST1: lecture quantities and section numbers are not PII ─────────────
+const PII_FLAGGED: [string, string][] = [
+  ['+92 300 1234567', 'PHONE'], ['+923001234567', 'PHONE'], ['+1 (555) 123-4567', 'PHONE'], ['0300-1234567', 'PHONE'],
+  ['0300 1234567', 'PHONE'], ['03001234567', 'PHONE'], ['555-123-4567', 'PHONE'], ['555.123.4567', 'PHONE'],
+  ['555 123 4567', 'PHONE'], ['020 7946 0958', 'PHONE'], ['042-35761234', 'PHONE'],
+  ['my IP is 203.45.67.89', 'IP_ADDRESS'], ['4111 1111 1111 1111', 'CREDIT_CARD'], ['35202-1234567-1', 'IDENTIFIER'],
+];
+const PII_CLEAN = [
+  'GPT-3 has 175000000000 parameters', 'A 32-bit int holds 4294967296 values', 'INT_MAX is 2147483647', 'mod 1000000007',
+  'c = 299792458 m/s', '1 000 000 000 tokens', 'pi = 3.14159265358979', 'the bits 0110100001', 'Chapter 10.2.3.4',
+  'version 1.2.3.4', 'the router at 192.168.1.1', '10.0.0.1', '127.0.0.1', 'netmask 255.255.255.0', 'ISBN 0-13-468599-1',
+  '12345678901234567890', 'see 7:09', '2024-01-15',
+];
+
+cases.push({
+  label: `ST1a. Phone/IP rules: ${PII_FLAGGED.length} real values are still masked, ${PII_CLEAN.length} lecture-style numbers are left alone`,
+  run: async () => {
+    const missed = PII_FLAGGED.filter(([t, cat]) => !scanForPii(t).detectedCategories.includes(cat as never)).map(([t]) => t);
+    const falsePositives = PII_CLEAN.filter(t => scanForPii(t).detected).map(t => `${t} → ${scanForPii(t).sanitizedText}`);
+    return { pass: missed.length === 0 && falsePositives.length === 0, detail: `missed=[${missed.join(' | ')}], falsePositives=[${falsePositives.join(' | ')}]` };
+  },
+});
+
+cases.push({
+  label: 'ST1b. A grounded answer quoting a parameter count / section number is served intact; a real phone number in it is still masked',
+  run: async () => {
+    const av = env.ANSWER_VERIFICATION as { ENABLED: boolean };
+    const fv = env.OUTPUT_FORMAT_VALIDATION as { ENABLED: boolean };
+    const pg = env.OUTPUT_PII_GUARD as { ENABLED: boolean };
+    const saved = { av: av.ENABLED, fv: fv.ENABLED, pg: pg.ENABLED };
+    av.ENABLED = false; fv.ENABLED = false; pg.ENABLED = true;
+    try {
+      const guard = (draftAnswer: string) => runOutputGuardrail({
+        question: 'q', effectiveQuery: 'q', uncoveredAspects: [], evidenceTexts: ['e'], draftAnswer, notFoundMessage: LECTURE_NOT_FOUND_MESSAGE,
+      });
+      const ANSWER = 'GPT-3 has 175000000000 parameters, and a 32-bit int holds 4294967296 values (see Chapter 10.2.3.4).';
+      const clean = await guard(ANSWER);
+      const phone = await guard('Call the office on +92 300 1234567.');
+      const input = await runInputGuardrails('Why does GPT-3 need 175000000000 parameters?');
+      const pass = clean.finalAnswer === ANSWER && clean.piiDetected === false
+        && phone.finalAnswer === 'Call the office on [PHONE].' && phone.piiDetected === true
+        && input.action === 'ALLOW' && input.sanitizedInput === 'Why does GPT-3 need 175000000000 parameters?';
+      return { pass, detail: `clean="${clean.finalAnswer.slice(0, 50)}…", phone="${phone.finalAnswer}", input=${input.action}` };
+    } finally {
+      av.ENABLED = saved.av; fv.ENABLED = saved.fv; pg.ENABLED = saved.pg;
+    }
   },
 });
 
