@@ -1067,7 +1067,12 @@ export const askLectureAgent = async (
       try {
         const memoryService = await import('./rag-answer-memory.service');
         const writeAnswerMemory = deps.writeAnswerMemory ?? memoryService.writeAnswerMemory;
-        const datasetVersionId = memoryDatasetVersionId ?? await memoryService.getActiveDatasetVersionId(lectureId);
+        // The version every retrieval in this request used. Re-reading the
+        // active version here (after a failed lookup) could file the answer
+        // under a dataset published mid-request, which it was not generated
+        // from — and unchanged rows keep their chunk ids, so the membership
+        // guard would not catch it.
+        const datasetVersionId = pinnedVersionId ?? memoryDatasetVersionId;
         if (datasetVersionId === null) throw new Error('lecture has no active dataset version');
         // A decomposed query never computes a single embedding for the
         // parent/effective question (each subquery gets its own — see

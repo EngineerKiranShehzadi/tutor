@@ -385,6 +385,8 @@ async function withFakeDb<T>(fn: (db: FakeDb) => Promise<T>): Promise<{ value: T
       return ok([{ id: 900 + db.history.length }]);
     }
     if (/^UPDATE chat_sessions/.test(t)) return ok([], 1);
+    // A dataset published while the request runs: the lecture's active version is now 8.
+    if (/^SELECT active_version_id FROM lectures WHERE id = \$1$/.test(t)) return ok([{ active_version_id: 8 }]);
     db.unexpected.push(t.slice(0, 100));
     throw new Error(`unexpected SQL: ${t.slice(0, 100)}`);
   };
@@ -877,6 +879,20 @@ cases.push({
       && empty.value instanceof Error && /Rerank returned 0 scores for 3 candidates/.test(empty.value.message)
       && asked.value instanceof Error && t?.attributes.responseStatus === 'ERROR' && t.attributes.notFoundReason === 'RERANKER_FAILURE';
     return { pass, detail: `short="${(short.value as Error).message}", trace=${t?.attributes.responseStatus}/${t?.attributes.notFoundReason}` };
+  },
+});
+
+// ── S15: answer memory is filed under the request's pinned version ──────
+cases.push({
+  label: 'S15. Memory lookup fails and a new version is activated mid-request → the answer is still cached under the pinned version (7, not 8)',
+  run: async () => {
+    const { deps, spies } = orchestratorDeps({
+      datasetVersionId: 7,
+      lookupAnswerMemory: async () => ({ hit: null, embedding: null, datasetVersionId: null, lookupFailed: true }),
+    });
+    const { value } = await withFakeDb(() => askOrchestrator(deps));
+    const pass = !(value instanceof Error) && spies.memoryWrites.length === 1 && spies.memoryWrites[0].datasetVersionId === 7;
+    return { pass, detail: `writes=${JSON.stringify(spies.memoryWrites)}` };
   },
 });
 
