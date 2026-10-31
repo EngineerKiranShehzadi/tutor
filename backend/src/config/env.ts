@@ -13,6 +13,20 @@ const required = (key: string): string => {
 const optional = (key: string, fallback: string): string =>
   process.env[key] ?? fallback;
 
+// HS256 is only as strong as its key: anything under 32 bytes (256 bits) can be
+// brute-forced offline from a single captured token. Production refuses to boot
+// with one; other environments get a warning so throwaway setups still run.
+const MIN_JWT_SECRET_BYTES = 32;
+const jwtSecret = (key: string): string => {
+  const val = required(key);
+  if (Buffer.byteLength(val, 'utf8') < MIN_JWT_SECRET_BYTES) {
+    const msg = `${key} is shorter than ${MIN_JWT_SECRET_BYTES} bytes — use a random value, e.g. \`openssl rand -hex 32\``;
+    if (process.env.NODE_ENV === 'production') throw new Error(msg);
+    console.warn(`[ENV] WARNING: ${msg}`);
+  }
+  return val;
+};
+
 const nonNegativeInt = (key: string, fallback: number): number => {
   const n = parseInt(process.env[key] ?? '', 10);
   return Number.isFinite(n) && n >= 0 ? n : fallback;
@@ -100,9 +114,9 @@ export const env = {
   },
 
   JWT: {
-    SECRET:              required('JWT_SECRET'),
+    SECRET:              jwtSecret('JWT_SECRET'),
     EXPIRES_IN:          optional('JWT_EXPIRES_IN', '15m'),
-    REFRESH_SECRET:      required('JWT_REFRESH_SECRET'),
+    REFRESH_SECRET:      jwtSecret('JWT_REFRESH_SECRET'),
     REFRESH_EXPIRES_IN:  optional('JWT_REFRESH_EXPIRES_IN', '7d'),
   },
 
@@ -461,3 +475,8 @@ export const env = {
     ENABLED: optional('OUTPUT_PII_GUARD_ENABLED', 'true') === 'true',
   },
 } as const;
+
+// One shared key would let a leaked access token be replayed as a refresh token.
+if (env.NODE_ENV === 'production' && env.JWT.SECRET === env.JWT.REFRESH_SECRET) {
+  throw new Error('JWT_SECRET and JWT_REFRESH_SECRET must be different values');
+}
