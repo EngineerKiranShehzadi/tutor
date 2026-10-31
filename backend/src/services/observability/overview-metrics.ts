@@ -21,7 +21,11 @@
 //
 // `memoryResult` real values (chat.service.ts, exhaustively grepped):
 //   'NOT_ATTEMPTED'  — route isn't FACT_QUESTION (GREETING, LECTURE_SUMMARY,
-//                       CONTEXTUAL_FOLLOW_UP never run the memory lookup)
+//                       CONTEXTUAL_FOLLOW_UP never run the memory lookup), or
+//                       a FACT_QUESTION had PII masked and memory was skipped
+//                       on purpose — those also carry memorySkipReason:
+//                       'PII_MASKED' (counted on the monitor, from
+//                       rag_request_log.memory_skip_reason)
 //   'LOOKUP_FAILED'  — lookupAnswerMemory() threw
 //   'EXACT_HIT'      — normalized-question exact match
 //   'SEMANTIC_HIT'   — embedding-similarity match (only when

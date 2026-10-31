@@ -1307,6 +1307,47 @@ const run = async () => {
       listed.join() === 'UNSUPPORTED_CLAIMS:verifier', `listed=[${listed.join(', ')}]`);
   }
 
+  // ── R10: a PII-masked memory skip is recorded and counted ───────────
+  {
+    const { writeRequestLog, buildRequestLogRow, resetRequestLogColumnProbe } = await import('../observability/request-log.service');
+    const { getSummary } = await import('../services/observability/monitor.service');
+    const ol = env.OBSERVABILITY as { REQUEST_LOG_ENABLED: boolean };
+    const savedLog = ol.REQUEST_LOG_ENABLED;
+    ol.REQUEST_LOG_ENABLED = true;
+    const ids = ['d', 'e', 'f'].map(c => c.repeat(32));
+    const mkTrace = (traceId: string, attributes: Record<string, unknown>) => ({
+      traceId, rootSpanId: 'root', rootName: 'ask-lecture-agent', startedAt: 0, durationMs: 10, status: 'SUCCESS' as const,
+      attributes: { responseStatus: 'ANSWERED', route: 'FACT_QUESTION', ...attributes } as never, spans: [],
+    });
+    const db = require('../config/database') as { query: (...a: unknown[]) => Promise<unknown> };
+    const realDbQuery = db.query;
+    try {
+      await query('DELETE FROM rag_request_log WHERE trace_id = ANY($1::char(32)[])', [ids]);
+      const before = (await getSummary('24h')).current.memorySkippedForPii;
+      await writeRequestLog(buildRequestLogRow(mkTrace(ids[0], { memoryResult: 'NOT_ATTEMPTED', memorySkipReason: 'PII_MASKED' }), false));
+      await writeRequestLog(buildRequestLogRow(mkTrace(ids[1], { memoryResult: 'MISS' }), false));
+      const after = (await getSummary('24h')).current.memorySkippedForPii;
+      const stored = (await query<{ memory_skip_reason: string | null }>('SELECT memory_skip_reason FROM rag_request_log WHERE trace_id = $1', [ids[0]])).rows[0]?.memory_skip_reason;
+      // A database without the new column yet (code deployed before db:setup): the row is still written.
+      db.query = async (...args: unknown[]) => {
+        if (String(args[0]).includes('memory_skip_reason')) throw Object.assign(new Error('column "memory_skip_reason" does not exist'), { code: '42703' });
+        return realDbQuery(...args);
+      };
+      resetRequestLogColumnProbe();
+      await writeRequestLog(buildRequestLogRow(mkTrace(ids[2], { memoryResult: 'NOT_ATTEMPTED', memorySkipReason: 'PII_MASKED' }), false));
+      db.query = realDbQuery;
+      const fallback = (await query<{ n: number }>('SELECT count(*)::int AS n FROM rag_request_log WHERE trace_id = $1', [ids[2]])).rows[0].n;
+      check('R10-1. memorySkipReason PII_MASKED is stored (rag_request_log.memory_skip_reason) and counted on the monitor summary; on a database without the column the row is still written',
+        stored === 'PII_MASKED' && after - before === 1 && fallback === 1,
+        `stored=${stored} count ${before}→${after} rowWithoutColumn=${fallback}`);
+    } finally {
+      db.query = realDbQuery;
+      resetRequestLogColumnProbe();
+      ol.REQUEST_LOG_ENABLED = savedLog;
+      await query('DELETE FROM rag_request_log WHERE trace_id = ANY($1::char(32)[])', [ids]);
+    }
+  }
+
   // ── R5: readiness recovers as soon as the answer LLM does ───────────
   {
     const rag = env.LLM.RAG_ANSWER as { PROVIDER: string };

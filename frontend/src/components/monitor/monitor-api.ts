@@ -16,6 +16,7 @@ export interface PeriodSummary {
   p95Ms: number | null;
   totalCostUsd: number | null;
   tokens: { input: number; output: number; total: number };
+  memorySkippedForPii: number;
 }
 
 export interface MonitorSummary {

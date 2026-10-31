@@ -192,6 +192,16 @@ function MonitorContent() {
               value={cur ? fmtUsd(cur.totalCostUsd) : null}
               change={cur && prev ? relChange(cur.totalCostUsd, prev.totalCostUsd, 'down') : null}
             />
+            <SummaryCard
+              loading={cardsLoading}
+              label="Answer cache skipped"
+              icon="fas fa-user-shield"
+              accent="indigo"
+              tooltip="Questions answered without the answer cache because personal data in them (a phone number, an email…) was masked. Masked questions can't be told apart, so their answers are never cached or reused. They are still answered normally."
+              value={cur ? cur.memorySkippedForPii.toLocaleString() : null}
+              subValue="personal data was masked"
+              change={cur && prev ? relChange(cur.memorySkippedForPii, prev.memorySkippedForPii, 'neutral') : null}
+            />
           </div>
           {lastRefreshedAt && (
             <p className="text-[12px] text-slate-400 mt-4">

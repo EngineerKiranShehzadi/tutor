@@ -1124,7 +1124,7 @@ cases.push({
 
 // ── ST2: a PII-masked question never reads or writes answer memory ──────
 cases.push({
-  label: 'ST2. Masked question ("What is [PHONE]?") → no memory lookup, no memory write, memoryResult NOT_ATTEMPTED; an unmasked one still uses memory',
+  label: 'ST2/R10. Masked question ("What is [PHONE]?") → no memory lookup, no memory write, memoryResult NOT_ATTEMPTED with memorySkipReason PII_MASKED; an unmasked one still uses memory',
   run: async () => {
     const run = async (raw: string, masked: string) => {
       const lookups: string[] = [];
@@ -1135,13 +1135,13 @@ cases.push({
         lookupAnswerMemory: async p => { lookups.push(p.question); return { hit: null, embedding: [0.1, 0.2], datasetVersionId: 7, lookupFailed: false }; },
       });
       const { value } = await withFakeDb(() => askOrchestrator(deps, raw));
-      return { value, lookups, writes: spies.memoryWrites.length, generated: spies.generateCalls, memoryResult: spies.traces[0]?.attributes.memoryResult };
+      return { value, lookups, writes: spies.memoryWrites.length, generated: spies.generateCalls, memoryResult: spies.traces[0]?.attributes.memoryResult, skip: spies.traces[0]?.attributes.memorySkipReason };
     };
     const a = await run('What is +92 300 1234567?', 'What is [PHONE]?');
     const b = await run('What is +92 321 7654321?', 'What is [PHONE]?');
     const plain = await run('What is a prompt?', 'What is a prompt?');
-    const pass = [a, b].every(r => !(r.value instanceof Error) && r.lookups.length === 0 && r.writes === 0 && r.generated === 1 && r.memoryResult === 'NOT_ATTEMPTED')
-      && plain.lookups.length === 1 && plain.writes === 1 && plain.memoryResult === 'ENTRY_CREATED';
+    const pass = [a, b].every(r => !(r.value instanceof Error) && r.lookups.length === 0 && r.writes === 0 && r.generated === 1 && r.memoryResult === 'NOT_ATTEMPTED' && r.skip === 'PII_MASKED')
+      && plain.lookups.length === 1 && plain.writes === 1 && plain.memoryResult === 'ENTRY_CREATED' && plain.skip === undefined;
     return { pass, detail: `masked: lookups=${a.lookups.length}/${b.lookups.length}, writes=${a.writes}/${b.writes}, memoryResult=${a.memoryResult}; plain: lookups=${plain.lookups.length}, writes=${plain.writes}, memoryResult=${plain.memoryResult}` };
   },
 });

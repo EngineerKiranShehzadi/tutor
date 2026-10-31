@@ -55,6 +55,12 @@ cases.push({
 });
 
 cases.push({
+  label: 'R10: memorySkipReason (answer memory skipped because PII was masked) maps to its column; absent → null',
+  run: () => buildRequestLogRow(trace([], { memoryResult: 'NOT_ATTEMPTED', memorySkipReason: 'PII_MASKED' }), false, PRICING).memorySkipReason === 'PII_MASKED'
+    && buildRequestLogRow(trace([], { memoryResult: 'MISS' }), false, PRICING).memorySkipReason === null,
+});
+
+cases.push({
   label: "Missing/empty responseStatus becomes 'UNKNOWN' (never null)",
   run: () => {
     const a = buildRequestLogRow(trace([], {}), false, PRICING);

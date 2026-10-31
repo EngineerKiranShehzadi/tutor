@@ -59,6 +59,8 @@ export interface PeriodSummary {
   p95Ms: number | null;
   totalCostUsd: number | null;
   tokens: { input: number; output: number; total: number };
+  // Fact questions answered without answer memory because PII was masked in them.
+  memorySkippedForPii: number;
 }
 
 async function summarizePeriod(startOffset: string, endOffset: string): Promise<PeriodSummary> {
@@ -73,7 +75,8 @@ async function summarizePeriod(startOffset: string, endOffset: string): Promise<
             (percentile_cont(0.95) WITHIN GROUP (ORDER BY total_ms))::float8 AS p95,
             sum(est_cost_usd)::float8 AS cost,
             coalesce(sum(input_tokens), 0)::float8 AS in_tokens,
-            coalesce(sum(output_tokens), 0)::float8 AS out_tokens
+            coalesce(sum(output_tokens), 0)::float8 AS out_tokens,
+            count(*) FILTER (WHERE memory_skip_reason = 'PII_MASKED')::int AS memory_skipped_pii
        FROM rag_request_log
       WHERE created_at >= now() - $1::interval
         AND created_at <  now() - $2::interval`,
@@ -93,6 +96,7 @@ async function summarizePeriod(startOffset: string, endOffset: string): Promise<
     p95Ms: num(r.p95),
     totalCostUsd: num(r.cost),
     tokens: { input, output, total: input + output },
+    memorySkippedForPii: Number(r.memory_skipped_pii),
   };
 }
 

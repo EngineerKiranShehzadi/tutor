@@ -463,8 +463,8 @@ export const askLectureAgent = async (
     // stored, logged, traced or sent to an LLM; those all use `question`.
     const unmaskedQuestion = guardrailResult.retrievalInput ?? question;
     // Answer memory is skipped for a question that had PII masked. The
-    // masked text can't tell "What is 4294967296?" from "What is 2147483647?"
-    // (both become "what is [phone]"), for the exact key and for the
+    // masked text can't tell "What is +92 300 1234567?" from "What is
+    // +92 321 7654321?" (both become "what is [phone]"), for the exact key and for the
     // embedding the semantic lookup compares, so one student's cached answer
     // would be replayed for a different question. Keying on the unmasked
     // text instead would store the raw value in rag_answer_memory.
@@ -649,6 +649,9 @@ export const askLectureAgent = async (
 
     if (route === 'FACT_QUESTION' && piiMasked) {
       logger.info('[CHAT] 🛡️  Answer memory skipped: the question had PII masked');
+      // memoryResult stays NOT_ATTEMPTED, as for routes that never use memory;
+      // this says why, so the skip rate is measurable (rag_request_log, monitor).
+      trace.setAttributes({ memorySkipReason: 'PII_MASKED' });
     }
     if (route === 'FACT_QUESTION' && !piiMasked) {
       currentStage = 'exact-memory-lookup';

@@ -21,6 +21,8 @@ export interface RequestLogRow {
   notFoundReason: string | null;
   errorCode: string | null;
   memoryResult: string | null;
+  // Set when memory was skipped on purpose ('PII_MASKED'); see chat.service.ts.
+  memorySkipReason: string | null;
   answerVerificationReason: string | null;
   totalMs: number;
   stageMs: Record<string, number>;
@@ -111,6 +113,7 @@ export function buildRequestLogRow(
     notFoundReason: str(attrs.notFoundReason),
     errorCode: trace.status === 'ERROR' ? trace.spans.find(s => s.errorCode)?.errorCode ?? null : null,
     memoryResult: str(attrs.memoryResult),
+    memorySkipReason: str(attrs.memorySkipReason),
     answerVerificationReason: str(attrs.answerVerificationReason),
     totalMs: Math.round(trace.durationMs),
     stageMs,
@@ -124,6 +127,39 @@ export function buildRequestLogRow(
   };
 }
 
+// The columns added by migrations after 008, written only once they exist.
+// Until a database is migrated (code deployed first), the insert would fail on
+// the unknown column and the request would not be logged at all, so a 42703
+// (undefined_column) falls back to the columns every database has.
+const LATER_COLUMNS: { column: string; value: (row: RequestLogRow) => unknown }[] = [
+  { column: 'memory_skip_reason', value: r => r.memorySkipReason },
+];
+let laterColumnsMissing = false;
+
+const BASE_COLUMNS = [
+  'trace_id', 'student_id', 'lecture_id', 'session_id', 'route', 'status', 'response_status',
+  'not_found_reason', 'error_code', 'memory_result', 'answer_verification_reason',
+  'total_ms', 'stage_ms', 'llm_calls', 'input_tokens', 'output_tokens', 'est_cost_usd',
+  'llm_model', 'exported_to_phoenix', 'schema_version',
+];
+const baseValues = (row: RequestLogRow): unknown[] => [
+  row.traceId, row.studentId, row.lectureId, row.sessionId, row.route, row.status, row.responseStatus,
+  row.notFoundReason, row.errorCode, row.memoryResult, row.answerVerificationReason,
+  row.totalMs, JSON.stringify(row.stageMs), row.llmCalls, row.inputTokens, row.outputTokens, row.estCostUsd,
+  row.llmModel, row.exportedToPhoenix, row.schemaVersion,
+];
+
+const insertRow = (row: RequestLogRow, withLater: boolean) => {
+  const columns = withLater ? [...BASE_COLUMNS, ...LATER_COLUMNS.map(c => c.column)] : BASE_COLUMNS;
+  const values = withLater ? [...baseValues(row), ...LATER_COLUMNS.map(c => c.value(row))] : baseValues(row);
+  return query(
+    `INSERT INTO rag_request_log (${columns.join(', ')})
+     VALUES (${values.map((_, i) => `$${i + 1}`).join(',')})
+     ON CONFLICT (trace_id) DO NOTHING`,
+    values
+  );
+};
+
 // Never throws: a request-log failure (e.g. Postgres down) must not touch
 // the student's answer. Idempotent per trace via ON CONFLICT.
 export async function writeRequestLog(row: RequestLogRow): Promise<void> {
@@ -133,22 +169,18 @@ export async function writeRequestLog(row: RequestLogRow): Promise<void> {
     return;
   }
   try {
-    await query(
-      `INSERT INTO rag_request_log (
-         trace_id, student_id, lecture_id, session_id, route, status, response_status,
-         not_found_reason, error_code, memory_result, answer_verification_reason,
-         total_ms, stage_ms, llm_calls, input_tokens, output_tokens, est_cost_usd,
-         llm_model, exported_to_phoenix, schema_version
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
-       ON CONFLICT (trace_id) DO NOTHING`,
-      [
-        row.traceId, row.studentId, row.lectureId, row.sessionId, row.route, row.status, row.responseStatus,
-        row.notFoundReason, row.errorCode, row.memoryResult, row.answerVerificationReason,
-        row.totalMs, JSON.stringify(row.stageMs), row.llmCalls, row.inputTokens, row.outputTokens, row.estCostUsd,
-        row.llmModel, row.exportedToPhoenix, row.schemaVersion,
-      ]
-    );
+    try {
+      await insertRow(row, !laterColumnsMissing);
+    } catch (err) {
+      if ((err as { code?: string }).code !== '42703' || laterColumnsMissing) throw err;
+      laterColumnsMissing = true;
+      logger.warn('[REQUEST_LOG] rag_request_log is missing columns from a newer migration — run db:setup. Logging without them until then.');
+      await insertRow(row, false);
+    }
   } catch (err) {
     logger.warn(`[REQUEST_LOG] Failed to write rag_request_log for trace ${row.traceId} (non-fatal): ${(err as Error).message}`);
   }
 }
+
+/** Tests only. */
+export const resetRequestLogColumnProbe = (): void => { laterColumnsMissing = false; };
