@@ -19,8 +19,9 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
--- Case-insensitive uniqueness, enforced by the database (see migration 012).
-CREATE UNIQUE INDEX IF NOT EXISTS users_email_lower_key ON users (lower(email));
+-- Case-insensitive uniqueness (unique index on lower(email)) comes from
+-- migration 012 only: it first checks for case-variant duplicates and explains
+-- what to do, where a bare CREATE here would fail with a raw Postgres error.
 
 -- ── REFRESH TOKENS ─────────────────────────────
 CREATE TABLE IF NOT EXISTS refresh_tokens (
