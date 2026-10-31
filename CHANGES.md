@@ -7,6 +7,73 @@ Newest entry at the top.
 
 ---
 
+## 2026-10-31 — Post-merge audit of feature/integration: open items after PR #1 (ST1–ST6, AD-N1–AD-N8, X1–X5)
+
+**Changed by:** Kiran
+**Files:** PII detector (`rag/guardrails/shared/pii/`), streaming redactor, output guardrail,
+format detector, `query-router.service.ts`, `chat.service.ts`, `llm-gemini.service.ts`,
+`dataset-version.service.ts`, `dataset.controller.ts`, `analytics.service.ts`, `chunk.service.ts`,
+`health.service.ts`, `provider-signal.ts`, observability routes/validation/overview metrics,
+`config/env.ts`, `.env.example`, GraphQL `typeDefs.ts`; frontend monitor labels, Errors,
+Health, Content Gaps and lecture pages; tests in `backend/src/scripts/`
+
+**Deploy note:** no migration. Deploy backend and frontend together (Content Gaps
+gains a GraphQL field). New upload defaults — `DATASET_MAX_ROWS` 1000,
+`DATASET_MAX_COLUMNS` 20, `DATASET_MAX_UNCOMPRESSED_MB` 5 — set them in the
+environment to keep the old limits. The upload response's `status: 'PROCESSING'`
+is now `versionStatus: 'BUILDING'`.
+
+**Student answers**
+- **ST1 — lecture numbers were masked as PII.** "175000000000", "4294967296" and
+  "Chapter 10.2.3.4" were masked as a phone or IP in the question and in the
+  answer. A phone number now has to look like one (a `+`, a trunk `0`, or
+  separators that are not a decimal or thousands grouping). Private,
+  loopback, reserved and documentation addresses, netmasks and section
+  numbers are no longer masked as IPs.
+- **ST2 — a cached answer could be replayed for a different question.** Two
+  questions that mask to the same text ("What is [PHONE]?") shared one cache key.
+  Answer memory is now skipped for a question that had PII masked; keying on the
+  raw text would have stored it.
+- **ST3 — "Summarize this lecture in a table" lost the summary route.** Format
+  phrases are removed before the topic check, using the format detector's own word
+  list.
+- **ST4 — a format repair could drop part of a verified answer** and be cached.
+  A repair missing more than 20% of the answer's distinct content words is
+  rejected (`LOST_CONTENT`).
+- **ST5 — the streamed draft could show "[CREDIT_CARD] nd".** The redactor tracks
+  the text it has sent, not its length, and holds the space after a digit group.
+- **ST6 — answer-memory hits counted as missing retrieval telemetry.** They are
+  now "not applicable", like greetings.
+
+**Admin and datasets**
+- **AD-N1 — Cancel could deadlock against cleanup.** Every dataset transaction
+  now locks the lecture first, then its versions.
+- **AD-N2 — upload caps were about 100× real data.** Parsing runs on the shared
+  request thread; one parse at the old caps blocked about 2.8 s, about 0.1 s at
+  the new ones.
+- **AD-N3 — a first upload stuck in EMBEDDING/PROCESSING with nothing in flight
+  locked the admin out.** Reconcile marks it FAILED, without racing a build that
+  commits meanwhile.
+- **AD-N4** — the upload response reports the version's real status.
+  **AD-N5** — an unexpected upload failure is a 500 through the shared handler,
+  not a 400 carrying driver text.
+- **AD-N6 — Content Gaps could starve a lecture of vocabulary.** The cap is per
+  lecture (new `chunksSampled` flag), and lectures with no published dataset are
+  left out instead of shown as "Critical Gap".
+- **AD-N7** — the lecture page lists and counts each Q&A pair once.
+- **AD-N8 — readiness could never report a Groq answer outage.** Real answer
+  calls feed the passive provider signal. Readiness applies that signal after
+  its cache, for the embedder and reranker too.
+
+**Operator pages**
+- **X1** — the Errors page and the "Errors only" filter now really filter.
+- **X2** — trace time filters reach the services as ISO strings, not Dates.
+- **X3/X4** — every pipeline step and every verifier reason has a label; a
+  verifier outage reads as an outage.
+- **X5** — the reranker card is marked critical.
+
+---
+
 ## 2026-10-31 — Admin/dataset fixes, batch 4 (low): dead cache rows, upload errors, xlsx upgrade, safe error logs, bounded maps (A15–A20)
 
 **Changed by:** Kiran
