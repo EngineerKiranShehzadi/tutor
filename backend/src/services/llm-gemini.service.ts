@@ -2,7 +2,7 @@ import { AppError } from '../middleware/errorHandler';
 import { QnaChunk, LectureAgentProfile } from '../types';
 import { logger } from '../utils/logger';
 import { logSafeText } from '../observability/sanitize';
-import { tracked } from '../observability/provider-signal';
+import { recordProviderSuccess, recordProviderFailure } from '../observability/provider-signal';
 import { env } from '../config/env';
 import { resolveLlmProvider } from '../llm/llm-provider.resolver';
 import { withLlmDiagnostic, extractLlmUsage } from '../llm/llm-observability.service';
@@ -243,12 +243,14 @@ ${question}${uncoveredBlock}${unavailableBlock}`;
       // history + question) is sent as one user prompt, exactly as before —
       // no separate systemPrompt field, so this doesn't change what the
       // model actually sees.
-      // tracked(): each outcome feeds the readiness signal for the answer LLM.
-      () => tracked('answerLlm', () => (stream && provider.generateStream
+      () => (stream && provider.generateStream
         ? provider.generateStream(request, piece => { streamedAny = true; stream.onDelta(piece); })
-        : provider.generate(request))),
+        : provider.generate(request)),
       extractLlmUsage
     );
+    // One outcome per question feeds the readiness signal, not one per
+    // attempt: a single question that retries three times is one failure.
+    recordProviderSuccess('answerLlm');
     const finishReason = result.finishReason;
 
     if (finishReason === 'MAX_TOKENS') {
@@ -276,6 +278,7 @@ ${question}${uncoveredBlock}${unavailableBlock}`;
       return generateAnswer(question, chunks, lectureTitle, history, uncoveredAspects, attempt + 1, stream, agentProfile, unavailableAspects);
     }
 
+    recordProviderFailure('answerLlm', err);
     if (err instanceof AppError) throw err;
     logger.error('[LLM] ❌ Gemini error:', err);
     throw new AppError('AI model failed to generate a response. Please try again.', 500);

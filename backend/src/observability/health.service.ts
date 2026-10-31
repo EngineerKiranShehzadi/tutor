@@ -42,19 +42,26 @@ export const requiredComponents = (): ComponentName[] => [
 ];
 
 // Probes the provider that answers questions. Only Gemini has a probe; for any
-// other provider readiness must not claim it is healthy. Whatever the
-// provider, recent REAL answer calls are consulted too (provider-signal.ts,
-// fed by generateAnswer): if they keep failing the answer LLM is unhealthy —
-// otherwise a Groq outage left /health/ready at 200 while every question failed.
-export async function checkAnswerLlm(provider = env.LLM.RAG_ANSWER.PROVIDER): Promise<ComponentHealth> {
-  const base: ComponentHealth = provider === 'gemini'
-    ? await checkGemini()
+// other provider readiness must not claim it is healthy.
+async function probeAnswerLlm(provider: string): Promise<ComponentHealth> {
+  return provider === 'gemini'
+    ? checkGemini()
     : { status: 'degraded', latencyMs: 0, errorCode: 'UNVERIFIED_PROVIDER' };
-  return withProviderSignal('answerLlm')(base);
+}
+
+// Whatever the provider, recent REAL answer calls are consulted too
+// (provider-signal.ts, fed by generateAnswer): if they keep failing the answer
+// LLM is unhealthy — otherwise a Groq outage left /health/ready at 200 while
+// every question failed.
+export async function checkAnswerLlm(provider = env.LLM.RAG_ANSWER.PROVIDER): Promise<ComponentHealth> {
+  return withProviderSignal('answerLlm')(await probeAnswerLlm(provider));
 }
 
 // A component whose recent real calls keep failing is unhealthy, whatever its
-// probe or config check said.
+// probe or config check said. Applied AFTER the readiness cache, never inside
+// it: a cached result with the signal baked in kept a recovered provider
+// unhealthy (and /health/ready at 503) for the rest of the cache TTL, though
+// one successful call had already cleared the signal.
 const withProviderSignal = (c: ProviderComponent) => (h: ComponentHealth): ComponentHealth => {
   if (h.status === 'unhealthy') return h;
   const down = providerDownSignal(c);
@@ -63,6 +70,8 @@ const withProviderSignal = (c: ProviderComponent) => (h: ComponentHealth): Compo
 
 interface CacheEntry { result: ComponentHealth; checkedAtMs: number; }
 const cache = new Map<string, CacheEntry>();
+/** Tests only. */
+export const resetHealthCache = (): void => cache.clear();
 
 async function timed<T>(fn: () => Promise<T>): Promise<{ result: T; latencyMs: number }> {
   const start = process.hrtime.bigint();
@@ -71,13 +80,18 @@ async function timed<T>(fn: () => Promise<T>): Promise<{ result: T; latencyMs: n
   return { result, latencyMs };
 }
 
+// A failed probe is re-checked sooner than a passing one, so a recovered
+// dependency rejoins the load balancer within seconds, not a full TTL.
+export const UNHEALTHY_CACHE_TTL_MS = 5_000;
+
 async function cached(
   key: string,
   ttlMs: number,
   compute: () => Promise<ComponentHealth>
 ): Promise<ComponentHealth> {
   const entry = cache.get(key);
-  if (entry && Date.now() - entry.checkedAtMs < ttlMs) {
+  const entryTtl = entry?.result.status === 'unhealthy' ? Math.min(ttlMs, UNHEALTHY_CACHE_TTL_MS) : ttlMs;
+  if (entry && Date.now() - entry.checkedAtMs < entryTtl) {
     return entry.result;
   }
   const result = await compute().catch((err): ComponentHealth => ({
@@ -130,9 +144,11 @@ async function checkHttpReachable(url: string): Promise<ComponentHealth> {
 // Never a paid call per probe:
 //   - provider with an HTTP endpoint of its own (the local server): reachability;
 //   - hosted provider with a free probe() (OpenAI: model metadata): run it;
-//   - hosted provider without one (Voyage): config check.
-// After that, recent REAL calls are consulted (provider-signal.ts): a provider
-// whose last calls kept failing is unhealthy even if it looks reachable/configured.
+//   - hosted provider without one: config check.
+// With `component`, recent REAL calls are consulted too (provider-signal.ts): a
+// provider whose last calls kept failing is unhealthy even if it looks
+// reachable/configured. checkReadiness leaves it out and applies the signal
+// after its cache instead (see withProviderSignal).
 export async function checkProviderHealth(
   provider: { healthUrl?: string; assertConfigured(): void; probe?(): Promise<void> },
   component?: ProviderComponent,
@@ -198,17 +214,17 @@ export function checkLiveness(): { status: 'ok'; timestamp: string } {
 export async function checkReadiness(): Promise<ReadinessResult> {
   const ttl = env.HEALTH.CACHE_TTL_MS;
 
-  // The passive signal is a map lookup, so it is applied again AFTER the cache:
-  // real calls that start failing show up at once, not when the cached
-  // probe expires.
+  // Only the probes are cached. The passive signal is a map lookup applied
+  // AFTER the cache, so real calls that start failing show up at once, and a
+  // success clears it at once — neither waits for the cached probe to expire.
   const [database, pgvector, embeddingServer, reranker, answerLlm] = await Promise.all([
     cached('database', ttl, checkDatabase),
     cached('pgvector', ttl, checkPgvector),
-    cached('embeddingServer', ttl, () => checkProviderHealth(resolveEmbeddingProvider(env.RETRIEVAL.EMBEDDING_PROVIDER), 'embeddingServer'))
+    cached('embeddingServer', ttl, () => checkProviderHealth(resolveEmbeddingProvider(env.RETRIEVAL.EMBEDDING_PROVIDER)))
       .then(withProviderSignal('embeddingServer')),
-    cached('reranker', ttl, () => checkProviderHealth(resolveRerankProvider(env.RETRIEVAL.RERANK_PROVIDER), 'reranker'))
+    cached('reranker', ttl, () => checkProviderHealth(resolveRerankProvider(env.RETRIEVAL.RERANK_PROVIDER)))
       .then(withProviderSignal('reranker')),
-    cached(`answerLlm:${env.LLM.RAG_ANSWER.PROVIDER}`, ttl, () => checkAnswerLlm())
+    cached(`answerLlm:${env.LLM.RAG_ANSWER.PROVIDER}`, ttl, () => probeAnswerLlm(env.LLM.RAG_ANSWER.PROVIDER))
       .then(withProviderSignal('answerLlm')),
   ]);
 

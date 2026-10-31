@@ -28,7 +28,7 @@ import { enforceAskQuota, AskQuotaExceededError, resetAskQuotaForTests, askQuota
 import { chatResolvers } from '../graphql/resolvers/chat.resolver';
 import chatRoutes from '../routes/chat.routes';
 import { generateAccessToken } from '../utils/jwt';
-import { checkProviderHealth, overallStatus, requiredComponents, ComponentHealth, checkAnswerLlm, checkReadiness } from '../observability/health.service';
+import { checkProviderHealth, overallStatus, requiredComponents, ComponentHealth, checkAnswerLlm, checkReadiness, resetHealthCache, UNHEALTHY_CACHE_TTL_MS } from '../observability/health.service';
 import { recordProviderFailure, recordProviderSuccess, resetProviderSignals } from '../observability/provider-signal';
 import { EmbeddingUnavailableError } from '../embedding/embedding-errors';
 import { mkdtempSync, writeFileSync, rmSync, statSync } from 'fs';
@@ -1211,6 +1211,85 @@ const run = async () => {
       provider.generate = realGenerate;
       rag.PROVIDER = saved;
       resetProviderSignals();
+    }
+  }
+
+  // ── R5: readiness recovers as soon as the answer LLM does ───────────
+  {
+    const rag = env.LLM.RAG_ANSWER as { PROVIDER: string };
+    const health = env.HEALTH as { CACHE_TTL_MS: number };
+    const saved = { provider: rag.PROVIDER, ttl: health.CACHE_TTL_MS };
+    rag.PROVIDER = 'groq';
+    health.CACHE_TTL_MS = 60_000;
+    const provider = resolveLlmProvider('groq') as { generate: (...a: unknown[]) => Promise<unknown> };
+    const realGenerate = provider.generate;
+    const realSetTimeout = globalThis.setTimeout;
+    resetProviderSignals();
+    resetHealthCache();
+    try {
+      provider.generate = async () => { throw new Error('Request timeout after 30000ms'); };
+      for (let i = 0; i < 2; i++) await generateAnswer('What is a prompt?', [], 'Lecture', []).catch(() => undefined);
+      const down = await checkReadiness();          // fills the 60 s cache while the signal says down
+      provider.generate = async (req: unknown) => ({ raw: 'ok', provider: 'groq', model: (req as { model: string }).model, finishReason: 'STOP' });
+      await generateAnswer('What is a prompt?', [], 'Lecture', []);
+      const after = await checkReadiness();         // same 60 s window, cached probe
+      check('R5-1. Two failed answer calls → readiness caches answerLlm; one success → the very next readiness (inside the same 60 s TTL) reports it recovered, not unhealthy until the TTL ends',
+        down.components.answerLlm.status === 'unhealthy' && after.components.answerLlm.status === 'degraded'
+          && after.components.answerLlm.errorCode === 'UNVERIFIED_PROVIDER',
+        `down=${JSON.stringify(down.components.answerLlm)} after=${JSON.stringify(after.components.answerLlm)}`);
+
+      // One question whose call is retried three times on 503 is ONE failure, not four.
+      resetProviderSignals();
+      let attempts = 0;
+      provider.generate = async () => { attempts++; throw new Error('503 Service Unavailable: high demand'); };
+      (globalThis as { setTimeout: unknown }).setTimeout = ((fn: () => void) => realSetTimeout(fn, 0)) as unknown;
+      await generateAnswer('What is a prompt?', [], 'Lecture', []).catch(() => undefined);
+      const oneQuestion = await checkAnswerLlm();
+      await generateAnswer('What is a prompt?', [], 'Lecture', []).catch(() => undefined);
+      const twoQuestions = await checkAnswerLlm();
+      check('R5-2. A question retried on 503 (4 attempts) counts as one failure: answerLlm stays degraded after one such question, unhealthy after two',
+        attempts === 8 && oneQuestion.status === 'degraded' && twoQuestions.status === 'unhealthy' && twoQuestions.errorCode === 'SERVICE_UNAVAILABLE',
+        `attempts=${attempts} one=${JSON.stringify(oneQuestion)} two=${JSON.stringify(twoQuestions)}`);
+    } finally {
+      (globalThis as { setTimeout: unknown }).setTimeout = realSetTimeout;
+      provider.generate = realGenerate;
+      rag.PROVIDER = saved.provider;
+      health.CACHE_TTL_MS = saved.ttl;
+      resetProviderSignals();
+      resetHealthCache();
+    }
+  }
+
+  // ── R5b: a failed probe is re-checked within seconds ────────────────
+  {
+    const health = env.HEALTH as { CACHE_TTL_MS: number };
+    const savedTtl = health.CACHE_TTL_MS;
+    const db = require('../config/database') as { query: (...a: unknown[]) => Promise<unknown> };
+    const realDbQuery = db.query;
+    const realNow = Date.now;
+    let clock = realNow();
+    Date.now = () => clock;
+    health.CACHE_TTL_MS = 60_000;
+    resetHealthCache();
+    try {
+      db.query = async () => { throw new Error('connect ECONNREFUSED 127.0.0.1:5432'); };
+      const failed = (await checkReadiness()).components.database.status;
+      db.query = realDbQuery;
+      clock += UNHEALTHY_CACHE_TTL_MS - 1000;
+      const stillCached = (await checkReadiness()).components.database.status;
+      clock += 2000;
+      const recovered = (await checkReadiness()).components.database.status;
+      db.query = async () => { throw new Error('connect ECONNREFUSED 127.0.0.1:5432'); };
+      clock += 10_000;
+      const healthyCached = (await checkReadiness()).components.database.status;
+      check('R5-3. A failed probe is re-checked after UNHEALTHY_CACHE_TTL_MS (5 s), not the 60 s TTL; a passing one keeps the full TTL',
+        failed === 'unhealthy' && stillCached === 'unhealthy' && recovered === 'healthy' && healthyCached === 'healthy',
+        `failed=${failed} at+4s=${stillCached} at+6s=${recovered} healthy+10s=${healthyCached}`);
+    } finally {
+      db.query = realDbQuery;
+      Date.now = realNow;
+      health.CACHE_TTL_MS = savedTtl;
+      resetHealthCache();
     }
   }
 
