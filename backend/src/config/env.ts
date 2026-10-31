@@ -27,24 +27,37 @@ const jwtSecret = (key: string): string => {
   return val;
 };
 
+// Numeric settings fail fast: unset or blank uses the default, but a value
+// that is set and invalid stops boot with a clear message. Before, a typo such
+// as INPUT_GUARDRAIL_MAX_CHARS=8k became NaN (every comparison false — the
+// guard silently off) or quietly fell back to the default.
+const rawEnv = (key: string): string => (process.env[key] ?? '').trim();
+
 const nonNegativeInt = (key: string, fallback: number): number => {
-  const n = parseInt(process.env[key] ?? '', 10);
-  return Number.isFinite(n) && n >= 0 ? n : fallback;
+  const raw = rawEnv(key);
+  if (raw === '') return fallback;
+  if (!/^\d+$/.test(raw)) throw new Error(`${key} must be a non-negative integer (got "${raw}")`);
+  return Number(raw);
 };
 
 // A string from env; unset or blank falls back (unlike optional(), which keeps '').
 const nonBlank = (key: string, fallback: string): string =>
   (process.env[key] ?? '').trim() || fallback;
 
-// A finite number from env; unset, blank or unparseable falls back.
+// A finite number from env; unset or blank falls back, anything else must parse.
 const finiteFloat = (key: string, fallback: number): number => {
-  const n = parseFloat(process.env[key] ?? '');
-  return Number.isFinite(n) ? n : fallback;
+  const raw = rawEnv(key);
+  if (raw === '') return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) throw new Error(`${key} must be a number (got "${raw}")`);
+  return n;
 };
 
 const positiveInt = (key: string, fallback: number): number => {
-  const n = parseInt(process.env[key] ?? '', 10);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
+  const raw = rawEnv(key);
+  if (raw === '') return fallback;
+  if (!/^\d+$/.test(raw) || Number(raw) <= 0) throw new Error(`${key} must be a positive integer (got "${raw}")`);
+  return Number(raw);
 };
 
 // Per-task thinking effort (off|minimal|low|medium|high). An unrecognised
@@ -81,7 +94,7 @@ const parseLlmPricing = (raw: string): Record<string, LlmPrice> => {
 
 export const env = {
   NODE_ENV:      optional('NODE_ENV', 'development'),
-  PORT:          parseInt(optional('PORT', '5000'), 10),
+  PORT:          positiveInt('PORT', 5000),
   // Express 'trust proxy'. Behind a load balancer / reverse proxy req.ip is the
   // proxy's address unless this is set, so every IP-based limit would put all
   // users in one bucket. Number = proxy hops to trust; 'false' = none; any
@@ -95,8 +108,8 @@ export const env = {
   // operation is rejected beyond these limits (graphql/query-limits.ts).
   GRAPHQL: {
     INTROSPECTION: optional('GRAPHQL_INTROSPECTION', optional('NODE_ENV', 'development') === 'production' ? 'false' : 'true') === 'true',
-    MAX_DEPTH:  Math.max(1, parseInt(optional('GRAPHQL_MAX_DEPTH', '10'), 10) || 10),
-    MAX_FIELDS: Math.max(1, parseInt(optional('GRAPHQL_MAX_FIELDS', '200'), 10) || 200),
+    MAX_DEPTH:  positiveInt('GRAPHQL_MAX_DEPTH', 10),
+    MAX_FIELDS: positiveInt('GRAPHQL_MAX_FIELDS', 200),
   },
   TRUST_PROXY: ((): boolean | number | string => {
     const raw = optional('TRUST_PROXY', optional('NODE_ENV', 'development') === 'production' ? '1' : 'false').trim();
@@ -114,7 +127,7 @@ export const env = {
   // Upper bound for a graceful shutdown (SIGTERM/SIGINT): finishing in-flight
   // requests, flushing traces to Phoenix and closing the DB pool. If it is
   // not done by then, the process exits with code 1. See server.ts.
-  SHUTDOWN_TIMEOUT_MS: parseInt(optional('SHUTDOWN_TIMEOUT_MS', '10000'), 10),
+  SHUTDOWN_TIMEOUT_MS: positiveInt('SHUTDOWN_TIMEOUT_MS', 10000),
 
   // Production only: also write logs/error.log and logs/combined.log (10 MB
   // size rotation, 5 files). Off by default — production logs go to the
@@ -124,28 +137,28 @@ export const env = {
   // Dataset pipeline (dataset-version.service.ts). How long to wait before
   // retrying a build that is paused because the embedding service is down.
   DATASET: {
-    RETRY_DELAY_MS: parseInt(optional('DATASET_RETRY_DELAY_MS', '15000'), 10),
+    RETRY_DELAY_MS: positiveInt('DATASET_RETRY_DELAY_MS', 15000),
     // Chunks per embedding request; 1 = per-chunk (/embed). Batching is meant for a
     // GPU or a remote embedder; on a CPU-only box it is slower. Measured on the
     // local CPU server, lecture 4 (329 chunks): per-chunk 111 s, batch 8 128 s,
     // batch 32 158 s; vectors identical (min cosine 0.9999999999991).
-    EMBED_BATCH: Math.max(1, parseInt(optional('DATASET_EMBED_BATCH', '1'), 10) || 1),
+    EMBED_BATCH: positiveInt('DATASET_EMBED_BATCH', 1),
     // A build waiting on an embedding outage / rate limit is failed after this
     // long without progress (0 = wait forever). Admins can also cancel it.
     // Upload limits, checked before the spreadsheet is parsed (A4). Real lecture
     // datasets: ≤ 545 rows, 10 columns, < 1 MB uncompressed, ≤ 17 zip entries.
     // Compressed .xlsx upload size (multer); bigger uploads get HTTP 413.
-    MAX_UPLOAD_BYTES:       Math.max(1, parseInt(optional('DATASET_MAX_UPLOAD_MB', '10'), 10) || 10) * 1024 * 1024,
-    MAX_ROWS:               Math.max(1, parseInt(optional('DATASET_MAX_ROWS', '5000'), 10) || 5000),
-    MAX_COLUMNS:            Math.max(1, parseInt(optional('DATASET_MAX_COLUMNS', '100'), 10) || 100),
-    MAX_UNCOMPRESSED_BYTES: Math.max(1, parseInt(optional('DATASET_MAX_UNCOMPRESSED_MB', '50'), 10) || 50) * 1024 * 1024,
-    MAX_ZIP_ENTRIES:        Math.max(1, parseInt(optional('DATASET_MAX_ZIP_ENTRIES', '500'), 10) || 500),
-    OUTAGE_MAX_MS: (() => { const m = parseInt(optional('DATASET_OUTAGE_MAX_MINUTES', '360'), 10); return Number.isFinite(m) && m >= 0 ? m * 60_000 : 360 * 60_000; })(),
+    MAX_UPLOAD_BYTES:       positiveInt('DATASET_MAX_UPLOAD_MB', 10) * 1024 * 1024,
+    MAX_ROWS:               positiveInt('DATASET_MAX_ROWS', 5000),
+    MAX_COLUMNS:            positiveInt('DATASET_MAX_COLUMNS', 100),
+    MAX_UNCOMPRESSED_BYTES: positiveInt('DATASET_MAX_UNCOMPRESSED_MB', 50) * 1024 * 1024,
+    MAX_ZIP_ENTRIES:        positiveInt('DATASET_MAX_ZIP_ENTRIES', 500),
+    OUTAGE_MAX_MS:          nonNegativeInt('DATASET_OUTAGE_MAX_MINUTES', 360) * 60_000,
   },
 
   DB: {
     HOST:     optional('DB_HOST', 'localhost'),
-    PORT:     parseInt(optional('DB_PORT', '5432'), 10),
+    PORT:     positiveInt('DB_PORT', 5432),
     NAME:     optional('DB_NAME', 'askaitutor'),
     USER:     optional('DB_USER', 'postgres'),
     PASSWORD: required('DB_PASSWORD'),
@@ -161,7 +174,7 @@ export const env = {
 
   EMAIL: {
     HOST:       optional('EMAIL_HOST', 'smtp.gmail.com'),
-    PORT:       parseInt(optional('EMAIL_PORT', '587'), 10),
+    PORT:       positiveInt('EMAIL_PORT', 587),
     SECURE:     optional('EMAIL_SECURE', 'false') === 'true',
     USER:       optional('EMAIL_USER', ''),
     PASSWORD:   optional('EMAIL_PASSWORD', ''),
@@ -169,14 +182,14 @@ export const env = {
   },
 
   RATE_LIMIT: {
-    WINDOW_MS:    parseInt(optional('RATE_LIMIT_WINDOW_MS', '900000'), 10),
-    MAX:          parseInt(optional('RATE_LIMIT_MAX', '100'), 10),
-    AUTH_MAX:     parseInt(optional('AUTH_RATE_LIMIT_MAX', '10'), 10),
+    WINDOW_MS:    positiveInt('RATE_LIMIT_WINDOW_MS', 900000),
+    MAX:          positiveInt('RATE_LIMIT_MAX', 100),
+    AUTH_MAX:     positiveInt('AUTH_RATE_LIMIT_MAX', 10),
     // Per authenticated user per window (anonymous traffic uses MAX per IP).
     USER_MAX:     positiveInt('RATE_LIMIT_USER_MAX', 1000),
   },
 
-  BCRYPT_SALT_ROUNDS: parseInt(optional('BCRYPT_SALT_ROUNDS', '12'), 10),
+  BCRYPT_SALT_ROUNDS: positiveInt('BCRYPT_SALT_ROUNDS', 12),
 
   GEMINI_API_KEY: optional('GEMINI_API_KEY', ''),
 
@@ -216,16 +229,16 @@ export const env = {
     // builds (cheap); no Phoenix export is attempted either way unless
     // PHOENIX_ENABLED is also true.
     ENABLED: optional('OBSERVABILITY_ENABLED', 'false') === 'true',
-    SAMPLE_RATE: parseFloat(optional('OBSERVABILITY_SAMPLE_RATE', '1')),
+    SAMPLE_RATE: finiteFloat('OBSERVABILITY_SAMPLE_RATE', 1),
     // Traces slower than this are always exported to Phoenix, whatever
     // SAMPLE_RATE says (see observability/sampling.ts).
-    SLOW_TRACE_MS: parseInt(optional('OBSERVABILITY_SLOW_TRACE_MS', '10000'), 10),
+    SLOW_TRACE_MS: positiveInt('OBSERVABILITY_SLOW_TRACE_MS', 10000),
     // Opt-in content capture (truncated question/answer/chunk previews on
     // spans and in admin trace detail). Independent of NODE_ENV — operators
     // decide per-environment; see MAX_CONTENT_LENGTH for the truncation cap.
     CAPTURE_CONTENT: optional('OBSERVABILITY_CAPTURE_CONTENT', 'false') === 'true',
-    MAX_CONTENT_LENGTH: parseInt(optional('OBSERVABILITY_MAX_CONTENT_LENGTH', '20000'), 10),
-    RETENTION_DAYS: parseInt(optional('OBSERVABILITY_RETENTION_DAYS', '90'), 10),
+    MAX_CONTENT_LENGTH: positiveInt('OBSERVABILITY_MAX_CONTENT_LENGTH', 20000),
+    RETENTION_DAYS: positiveInt('OBSERVABILITY_RETENTION_DAYS', 90),
 
     PHOENIX_ENABLED:  optional('PHOENIX_ENABLED', 'false') === 'true',
     // OTLP trace-ingestion endpoint (export path). PHOENIX_OTLP_ENDPOINT is
@@ -245,8 +258,8 @@ export const env = {
     // Optional bearer auth for both the OTLP exporter and the read-back
     // client. Never sent to the frontend — see observability.routes.ts.
     PHOENIX_API_KEY: optional('PHOENIX_API_KEY', ''),
-    PHOENIX_QUERY_TIMEOUT_MS: parseInt(optional('PHOENIX_QUERY_TIMEOUT_MS', '10000'), 10),
-    PHOENIX_OVERVIEW_CACHE_TTL_MS: parseInt(optional('PHOENIX_OVERVIEW_CACHE_TTL_MS', '15000'), 10),
+    PHOENIX_QUERY_TIMEOUT_MS: positiveInt('PHOENIX_QUERY_TIMEOUT_MS', 10000),
+    PHOENIX_OVERVIEW_CACHE_TTL_MS: nonNegativeInt('PHOENIX_OVERVIEW_CACHE_TTL_MS', 15000),
 
     // One rag_request_log row per askLectureAgent call (see
     // observability/request-log.service.ts). Postgres-only; independent of
@@ -258,20 +271,20 @@ export const env = {
 
     ALERTS_ENABLED: optional('OBSERVABILITY_ALERTS_ENABLED', 'false') === 'true',
     // Email alert rules (observability/alerts.service.ts). Rates are 0..1.
-    ALERT_CHECK_INTERVAL_MS: parseInt(optional('ALERT_CHECK_INTERVAL_MS', '300000'), 10),
-    ALERT_WINDOW_MINUTES:    parseInt(optional('ALERT_WINDOW_MINUTES', '15'), 10),
-    ALERT_MIN_REQUESTS:      parseInt(optional('ALERT_MIN_REQUESTS', '20'), 10),
-    ALERT_COOLDOWN_MINUTES:  parseInt(optional('ALERT_COOLDOWN_MINUTES', '60'), 10),
-    ALERT_ERROR_RATE:        parseFloat(optional('ALERT_ERROR_RATE', '0.05')),
-    ALERT_NOT_FOUND_RATE:    parseFloat(optional('ALERT_NOT_FOUND_RATE', '0.40')),
-    ALERT_P95_MS:            parseInt(optional('ALERT_P95_MS', '15000'), 10),
+    ALERT_CHECK_INTERVAL_MS: positiveInt('ALERT_CHECK_INTERVAL_MS', 300000),
+    ALERT_WINDOW_MINUTES:    positiveInt('ALERT_WINDOW_MINUTES', 15),
+    ALERT_MIN_REQUESTS:      nonNegativeInt('ALERT_MIN_REQUESTS', 20),
+    ALERT_COOLDOWN_MINUTES:  nonNegativeInt('ALERT_COOLDOWN_MINUTES', 60),
+    ALERT_ERROR_RATE:        finiteFloat('ALERT_ERROR_RATE', 0.05),
+    ALERT_NOT_FOUND_RATE:    finiteFloat('ALERT_NOT_FOUND_RATE', 0.40),
+    ALERT_P95_MS:            positiveInt('ALERT_P95_MS', 15000),
     // Comma-separated; empty = every user with role ADMIN.
     ALERT_EMAILS: optional('ALERT_EMAILS', '').split(',').map(e => e.trim()).filter(Boolean),
-    ALERT_CONSECUTIVE_HEALTH_FAILURES: parseInt(optional('ALERT_CONSECUTIVE_HEALTH_FAILURES', '3'), 10),
+    ALERT_CONSECUTIVE_HEALTH_FAILURES: positiveInt('ALERT_CONSECUTIVE_HEALTH_FAILURES', 3),
   },
 
   HEALTH: {
-    CACHE_TTL_MS:          parseInt(optional('HEALTH_CHECK_CACHE_TTL_MS', '60000'), 10),
+    CACHE_TTL_MS:          nonNegativeInt('HEALTH_CHECK_CACHE_TTL_MS', 60000),
     GEMINI_CHECK_ENABLED:  optional('HEALTH_GEMINI_CHECK_ENABLED', 'true') === 'true',
   },
 
@@ -282,15 +295,15 @@ export const env = {
   GROQ: {
     API_KEY:            optional('GROQ_API_KEY', ''),
     BASE_URL:           optional('GROQ_BASE_URL', 'https://api.groq.com/openai/v1'),
-    MAX_RPM:            parseInt(optional('GROQ_MAX_RPM', '20'), 10),
-    MAX_TPM:            parseInt(optional('GROQ_MAX_TPM', '7000'), 10),
+    MAX_RPM:            positiveInt('GROQ_MAX_RPM', 20),
+    MAX_TPM:            positiveInt('GROQ_MAX_TPM', 7000),
     // Hard stop for one process lifetime so a test run can never eat the whole daily allowance.
-    RUN_TOKEN_BUDGET:   parseInt(optional('GROQ_RUN_TOKEN_BUDGET', '120000'), 10),
+    RUN_TOKEN_BUDGET:   positiveInt('GROQ_RUN_TOKEN_BUDGET', 120000),
     // A retry-after longer than this is a daily/long limit: fail clearly instead of sleeping for hours.
-    MAX_WAIT_MS:        parseInt(optional('GROQ_MAX_WAIT_MS', '90000'), 10),
+    MAX_WAIT_MS:        positiveInt('GROQ_MAX_WAIT_MS', 90000),
     REASONING_EFFORT:   optional('GROQ_REASONING_EFFORT', 'low'),
     // gpt-oss counts its reasoning inside max_completion_tokens: never ask for less than this floor.
-    MIN_COMPLETION_TOKENS: parseInt(optional('GROQ_MIN_COMPLETION_TOKENS', '1024'), 10),
+    MIN_COMPLETION_TOKENS: positiveInt('GROQ_MIN_COMPLETION_TOKENS', 1024),
   },
 
   // ── Provider-neutral LLM configuration ─────────────────────────
@@ -327,8 +340,8 @@ export const env = {
       PROVIDER:    optional('GREETING_LLM_PROVIDER', 'gemini'),
       MODEL:       optional('GREETING_LLM_MODEL', 'gemini-2.5-flash'),
       THINKING: thinking('GREETING_THINKING', 'minimal'),
-      TIMEOUT_MS:  parseInt(optional('GREETING_LLM_TIMEOUT_MS', '6000'), 10),
-      TEMPERATURE: parseFloat(optional('GREETING_LLM_TEMPERATURE', '0.7')),
+      TIMEOUT_MS:  positiveInt('GREETING_LLM_TIMEOUT_MS', 6000),
+      TEMPERATURE: finiteFloat('GREETING_LLM_TEMPERATURE', 0.7),
     },
     QUERY_REWRITE: {
       PROVIDER: optional('QUERY_REWRITE_LLM_PROVIDER', 'gemini'),
@@ -349,8 +362,8 @@ export const env = {
       PROVIDER:    optional('GUARDRAIL_LLM_PROVIDER', 'gemini'),
       MODEL:       optional('GUARDRAIL_LLM_MODEL', 'gemini-2.5-flash'),
       THINKING: thinking('GUARDRAIL_THINKING', 'minimal'),
-      TIMEOUT_MS:  parseInt(optional('GUARDRAIL_LLM_TIMEOUT_MS', '4000'), 10),
-      TEMPERATURE: parseFloat(optional('GUARDRAIL_LLM_TEMPERATURE', '0')),
+      TIMEOUT_MS:  positiveInt('GUARDRAIL_LLM_TIMEOUT_MS', 4000),
+      TEMPERATURE: finiteFloat('GUARDRAIL_LLM_TEMPERATURE', 0),
     },
     // Used by the single DIRECT/DECOMPOSE structured-output call in
     // rag/query-processing/decomposition/subquery-decomposition.service.ts —
@@ -360,8 +373,8 @@ export const env = {
       PROVIDER:    optional('QUERY_DECOMPOSITION_LLM_PROVIDER', 'gemini'),
       MODEL:       optional('QUERY_DECOMPOSITION_LLM_MODEL', 'gemini-2.5-flash'),
       THINKING: thinking('QUERY_DECOMPOSITION_THINKING', 'minimal'),
-      TIMEOUT_MS:  parseInt(optional('QUERY_DECOMPOSITION_LLM_TIMEOUT_MS', '4000'), 10),
-      TEMPERATURE: parseFloat(optional('QUERY_DECOMPOSITION_LLM_TEMPERATURE', '0')),
+      TIMEOUT_MS:  positiveInt('QUERY_DECOMPOSITION_LLM_TIMEOUT_MS', 4000),
+      TEMPERATURE: finiteFloat('QUERY_DECOMPOSITION_LLM_TEMPERATURE', 0),
     },
     // Used by the STOP/RETRIEVE planner in rag/query-processing/
     // adaptive-retrieval/adaptive-retrieval-planner.service.ts — only
@@ -373,8 +386,8 @@ export const env = {
       PROVIDER:    optional('ADAPTIVE_RETRIEVAL_LLM_PROVIDER', 'gemini'),
       MODEL:       optional('ADAPTIVE_RETRIEVAL_LLM_MODEL', 'gemini-2.5-flash'),
       THINKING: thinking('ADAPTIVE_RETRIEVAL_THINKING', 'minimal'),
-      TIMEOUT_MS:  parseInt(optional('ADAPTIVE_RETRIEVAL_LLM_TIMEOUT_MS', '4000'), 10),
-      TEMPERATURE: parseFloat(optional('ADAPTIVE_RETRIEVAL_LLM_TEMPERATURE', '0')),
+      TIMEOUT_MS:  positiveInt('ADAPTIVE_RETRIEVAL_LLM_TIMEOUT_MS', 4000),
+      TEMPERATURE: finiteFloat('ADAPTIVE_RETRIEVAL_LLM_TEMPERATURE', 0),
     },
     // Used by both the groundedness verifier and the bounded revision
     // rewrite in rag/guardrails/output/ — deliberately independent of
@@ -384,8 +397,8 @@ export const env = {
       PROVIDER:    optional('ANSWER_VERIFICATION_LLM_PROVIDER', 'gemini'),
       MODEL:       optional('ANSWER_VERIFICATION_LLM_MODEL', 'gemini-2.5-flash'),
       THINKING: thinking('ANSWER_VERIFICATION_THINKING', 'off'),
-      TIMEOUT_MS:  parseInt(optional('ANSWER_VERIFICATION_LLM_TIMEOUT_MS', '8000'), 10),
-      TEMPERATURE: parseFloat(optional('ANSWER_VERIFICATION_LLM_TEMPERATURE', '0')),
+      TIMEOUT_MS:  positiveInt('ANSWER_VERIFICATION_LLM_TIMEOUT_MS', 8000),
+      TEMPERATURE: finiteFloat('ANSWER_VERIFICATION_LLM_TEMPERATURE', 0),
       // Output cap for the verdict call. Thinking tokens count against it, and
       // Gemini 3.x cannot switch thinking off, so raise this there.
       MAX_OUTPUT_TOKENS: positiveInt('ANSWER_VERIFICATION_MAX_OUTPUT_TOKENS', 500),
@@ -401,8 +414,8 @@ export const env = {
       PROVIDER:    optional('OUTPUT_FORMAT_REPAIR_LLM_PROVIDER', 'gemini'),
       MODEL:       optional('OUTPUT_FORMAT_REPAIR_LLM_MODEL', 'gemini-2.5-flash'),
       THINKING: thinking('OUTPUT_FORMAT_REPAIR_THINKING', 'minimal'),
-      TIMEOUT_MS:  parseInt(optional('OUTPUT_FORMAT_REPAIR_LLM_TIMEOUT_MS', '4000'), 10),
-      TEMPERATURE: parseFloat(optional('OUTPUT_FORMAT_REPAIR_LLM_TEMPERATURE', '0')),
+      TIMEOUT_MS:  positiveInt('OUTPUT_FORMAT_REPAIR_LLM_TIMEOUT_MS', 4000),
+      TEMPERATURE: finiteFloat('OUTPUT_FORMAT_REPAIR_LLM_TEMPERATURE', 0),
     },
   },
 
@@ -449,8 +462,8 @@ export const env = {
 
   INPUT_GUARDRAIL: {
     ENABLED:                  optional('INPUT_GUARDRAIL_ENABLED', 'true') === 'true',
-    MAX_CHARS:                parseInt(optional('INPUT_GUARDRAIL_MAX_CHARS', '8000'), 10),
-    MAX_TOKENS:               parseInt(optional('INPUT_GUARDRAIL_MAX_TOKENS', '2000'), 10),
+    MAX_CHARS:                positiveInt('INPUT_GUARDRAIL_MAX_CHARS', 8000),
+    MAX_TOKENS:               positiveInt('INPUT_GUARDRAIL_MAX_TOKENS', 2000),
     PII_ENABLED:              optional('INPUT_GUARDRAIL_PII_ENABLED', 'true') === 'true',
     INJECTION_ENABLED:        optional('INPUT_GUARDRAIL_INJECTION_ENABLED', 'true') === 'true',
     MALICIOUS_PAYLOAD_ENABLED: optional('INPUT_GUARDRAIL_MALICIOUS_PAYLOAD_ENABLED', 'true') === 'true',
@@ -467,7 +480,7 @@ export const env = {
     // Hard cap on fan-out — deliberately small; see subquery-decomposition.
     // prompt.ts's instruction to use the smallest useful number of
     // subqueries.
-    MAX_SUBQUERIES: parseInt(optional('QUERY_DECOMPOSITION_MAX_SUBQUERIES', '3'), 10),
+    MAX_SUBQUERIES: positiveInt('QUERY_DECOMPOSITION_MAX_SUBQUERIES', 3),
     // Context budget for a decomposed question: this many chunks per
     // subquery, capped at CONTEXT_MAX_CHUNKS (and never below the 5 a single
     // question gets). Coverage-aware selection still guarantees each covered
@@ -488,7 +501,7 @@ export const env = {
     // Each iteration produces at most ONE new targeted retrieval query —
     // kept small on purpose; a higher value is supported but must be an
     // explicit operator choice, never the default.
-    MAX_ITERATIONS: parseInt(optional('ADAPTIVE_RETRIEVAL_MAX_ITERATIONS', '1'), 10),
+    MAX_ITERATIONS: nonNegativeInt('ADAPTIVE_RETRIEVAL_MAX_ITERATIONS', 1),
   },
 
   // ── Answer Verification (post-generation output guardrail) ───────
@@ -504,7 +517,7 @@ export const env = {
     // At most one bounded revise-then-reverify pass — never an open-ended
     // generate/verify/revise loop. A higher value is supported but must be
     // an explicit operator choice, never the default.
-    MAX_REVISIONS: parseInt(optional('ANSWER_VERIFICATION_MAX_REVISIONS', '1'), 10),
+    MAX_REVISIONS: nonNegativeInt('ANSWER_VERIFICATION_MAX_REVISIONS', 1),
     // When the verifier itself could not run (timeout / provider error /
     // unparseable output, even after its one retry) there is no verdict
     // against the draft. Default false (fail closed): serve the conservative

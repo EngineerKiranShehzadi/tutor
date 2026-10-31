@@ -75,9 +75,14 @@ async function main() {
     const o = readEnv({ VECTOR_SIMILARITY_THRESHOLD: '0.7', RERANK_MIN_SCORE: '0.3' });
     return o.sim === 0.7 && o.min === 0.3;
   } });
-  cases.push({ label: 'invalid threshold values fall back to the defaults', run: () => {
-    const o = readEnv({ VECTOR_SIMILARITY_THRESHOLD: 'abc', RERANK_MIN_SCORE: 'NaN' });
-    return o.sim === 0.55 && o.min === 0.5;
+  // S14: a set-but-invalid number stops boot instead of silently falling back.
+  cases.push({ label: 'invalid threshold values stop boot with a clear message; blank uses the defaults', run: () => {
+    const a = childJson(READ, { VECTOR_SIMILARITY_THRESHOLD: 'abc' });
+    const b = childJson(READ, { RERANK_MIN_SCORE: 'NaN' });
+    const blank = readEnv({ VECTOR_SIMILARITY_THRESHOLD: '', RERANK_MIN_SCORE: '' });
+    return a.status !== 0 && /VECTOR_SIMILARITY_THRESHOLD must be a number \(got "abc"\)/.test(a.stderr)
+      && b.status !== 0 && /RERANK_MIN_SCORE must be a number \(got "NaN"\)/.test(b.stderr)
+      && blank.sim === 0.55 && blank.min === 0.5;
   } });
   cases.push({ label: 'dedupeAndSelect default floor follows RERANK_MIN_SCORE', run: () => {
     const code = `const r=require('../services/rerank.service');
@@ -88,11 +93,11 @@ async function main() {
 
   // ── verifier output cap ─────────────────────────────────────────
   const CAP = `console.log(require('../config/env').env.LLM.ANSWER_VERIFICATION.MAX_OUTPUT_TOKENS)`;
-  cases.push({ label: 'ANSWER_VERIFICATION_MAX_OUTPUT_TOKENS: default 500, env honored, invalid/0 fall back', run: () =>
+  cases.push({ label: 'ANSWER_VERIFICATION_MAX_OUTPUT_TOKENS: default 500, env honored, invalid/0 stop boot (S14)', run: () =>
     childJson(CAP, { ANSWER_VERIFICATION_MAX_OUTPUT_TOKENS: '' }).out === '500'
     && childJson(CAP, { ANSWER_VERIFICATION_MAX_OUTPUT_TOKENS: '1500' }).out === '1500'
-    && childJson(CAP, { ANSWER_VERIFICATION_MAX_OUTPUT_TOKENS: 'x' }).out === '500'
-    && childJson(CAP, { ANSWER_VERIFICATION_MAX_OUTPUT_TOKENS: '0' }).out === '500' });
+    && /must be a positive integer \(got "x"\)/.test(childJson(CAP, { ANSWER_VERIFICATION_MAX_OUTPUT_TOKENS: 'x' }).stderr)
+    && /must be a positive integer \(got "0"\)/.test(childJson(CAP, { ANSWER_VERIFICATION_MAX_OUTPUT_TOKENS: '0' }).stderr) });
 
   // ── local-http adapters behave as before ────────────────────────
   cases.push({ label: 'embedding: 503 and unreachable -> EmbeddingUnavailableError; 500 -> plain error', run: async () => {

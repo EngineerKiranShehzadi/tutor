@@ -761,6 +761,30 @@ const run = async () => {
       `needle=${found.total} literal%=${literal.total} student=${oneStudent.total}`);
   }
 
+  // ── S14: numeric settings fail fast at boot ───────────────────────────
+  {
+    const tsNode = join(__dirname, '..', '..', 'node_modules', '.bin', 'ts-node');
+    const load = (overrides: Record<string, string>) => {
+      const r = spawnSync(tsNode, ['--transpile-only', '-e',
+        `const { env } = require('./src/config/env'); console.log('ENV:' + JSON.stringify({ chars: env.INPUT_GUARDRAIL.MAX_CHARS, iters: env.ADAPTIVE_RETRIEVAL.MAX_ITERATIONS, rate: env.OBSERVABILITY.SAMPLE_RATE }))`],
+        { cwd: join(__dirname, '..', '..'), env: { ...process.env, INPUT_GUARDRAIL_MAX_CHARS: '', ADAPTIVE_RETRIEVAL_MAX_ITERATIONS: '', OBSERVABILITY_SAMPLE_RATE: '', ...overrides }, encoding: 'utf8' });
+      const m = /ENV:(\{.*\})/.exec(r.stdout ?? '');
+      return { status: r.status, err: r.stderr ?? '', val: m ? JSON.parse(m[1]) as { chars: number; iters: number; rate: number } : null };
+    };
+    const abc = load({ INPUT_GUARDRAIL_MAX_CHARS: 'abc' });
+    const eightK = load({ INPUT_GUARDRAIL_MAX_CHARS: '8k' });
+    const unset = load({});
+    const zeroIters = load({ ADAPTIVE_RETRIEVAL_MAX_ITERATIONS: '0' });
+    const badRate = load({ OBSERVABILITY_SAMPLE_RATE: 'half' });
+    check('S14-1. INPUT_GUARDRAIL_MAX_CHARS=abc (or 8k) stops env load with a clear message; unset gives the default; 0 is allowed where it means "off"',
+      abc.status !== 0 && /INPUT_GUARDRAIL_MAX_CHARS must be a positive integer \(got "abc"\)/.test(abc.err)
+        && eightK.status !== 0 && /got "8k"/.test(eightK.err)
+        && unset.status === 0 && unset.val?.chars === 8000 && unset.val?.iters === 1
+        && zeroIters.status === 0 && zeroIters.val?.iters === 0
+        && badRate.status !== 0 && /OBSERVABILITY_SAMPLE_RATE must be a number \(got "half"\)/.test(badRate.err),
+      `abc=${abc.status} 8k=${eightK.status} unset=${JSON.stringify(unset.val)} iters0=${zeroIters.val?.iters} rate=${badRate.status}`);
+  }
+
 };
 
 (async () => {
