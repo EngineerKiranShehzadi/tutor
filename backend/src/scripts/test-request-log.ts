@@ -67,6 +67,17 @@ cases.push({
 });
 
 cases.push({
+  label: 'C3: gpt-5.6-luna / gpt-5.6-terra are priced by default (est_cost_usd is not NULL without LLM_PRICING_JSON): luna 1000 in + 500 out = $0.0008',
+  run: () => {
+    const { env, DEFAULT_LLM_PRICING } = require('../config/env') as typeof import('../config/env');
+    const row = buildRequestLogRow(trace([llm('gpt-5.6-luna', 1000, 500)]), false, DEFAULT_LLM_PRICING);
+    const viaEnv = buildRequestLogRow(trace([llm('gpt-5.6-terra', 1000, 500)]), false);
+    return row.estCostUsd === 0.0008 && viaEnv.estCostUsd === 0.008
+      && env.OBSERVABILITY.LLM_PRICING['gpt-5.6-luna']?.outputPer1M === 1.2;
+  },
+});
+
+cases.push({
   label: "Missing/empty responseStatus becomes 'UNKNOWN' (never null)",
   run: () => {
     const a = buildRequestLogRow(trace([], {}), false, PRICING);

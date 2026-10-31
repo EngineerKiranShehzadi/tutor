@@ -70,6 +70,17 @@ const thinking = (key: string, fallback: LlmThinking): LlmThinking => {
 
 export interface LlmPrice { inputPer1M: number; outputPer1M: number }
 
+// Built-in prices for the production models (USD per 1M tokens, standard tier,
+// from OpenAI's pricing page, 2026-11-01), so rag_request_log.est_cost_usd is
+// never NULL for them even when LLM_PRICING_JSON is unset. Input is priced as
+// uncached (cached input is 10x cheaper), so the estimate errs high. Entries in
+// LLM_PRICING_JSON override or add to these.
+export const DEFAULT_LLM_PRICING: Record<string, LlmPrice> = {
+  'gpt-5.6-luna':  { inputPer1M: 0.20, outputPer1M: 1.20 },
+  // Upgrade path for the answer model.
+  'gpt-5.6-terra': { inputPer1M: 2.00, outputPer1M: 12.00 },
+};
+
 // LLM_PRICING_JSON: {"<model>":{"inputPer1M":<usd>,"outputPer1M":<usd>}}.
 // Malformed JSON or entries are ignored (never throw at boot); a model with
 // no valid entry simply gets est_cost_usd = NULL in rag_request_log.
@@ -271,7 +282,7 @@ export const env = {
     REQUEST_LOG_ENABLED: optional('REQUEST_LOG_ENABLED', 'true') === 'true',
     // Per-model USD prices used to fill rag_request_log.est_cost_usd. Unknown
     // model or missing token counts -> NULL, never a guess.
-    LLM_PRICING: parseLlmPricing(optional('LLM_PRICING_JSON', '')),
+    LLM_PRICING: { ...DEFAULT_LLM_PRICING, ...parseLlmPricing(optional('LLM_PRICING_JSON', '')) },
 
     ALERTS_ENABLED: optional('OBSERVABILITY_ALERTS_ENABLED', 'false') === 'true',
     // Email alert rules (observability/alerts.service.ts). Rates are 0..1.
