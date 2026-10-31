@@ -219,18 +219,19 @@ cases.push({
   },
 });
 
-// ── R2: a filtered trace list reads past the first page ────────────────
+// ── R2 fallback: with the request log off, the list scans Phoenix ──────
 // A fake Phoenix list endpoint: `count` traces newest-first, those at the
 // given positions failed. `honoursError` false plays a server that ignores
-// the error=true parameter.
+// the error=true parameter. Its spans have the real TraceSpanData shape:
+// id, name, kind, status and times, no attributes.
 function fakePhoenix(count: number, failed: Set<number>, honoursError: boolean) {
   const requests: Record<string, unknown>[] = [];
   const all = Array.from({ length: count }, (_, i) => {
     const t0 = new Date(Date.UTC(2026, 0, 1, 12, 0, 0) - i * 1000).toISOString();
     return {
       trace_id: `t${i}`, start_time: t0, end_time: t0, failed: failed.has(i),
-      spans: [{ ...rawSpan({ span_id: `r${i}`, name: 'ask-lecture-agent', status_code: failed.has(i) ? 'ERROR' : 'OK',
-        attributes: failed.has(i) ? { errorCode: i % 2 === 0 ? 'TIMEOUT' : 'RATE_LIMITED' } : {} }), context: { trace_id: `t${i}`, span_id: `r${i}` } }],
+      spans: [{ id: `r${i}`, span_id: `r${i}`, parent_id: null, name: 'ask-lecture-agent', span_kind: 'CHAIN',
+        status_code: failed.has(i) ? 'ERROR' : 'OK', start_time: t0, end_time: t0 }],
     };
   });
   const GET = async (_path: string, opts: { params: { query: Record<string, unknown> } }) => {
@@ -247,16 +248,16 @@ function fakePhoenix(count: number, failed: Set<number>, honoursError: boolean) 
 
 async function withFakePhoenix<T>(fake: ReturnType<typeof fakePhoenix>, fn: () => Promise<T>): Promise<T> {
   const { env } = await import('../config/env');
-  const o = env.OBSERVABILITY as { ENABLED: boolean; PHOENIX_ENABLED: boolean };
-  const saved = { e: o.ENABLED, p: o.PHOENIX_ENABLED };
-  o.ENABLED = true; o.PHOENIX_ENABLED = true;
+  const o = env.OBSERVABILITY as { ENABLED: boolean; PHOENIX_ENABLED: boolean; REQUEST_LOG_ENABLED: boolean };
+  const saved = { e: o.ENABLED, p: o.PHOENIX_ENABLED, l: o.REQUEST_LOG_ENABLED };
+  o.ENABLED = true; o.PHOENIX_ENABLED = true; o.REQUEST_LOG_ENABLED = false;
   const client = (await import('../services/observability/phoenix-client')).getPhoenixClient() as unknown as { GET: unknown };
   const caps = require('../services/observability/capabilities') as { getPhoenixCapabilities: unknown };
   const savedGet = client.GET; const savedCaps = caps.getPhoenixCapabilities;
   client.GET = fake.GET;
   caps.getPhoenixCapabilities = async () => ({ reachable: true, supportsTraceListing: true });
   try { return await fn(); } finally {
-    client.GET = savedGet; caps.getPhoenixCapabilities = savedCaps; o.ENABLED = saved.e; o.PHOENIX_ENABLED = saved.p;
+    client.GET = savedGet; caps.getPhoenixCapabilities = savedCaps; o.ENABLED = saved.e; o.PHOENIX_ENABLED = saved.p; o.REQUEST_LOG_ENABLED = saved.l;
   }
 }
 
@@ -306,13 +307,69 @@ cases.push({
 });
 
 cases.push({
-  label: 'R2e. The Errors page code drill-down runs on the server: errorCode=RATE_LIMITED lists only those failures, from the whole window',
+  label: 'R2e. Phoenix fallback: a filter Phoenix cannot answer (error code, route, lecture, student, model, memory) is refused with a clear 400, not answered with an empty list',
   run: async () => {
     const { listTraces } = await import('../services/observability/traces.service');
-    const fake = fakePhoenix(300, new Set([2, 7, 40, 151, 233, 299]), true);
-    const r = await withFakePhoenix(fake, () => listTraces({ errorOnly: true, errorCode: 'RATE_LIMITED', limit: 25 }));
-    const pass = r.traces.map(t => t.traceId).join() === 't7,t151,t233,t299' && r.traces.every(t => t.errorCode === 'RATE_LIMITED');
-    return { pass, detail: `found=${r.traces.map(t => `${t.traceId}:${t.errorCode}`).join()}` };
+    const fake = fakePhoenix(50, new Set([2, 7]), true);
+    const errors: string[] = [];
+    for (const f of [{ errorOnly: true, errorCode: 'RATE_LIMITED' }, { route: 'FACT_QUESTION' }, { lectureId: '4' }, { model: 'gpt-6-luna' }]) {
+      try { await withFakePhoenix(fake, () => listTraces({ ...f, limit: 25 })); errors.push('none'); }
+      catch (err) { errors.push(`${(err as { code?: string }).code}/${(err as { statusCode?: number }).statusCode}`); }
+    }
+    const pass = errors.every(e => e === 'INVALID_OBSERVABILITY_FILTER/400') && fake.requests.length === 0;
+    return { pass, detail: `${errors.join(', ')}, phoenixRequests=${fake.requests.length}` };
+  },
+});
+
+// ── R2: with the request log on (the default), the list is built in SQL ──
+cases.push({
+  label: 'R2f. buildTraceListQuery: every filter is a parameterised WHERE on rag_request_log, exported rows only; "OK" means SUCCESS, "MISS" includes a cached miss, a non-numeric id matches nothing',
+  run: async () => {
+    const { buildTraceListQuery } = await import('../services/observability/traces.service');
+    const q = buildTraceListQuery({
+      errorOnly: true, errorCode: 'RATE_LIMITED', route: 'FACT_QUESTION', lectureId: '4', sessionId: 'x', userId: 'ABC',
+      model: 'gpt-6-luna', memoryResult: 'MISS', status: 'OK', minLatencyMs: 100,
+    }, 25);
+    const sql = q.sql.replace(/\s+/g, ' ');
+    const pass = sql.includes('FROM rag_request_log') && sql.includes('WHERE exported_to_phoenix')
+      && sql.includes('error_code = $') && sql.includes('route = $') && sql.includes('lecture_id = $') && sql.includes('llm_model = $')
+      && sql.includes("status = 'ERROR'") && sql.includes('student_id::text = $') && / FALSE /.test(` ${sql} `)
+      && q.params.includes('RATE_LIMITED') && q.params.includes(4) && q.params.includes('abc') && q.params.includes('SUCCESS')
+      && q.params.some(p => Array.isArray(p) && p.join() === 'MISS,ENTRY_CREATED,WRITE_FAILED')
+      && !q.params.includes('x') && q.params[q.params.length - 1] === 26 && sql.includes('ORDER BY created_at DESC, id DESC');
+    return { pass, detail: `params=${JSON.stringify(q.params)}` };
+  },
+});
+
+cases.push({
+  label: 'R2g. Request-log paging: the cursor resumes after the last row on the same sort key (keyset), for both sorts and orders; a tampered cursor is a 400',
+  run: async () => {
+    const { buildTraceListQuery } = await import('../services/observability/traces.service');
+    const cursor = Buffer.from(JSON.stringify(['2026-11-01 04:25:46.123456+00', '41'])).toString('base64url');
+    const desc = buildTraceListQuery({ cursor }, 25);
+    const asc = buildTraceListQuery({ cursor, sort: 'latency_ms', order: 'asc' }, 25);
+    let bad = '';
+    try { buildTraceListQuery({ cursor: 'not-a-cursor' }, 25); } catch (err) { bad = `${(err as { code?: string }).code}/${(err as { statusCode?: number }).statusCode}`; }
+    const pass = desc.sql.includes('(created_at, id) < ($1::timestamptz, $2::bigint)') && desc.params[0] === '2026-11-01 04:25:46.123456+00' && desc.params[1] === '41'
+      && asc.sql.includes('(total_ms, id) > ($1::int, $2::bigint)') && asc.sql.includes('ORDER BY total_ms ASC, id ASC')
+      && bad === 'INVALID_OBSERVABILITY_FILTER/400';
+    return { pass, detail: `bad=${bad}` };
+  },
+});
+
+cases.push({
+  label: 'R2h. A log row becomes a list row with route, lecture, student, model, memory, error code and tokens filled in; it started total_ms before it was logged',
+  run: async () => {
+    const { summaryFromLogRow } = await import('../services/observability/traces.service');
+    const t = summaryFromLogRow({
+      id: '7', trace_id: 'a'.repeat(32), created_at: new Date('2026-11-01T10:00:02.000Z'), student_id: 'u-1', lecture_id: 4, session_id: 9,
+      route: 'FACT_QUESTION', status: 'ERROR', error_code: 'RATE_LIMITED', memory_result: 'MISS', not_found_reason: null, total_ms: 2000,
+      input_tokens: 100, output_tokens: 20, llm_model: 'gpt-6-luna', schema_version: '3', sort_key: 'x',
+    });
+    const pass = t.timestamp === '2026-11-01T10:00:00.000Z' && t.durationMs === 2000 && t.route === 'FACT_QUESTION' && t.lectureId === '4'
+      && t.sessionId === '9' && t.userId === 'u-1' && t.model === 'gpt-6-luna' && t.memoryResult === 'MISS' && t.errorCode === 'RATE_LIMITED'
+      && t.totalTokens === 120 && t.status === 'ERROR' && t.traceId === 'a'.repeat(32);
+    return { pass, detail: JSON.stringify({ ts: t.timestamp, tokens: t.totalTokens }) };
   },
 });
 

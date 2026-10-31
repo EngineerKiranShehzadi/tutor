@@ -1583,6 +1583,70 @@ const run = async () => {
     }
   }
 
+  // ── R2: the trace list and its filters read rag_request_log ───────────
+  {
+    // Phoenix's list spans carry no attributes, so these filters matched nothing
+    // there. Rows are dated an hour ahead and the list is bounded to that hour,
+    // so other rows in the table never interfere. Only Phoenix's reachability
+    // check is stubbed; route, validators, service and SQL are real.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const caps = require('../services/observability/capabilities') as { getPhoenixCapabilities: unknown };
+    const savedCaps = caps.getPhoenixCapabilities;
+    caps.getPhoenixCapabilities = async () => ({ reachable: true, supportsTraceListing: true });
+    const ol = env.OBSERVABILITY as { REQUEST_LOG_ENABLED: boolean };
+    const savedLog = ol.REQUEST_LOG_ENABLED;
+    ol.REQUEST_LOG_ENABLED = true;
+    const { listTraces } = await import('../services/observability/traces.service');
+    const ids = ['1', '2', '3', '4', '5'].map(c => c.repeat(32));
+    const student = (await query<{ id: string }>(`INSERT INTO users (name, email, password_hash, is_verified, role) VALUES ('R2 Student', $1, 'x', TRUE, 'STUDENT') RETURNING id`, [`r2-${Date.now()}@example.test`])).rows[0].id;
+    const admin = (await query<{ id: string }>(`INSERT INTO users (name, email, password_hash, is_verified, role) VALUES ('R2 Admin', $1, 'x', TRUE, 'ADMIN') RETURNING id`, [`r2a-${Date.now()}@example.test`])).rows[0].id;
+    const app = express();
+    app.use('/obs', observabilityRoutes);
+    const srv = app.listen(0);
+    const base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+    const since = new Date(Date.now() + 30 * 60_000).toISOString();
+    try {
+      await query(
+        `INSERT INTO rag_request_log (trace_id, created_at, student_id, route, status, response_status, error_code, memory_result, total_ms, llm_model, exported_to_phoenix)
+         VALUES ($1, now() + interval '1 hour 5 seconds', NULL, 'FACT_QUESTION',   'ERROR',   'ERROR',    'RATE_LIMITED', 'MISS',          900,  'gpt-6-luna', TRUE),
+                ($2, now() + interval '1 hour 4 seconds', NULL, 'FACT_QUESTION',   'ERROR',   'ERROR',    'TIMEOUT',      'MISS',          8000, 'gpt-6-luna', TRUE),
+                ($3, now() + interval '1 hour 3 seconds', NULL, 'FACT_QUESTION',   'ERROR',   'ERROR',    'RATE_LIMITED', 'MISS',          700,  'gpt-6-luna', FALSE),
+                ($4, now() + interval '1 hour 2 seconds', $6,   'LECTURE_SUMMARY', 'SUCCESS', 'SUMMARY_ANSWERED', NULL,   'NOT_ATTEMPTED', 3000, 'gpt-6-luna', TRUE),
+                ($5, now() + interval '1 hour 1 second',  $6,   'FACT_QUESTION',   'SUCCESS', 'ANSWERED', NULL,           'ENTRY_CREATED', 1200, 'gpt-6-luna', TRUE)`,
+        [...ids, student]
+      );
+      const list = async (f: Record<string, unknown>) => (await listTraces({ startTime: since, limit: 25, ...f })).traces.map(t => t.traceId[0]).join('');
+      const drill = await fetch(`${base}/obs/traces?errorOnly=true&errorCode=RATE_LIMITED&startTime=${encodeURIComponent(since)}`,
+        { headers: { Authorization: `Bearer ${generateAccessToken(admin, 'ADMIN')}` } });
+      const drillBody = await drill.json() as { data?: { traces: { traceId: string; errorCode: string | null; route: string | null }[] } };
+      const drillIds = (drillBody.data?.traces ?? []).map(t => `${t.traceId[0]}:${t.errorCode}:${t.route}`).join();
+      check('R2-1. Errors page drill-down (GET /traces?errorOnly&errorCode=RATE_LIMITED) finds the exported RATE_LIMITED failure from the log, with its route filled in; the unexported one is not listed',
+        drill.status === 200 && drillIds === '1:RATE_LIMITED:FACT_QUESTION', `status=${drill.status} rows=[${drillIds}]`);
+
+      const got = {
+        route: await list({ route: 'LECTURE_SUMMARY' }), user: await list({ userId: student }), model: await list({ model: 'gpt-6-luna' }),
+        miss: await list({ memoryResult: 'MISS' }), notAttempted: await list({ memoryResult: 'NOT_ATTEMPTED' }),
+        ok: await list({ status: 'OK' }), slow: await list({ minLatencyMs: 2000 }), slowestFirst: await list({ sort: 'latency_ms', order: 'desc' }),
+      };
+      check('R2-2. Route, student, model, memory result, status ("OK" = SUCCESS) and latency filters all match from the log (each found nothing on real Phoenix)',
+        got.route === '4' && got.user === '45' && got.model === '1245' && got.miss === '125' && got.notAttempted === '4'
+          && got.ok === '45' && got.slow === '24' && got.slowestFirst === '2451',
+        JSON.stringify(got));
+
+      const first = await listTraces({ startTime: since, limit: 2 });
+      const second = await listTraces({ startTime: since, limit: 2, cursor: first.nextCursor });
+      const pages = [...first.traces, ...second.traces].map(t => t.traceId[0]).join('');
+      check('R2-3. Paging the log: 2 + 2 rows, newest first, nothing skipped or repeated, no cursor after the last page',
+        pages === '1245' && first.nextCursor !== null && second.nextCursor === null, `pages=${pages} next=${second.nextCursor}`);
+    } finally {
+      caps.getPhoenixCapabilities = savedCaps;
+      ol.REQUEST_LOG_ENABLED = savedLog;
+      srv.close();
+      await query('DELETE FROM rag_request_log WHERE trace_id = ANY($1::char(32)[])', [ids]);
+      await query('DELETE FROM users WHERE id = ANY($1::uuid[])', [[student, admin]]);
+    }
+  }
+
   // ── X3/X4: monitor labels cover what the backend actually records ──────
   {
     // Loaded at runtime: it lives in the frontend package, outside the backend's tsc project.

@@ -125,7 +125,7 @@ export default function TracesExplorerPage() {
           <input
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="Search question, answer, trace ID…"
+            placeholder="Search trace ID…"
             className="w-full pl-9 pr-3 py-2.5 text-[13px] rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400"
           />
         </div>
@@ -134,14 +134,14 @@ export default function TracesExplorerPage() {
           <option value="SUCCESS">Success</option>
           <option value="ERROR">Error</option>
         </select>
-        <select value={filters.route} onChange={(e) => updateFilter('route', e.target.value)} title="Phoenix can't filter by route, so the server reads up to 500 traces per page looking for matches." className="text-[13px] rounded-lg border border-slate-200 px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-200">
+        <select value={filters.route} onChange={(e) => updateFilter('route', e.target.value)} className="text-[13px] rounded-lg border border-slate-200 px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-200">
           <option value="">All routes</option>
           <option value="FACT_QUESTION">Fact question</option>
           <option value="CONTEXTUAL_FOLLOW_UP">Contextual follow-up</option>
           <option value="LECTURE_SUMMARY">Lecture summary</option>
           <option value="GREETING">Greeting</option>
         </select>
-        <select value={filters.memoryResult} onChange={(e) => updateFilter('memoryResult', e.target.value)} title="Phoenix can't filter by memory result, so the server reads up to 500 traces per page looking for matches." className="text-[13px] rounded-lg border border-slate-200 px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-200">
+        <select value={filters.memoryResult} onChange={(e) => updateFilter('memoryResult', e.target.value)} className="text-[13px] rounded-lg border border-slate-200 px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-200">
           <option value="">Any memory result</option>
           <option value="EXACT_HIT">Exact hit</option>
           <option value="SEMANTIC_HIT">Semantic hit</option>
@@ -161,13 +161,6 @@ export default function TracesExplorerPage() {
           </button>
         )}
       </div>
-
-      {(filters.route || filters.memoryResult) && (
-        <p className="text-[12px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-5 -mt-2.5">
-          <i className="fas fa-circle-info mr-1.5" />
-          Route / memory-result filtering applies only to the page of traces currently loaded, not your full trace history — Phoenix doesn&apos;t support server-side filtering on these fields yet. Widen the time range or page forward to see more matches.
-        </p>
-      )}
 
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
         {unavailable ? (
@@ -206,7 +199,7 @@ export default function TracesExplorerPage() {
                   {traces.map(t => (
                     <tr key={t.traceId} onClick={() => router.push(`/admin/rag-traces/traces/${encodeURIComponent(t.traceId)}`)} className="hover:bg-slate-50/60 transition-colors cursor-pointer group">
                       <td className="px-5 py-3.5 text-[12px] text-slate-500 whitespace-nowrap">{fmtTime(t.timestamp)}</td>
-                      <td className="px-4 py-3.5 text-[13px] text-slate-700 max-w-[280px] truncate">{t.questionPreview ?? <span className="text-slate-300 italic">Content capture off</span>}</td>
+                      <td className="px-4 py-3.5 text-[13px] text-slate-700 max-w-[280px] truncate">{t.questionPreview ?? <span className="text-slate-300 italic" title="The list is read from the request log, which holds no question text. With content capture on, the trace view shows it.">Open the trace</span>}</td>
                       <td className="px-4 py-3.5 text-[12px] font-medium text-slate-600">{t.route ?? '—'}</td>
                       <td className="px-4 py-3.5"><TraceStatusBadge status={t.status} /></td>
                       <td className="px-4 py-3.5 text-[13px] text-slate-500 tabular-nums">{fmtMs(t.durationMs)}</td>

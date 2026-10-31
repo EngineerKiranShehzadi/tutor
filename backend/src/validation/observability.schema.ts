@@ -19,7 +19,9 @@ const STATUS_VALUES = ['SUCCESS', 'ERROR', 'OK', 'UNSET'];
 // recognized openinference.span.kind attribute — see services/observability/normalize.ts.
 const SPAN_KIND_VALUES = ['LLM', 'CHAIN', 'TOOL', 'RETRIEVER', 'RERANKER', 'EMBEDDING', 'AGENT', 'GUARDRAIL', 'EVALUATOR', 'PROMPT', 'UNKNOWN'];
 // Real domain set from aggregate.service.ts's memory-hit/-miss classification.
-const MEMORY_RESULT_VALUES = ['EXACT_HIT', 'SEMANTIC_HIT', 'MISS'];
+// What the Traces page offers; MISS also matches a miss whose answer was then
+// cached (ENTRY_CREATED) or failed to cache (WRITE_FAILED).
+const MEMORY_RESULT_VALUES = ['EXACT_HIT', 'SEMANTIC_HIT', 'MISS', 'NOT_ATTEMPTED', 'LOOKUP_FAILED'];
 
 // Rejects a startTime that is after endTime — applied once both are known
 // to be valid dates (isISO8601 has already run via the chain above).
