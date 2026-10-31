@@ -12,7 +12,6 @@ import { resolveLlmProvider } from '../llm/llm-provider.resolver';
 import { toJsonSchema } from '../llm/json-schema';
 import { assertLlmProvidersConfigured, selectedLlmProviders } from '../config/llm-providers';
 import { classifyErrorCode } from '../observability/tracer';
-import type { LlmSchema } from '../llm/llm.types';
 import { DECOMPOSITION_RESPONSE_SCHEMA } from '../rag/query-processing/decomposition/subquery-decomposition.prompt';
 import { ADAPTIVE_RETRIEVAL_RESPONSE_SCHEMA } from '../rag/query-processing/adaptive-retrieval/adaptive-retrieval.prompt';
 import { GROUNDEDNESS_RESPONSE_SCHEMA } from '../rag/guardrails/output/answer-groundedness.prompt';
@@ -73,22 +72,26 @@ const rejects = async (p: Promise<unknown>): Promise<Error> => p.then(() => new 
 
   // 3. request mapping
   {
-    const m = await startMock(() => completion('{"route":"FACT_QUESTION"}'));
+    const m = await startMock(() => completion('{"action":"STOP","reason":"covered","retrievalQuery":null,"targetAspect":null}'));
     const p = mk(m.url);
-    const schema: LlmSchema = { type: 'OBJECT', properties: { route: { type: 'STRING', enum: ['A', 'B'] } }, required: ['route'] };
-    await p.generate({ model: 'gpt-6-luna', systemPrompt: 'You route.', userPrompt: 'Hi', temperature: 0, maxOutputTokens: 64, thinking: 'minimal', responseSchema: schema, timeoutMs: 4000 });
+    // The real adaptive-planner schema: two of its four properties are optional in
+    // the LlmSchema, so a non-strict mapping would list only two in `required` and
+    // OpenAI would reject the request (invalid_json_schema). Checked on the wire.
+    await p.generate({ model: 'gpt-6-luna', systemPrompt: 'You plan.', userPrompt: 'Hi', temperature: 0, maxOutputTokens: 64, thinking: 'minimal', responseSchema: ADAPTIVE_RETRIEVAL_RESPONSE_SCHEMA, timeoutMs: 4000 });
     await p.generate({ model: 'gpt-6-luna', userPrompt: 'Answer', thinking: 'low', maxOutputTokens: 8192 });
     const [a, b] = m.seen;
-    check('3. Request: POST /chat/completions, Bearer key; system + user messages (system omitted when unset); max_completion_tokens (never max_tokens); reasoning_effort sent; temperature passed; strict json_schema response_format',
+    const wire = a.body.response_format?.json_schema?.schema ?? {};
+    check('3. Request: POST /chat/completions, Bearer key; system + user messages (system omitted when unset); max_completion_tokens (never max_tokens); reasoning_effort sent; temperature passed; strict json_schema response_format whose schema (the real adaptive-retrieval one) lists all four properties in required',
       a.method === 'POST' && a.path === '/v1/chat/completions' && a.auth === `Bearer ${KEY}`
-        && JSON.stringify(a.body.messages) === '[{"role":"system","content":"You route."},{"role":"user","content":"Hi"}]'
+        && JSON.stringify(a.body.messages) === '[{"role":"system","content":"You plan."},{"role":"user","content":"Hi"}]'
         && a.body.max_completion_tokens === 64 && !('max_tokens' in a.body) && a.body.reasoning_effort === 'none' && a.body.temperature === 0
         && a.body.response_format?.type === 'json_schema' && a.body.response_format.json_schema.strict === true
         && a.body.response_format.json_schema.name === 'response'
-        && JSON.stringify(a.body.response_format.json_schema.schema) === '{"type":"object","properties":{"route":{"type":"string","enum":["A","B"]}},"additionalProperties":false,"required":["route"]}'
+        && JSON.stringify([...(wire.required ?? [])].sort()) === '["action","reason","retrievalQuery","targetAspect"]'
+        && wire.additionalProperties === false && JSON.stringify(wire.properties?.retrievalQuery?.type) === '["string","null"]'
         && JSON.stringify(b.body.messages) === '[{"role":"user","content":"Answer"}]' && b.body.reasoning_effort === 'low'
         && !('temperature' in b.body) && !('response_format' in b.body) && !('stream' in b.body),
-      `a=${JSON.stringify(a.body).slice(0, 220)}… b.effort=${b.body.reasoning_effort}`);
+      `wire.required=${JSON.stringify(wire.required)} retrievalQuery=${JSON.stringify(wire.properties?.retrievalQuery)} b.effort=${b.body.reasoning_effort}`);
     m.close();
   }
 
@@ -143,6 +146,9 @@ const rejects = async (p: Promise<unknown>): Promise<Error> => p.then(() => new 
     const m401 = await startMock(() => apiError(401, `Incorrect API key provided: ${KEY}. You can find your API key at https://platform.openai.com.`, 'invalid_api_key'));
     const e401 = await rejects(mk(m401.url).generate({ model: 'gpt-6-luna', userPrompt: 'x' }));
     const n401 = m401.seen.length; m401.close();
+    const m403 = await startMock(() => apiError(403, `Project does not have access to model gpt-6-luna (key ${KEY})`, 'model_not_found', 'invalid_request_error'));
+    const e403 = await rejects(mk(m403.url).generate({ model: 'gpt-6-luna', userPrompt: 'x' }));
+    const n403 = m403.seen.length; m403.close();
     sleeps.length = 0;
     const mRate = await startMock((_r, n) => n < 3 ? apiError(429, 'Rate limit reached for requests', 'rate_limit_exceeded', 'requests') : completion('ok'));
     const ok = await mk(mRate.url).generate({ model: 'gpt-6-luna', userPrompt: 'x' });
@@ -151,8 +157,9 @@ const rejects = async (p: Promise<unknown>): Promise<Error> => p.then(() => new 
     const eRate = await rejects(mk(mRate2.url).generate({ model: 'gpt-6-luna', userPrompt: 'x' }));
     mRate2.close();
     const mQuota = await startMock(() => apiError(429, 'You exceeded your current quota, please check your plan and billing details.', 'insufficient_quota', 'insufficient_quota'));
+    sleeps.length = 0;
     const eQuota = await rejects(mk(mQuota.url).generate({ model: 'gpt-6-luna', userPrompt: 'x' }));
-    mQuota.close();
+    const nQuota = mQuota.seen.length; const quotaSleeps = sleeps.length; mQuota.close();
     const m503 = await startMock(() => ({ status: 503, json: { error: { message: 'The server is overloaded', type: 'service_unavailable_error', code: 'server_is_overloaded' } } }));
     const e503 = await rejects(mk(m503.url).generate({ model: 'gpt-6-luna', userPrompt: 'x' }));
     const n503 = m503.seen.length; m503.close();
@@ -160,12 +167,15 @@ const rejects = async (p: Promise<unknown>): Promise<Error> => p.then(() => new 
     const e400 = await rejects(mk(m400.url).generate({ model: 'gpt-6-luna', userPrompt: 'x' }));
     const n400 = m400.seen.length; m400.close();
     const eNet = await rejects(mk('http://127.0.0.1:9/v1').generate({ model: 'gpt-6-luna', userPrompt: 'x' }));
-    check('7a. 401 says check OPENAI_API_KEY and never echoes the key (sk-… redacted); not retried',
-      /check OPENAI_API_KEY/.test(e401.message) && !e401.message.includes('TESTKEY') && /sk-\*\*\*/.test(e401.message) && n401 === 1, e401.message);
-    check('7b. 429 rate limit is retried and recovers; one that persists is a rate limit (RATE_LIMITED), labelled apart from a quota / billing 429 ("retrying will not help")',
+    check('7a. 401 and 403 both say check OPENAI_API_KEY and never echo the key (sk-… redacted); not retried',
+      /check OPENAI_API_KEY/.test(e401.message) && !e401.message.includes('TESTKEY') && /sk-\*\*\*/.test(e401.message) && n401 === 1
+        && /\(403\) — check OPENAI_API_KEY/.test(e403.message) && !e403.message.includes('TESTKEY') && n403 === 1,
+      `401="${e401.message.slice(0, 80)}" 403="${e403.message.slice(0, 90)}"`);
+    check('7b. 429 rate limit is retried and recovers; one that persists is a rate limit (RATE_LIMITED), labelled apart from a quota / billing 429 ("retrying will not help"), which is sent ONCE with no backoff wait',
       ok.raw === 'ok' && nRate === 3 && /rate limit \(429 rate_limit_exceeded\)/.test(eRate.message) && classifyErrorCode(eRate) === 'RATE_LIMITED'
-        && /quota or spend limit reached \(429 insufficient_quota\)/.test(eQuota.message) && /retrying will not help/.test(eQuota.message),
-      `rate="${eRate.message.slice(0, 80)}" quota="${eQuota.message.slice(0, 80)}"`);
+        && /quota or spend limit reached \(429 insufficient_quota\)/.test(eQuota.message) && /retrying will not help/.test(eQuota.message)
+        && nQuota === 1 && quotaSleeps === 0,
+      `rate="${eRate.message.slice(0, 80)}" quota="${eQuota.message.slice(0, 80)}" quotaRequests=${nQuota} quotaSleeps=${quotaSleeps}`);
     check('7c. 5xx is retried (3 attempts) then "service unavailable" (SERVICE_UNAVAILABLE); 400 is not retried; unreachable → SERVICE_UNREACHABLE',
       n503 === 3 && /service unavailable \(503\)/.test(e503.message) && classifyErrorCode(e503) === 'SERVICE_UNAVAILABLE'
         && n400 === 1 && /request rejected \(400 invalid_json_schema\)/.test(e400.message)
@@ -205,6 +215,24 @@ const rejects = async (p: Promise<unknown>): Promise<Error> => p.then(() => new 
         && m2.seen.length === 3 && m2.seen[1].body.reasoning_effort === 'low' && m2.seen[2].body.reasoning_effort === 'low',
       `temperature: ${afterFirst} then ${m.seen.length - afterFirst} request(s); effort: ${m2.seen.map(s => s.body.reasoning_effort).join(',')}`);
     m.close(); m2.close();
+
+    // A model that rejects temperature at every effort AND rejects "none": the
+    // temperature rejection learned at "none" does not carry over to "low", so it
+    // is learned again there. The FIRST call must still succeed (it threw before).
+    const m3 = await startMock(r => ('temperature' in r.body)
+      ? apiError(400, "Unsupported parameter: 'temperature' is not supported with this model.", 'unsupported_parameter')
+      : r.body.reasoning_effort === 'none'
+        ? apiError(400, "Unsupported value: 'reasoning_effort' does not support 'none' with this model.", 'unsupported_value')
+        : completion('fine'));
+    const p3 = mk(m3.url);
+    const first = await p3.generate({ model: 'gpt-6-astra', userPrompt: 'x', temperature: 0, thinking: 'minimal' }).then(r => r.raw, e => (e as Error).message);
+    const firstRequests = m3.seen.length;
+    await p3.generate({ model: 'gpt-6-astra', userPrompt: 'y', temperature: 0, thinking: 'minimal' });
+    const last = m3.seen[m3.seen.length - 1].body;
+    check('9b. A model that rejects BOTH temperature and reasoning_effort "none": the first call succeeds (temperature@none, none, temperature@low learned: 4 requests), the next sends one request at low without temperature',
+      first === 'fine' && firstRequests === 4 && m3.seen.length === 5 && last.reasoning_effort === 'low' && !('temperature' in last),
+      `first="${first.slice(0, 60)}" requests=${firstRequests} then ${m3.seen.length - firstRequests}: ${m3.seen.map(s => `${s.body.reasoning_effort}${'temperature' in s.body ? '+t' : ''}`).join(',')}`);
+    m3.close();
   }
 
   // 10. readiness probe

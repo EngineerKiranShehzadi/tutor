@@ -29,7 +29,7 @@ import { chatResolvers } from '../graphql/resolvers/chat.resolver';
 import chatRoutes from '../routes/chat.routes';
 import { generateAccessToken } from '../utils/jwt';
 import { checkProviderHealth, overallStatus, requiredComponents, ComponentHealth, checkAnswerLlm, checkReadiness, resetHealthCache, UNHEALTHY_CACHE_TTL_MS } from '../observability/health.service';
-import { recordProviderFailure, recordProviderSuccess, resetProviderSignals } from '../observability/provider-signal';
+import { recordProviderFailure, recordProviderSuccess, resetProviderSignals, providerDownSignal, SIGNAL_WINDOW_MS } from '../observability/provider-signal';
 import { EmbeddingUnavailableError } from '../embedding/embedding-errors';
 import { mkdtempSync, writeFileSync, rmSync, statSync } from 'fs';
 import { tmpdir } from 'os';
@@ -321,25 +321,48 @@ const run = async () => {
         && answerDown === 'unhealthy' && rerankDown === 'unhealthy' && unverified === 'degraded',
       `required=${req.join()} answerDown=${answerDown} rerankDown=${rerankDown} unverified=${unverified}`);
 
+    // The real-call signal itself; readiness applies it after its cache
+    // (C2-1, AD-N8-1, R5-1 check that path).
     resetProviderSignals();
-    const hosted = { assertConfigured: () => undefined };
-    const fresh = await checkProviderHealth(hosted, 'reranker');
+    const fresh = providerDownSignal('reranker');
     recordProviderFailure('reranker', new Error('Voyage rerank unavailable (503) after 3 retries'));
-    const one = await checkProviderHealth(hosted, 'reranker');
+    const one = providerDownSignal('reranker');
     recordProviderFailure('reranker', new Error('Voyage rerank rate limit or quota exceeded (429) after 3 retries'));
-    const two = await checkProviderHealth(hosted, 'reranker');
+    const two = providerDownSignal('reranker');
     recordProviderSuccess('reranker');
-    const healed = await checkProviderHealth(hosted, 'reranker');
+    const healed = providerDownSignal('reranker');
     recordProviderFailure('reranker', new Error('Voyage rerank accepts at most 1000 documents per request; got 2000'));
     recordProviderFailure('reranker', new Error('Voyage rerank accepts at most 1000 documents per request; got 2000'));
-    const inputErrors = await checkProviderHealth(hosted, 'reranker');
-    check('A6-2. Hosted provider without a free probe: two availability failures in a row on real calls → unhealthy; one → still healthy; a success heals it; input errors do not count',
-      fresh.status === 'healthy' && one.status === 'healthy' && two.status === 'unhealthy' && two.errorCode === 'RATE_LIMITED'
-        && healed.status === 'healthy' && inputErrors.status === 'healthy',
-      `fresh=${fresh.status} 1fail=${one.status} 2fails=${two.status}/${two.errorCode} afterSuccess=${healed.status} inputErrors=${inputErrors.status}`);
+    const inputErrors = providerDownSignal('reranker');
+    const hosted = { assertConfigured: () => undefined };
+    recordProviderFailure('reranker', new Error('Voyage rerank unavailable (503) after 3 retries'));
+    recordProviderFailure('reranker', new Error('Voyage rerank unavailable (503) after 3 retries'));
+    const pureWhileDown = await checkProviderHealth(hosted);
+    check('A6-2. Real-call signal: two availability failures in a row → down; one → not; a success heals it; input errors do not count. checkProviderHealth is the pure probe (it no longer takes a component, so the signal cannot be applied before the cache)',
+      fresh === null && one === null && two === 'RATE_LIMITED' && healed === null && inputErrors === null
+        && pureWhileDown.status === 'healthy' && checkProviderHealth.length === 1,
+      `fresh=${fresh} 1fail=${one} 2fails=${two} afterSuccess=${healed} inputErrors=${inputErrors} pure=${pureWhileDown.status}`);
 
-    const probeDown = await checkProviderHealth({ assertConfigured: () => undefined, probe: async () => { throw new EmbeddingUnavailableError('OpenAI not reachable at https://api.openai.com/v1/models: fetch failed'); } }, 'embeddingServer');
-    const probeOk = await checkProviderHealth({ assertConfigured: () => undefined, probe: async () => undefined }, 'embeddingServer');
+    // A stale run does not count: two failures, a quiet period longer than the
+    // window, then ONE failure is not "down" (the count used to stay at 2 and
+    // the third failure alone took readiness to 503).
+    resetProviderSignals();
+    const t0 = 1_000_000_000;
+    const rate = new Error('Voyage rerank rate limit or quota exceeded (429) after 3 retries');
+    recordProviderFailure('reranker', rate, t0);
+    recordProviderFailure('reranker', rate, t0 + 1_000);
+    const downAtFirst = providerDownSignal('reranker', t0 + 1_000);
+    const later = t0 + 1_000 + SIGNAL_WINDOW_MS + 1;
+    recordProviderFailure('reranker', rate, later);
+    const afterQuiet = providerDownSignal('reranker', later);
+    recordProviderFailure('reranker', rate, later + 1_000);
+    const twoFresh = providerDownSignal('reranker', later + 1_000);
+    check('A6-4. After a quiet period longer than the signal window, a single new failure starts a new run (not down); a second one in the window is down again',
+      downAtFirst === 'RATE_LIMITED' && afterQuiet === null && twoFresh === 'RATE_LIMITED',
+      `first run=${downAtFirst} one failure after ${SIGNAL_WINDOW_MS + 1}ms quiet=${afterQuiet} two in window=${twoFresh}`);
+
+    const probeDown = await checkProviderHealth({ assertConfigured: () => undefined, probe: async () => { throw new EmbeddingUnavailableError('OpenAI not reachable at https://api.openai.com/v1/models: fetch failed'); } });
+    const probeOk = await checkProviderHealth({ assertConfigured: () => undefined, probe: async () => undefined });
     check('A6-3. Hosted provider with a free probe: probe failing → unhealthy; probe ok → healthy',
       probeDown.status === 'unhealthy' && probeDown.errorCode === 'SERVICE_UNREACHABLE' && probeOk.status === 'healthy',
       `down=${probeDown.status}/${probeDown.errorCode} ok=${probeOk.status}`);

@@ -20,7 +20,7 @@ banner and Retrieval inspector wording; scripts in `backend/src/scripts/` (new `
 `llm/providers/groq-llm.provider.ts`, `groq-rate-limiter.ts`, `embedding/providers/voyage-embedding.provider.ts`,
 `scripts/test-groq-provider.ts`, `groq-real-check.ts`, `groq-verifier-check.ts`, `e2e/browser-groq.js`,
 `e2e/groq-env.sh`; `embedding/embedding-provider.resolver.ts`, `utils/voyage-api.ts`, `e2e/up.sh`,
-`DATASET_PIPELINE.md`
+`DATASET_PIPELINE.md`; `observability/provider-signal.ts`, `utils/http-retry.ts`
 
 **Final stack:** embedding OpenAI `text-embedding-3-small` at 1024 dimensions, rerank Voyage `rerank-3`, all ten
 LLM tasks OpenAI `gpt-6-luna`.
@@ -56,6 +56,22 @@ Traces written before this keep the old span names (`gemini_answer_call` and so 
   embedding `openai` and `local-http`; rerank `voyage` and `local-http`. `utils/voyage-api.ts` keeps what the
   reranker uses (base URL and the free probe). `local-http` stays: the test suite and offline development run on
   it without paid keys. `E2E_LLM=groq` is gone from the e2e run; `E2E_LLM=real` uses the configured provider.
+- **A model that rejects both `temperature` and reasoning effort "none" failed its first call.** The adapter
+  allowed two 400 fallbacks, but such a model needs three (temperature at "none", "none" itself, then temperature
+  again at "low", since it is remembered per effort: a model may accept it without reasoning). It now allows
+  three, so the first call succeeds.
+- **One failure after a quiet period could take readiness to 503.** The real-call signal kept counting across
+  gaps longer than its 5-minute window, so two old failures plus one new one read as "down". A failure after such
+  a gap now starts a new count.
+- **The strict-schema test could not catch the regression it exists for.** It now checks the body the adapter
+  sends, with the real adaptive-retrieval schema: all four properties must be in `required`. Dropping
+  `strict: true` from the adapter fails it.
+- **A 403 now names `OPENAI_API_KEY`**, like a 401.
+- **`checkProviderHealth` no longer takes a `component`.** No production code passed it, and it applied the
+  real-call signal before the readiness cache, the path R5 removed. The probe is now pure, like `checkAnswerLlm`.
+- **A quota or spend-limit 429 is sent once.** It was retried twice with backoff before the body was read and
+  recognised as one that waiting does not clear. The retry helper now lets the adapter check the body first; the
+  embedding and rerank adapters do not use this and are unchanged.
 
 ---
 

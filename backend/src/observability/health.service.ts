@@ -161,37 +161,24 @@ async function checkHttpReachable(url: string): Promise<ComponentHealth> {
 //   - hosted provider with a free probe() (OpenAI: model metadata; Voyage:
 //     an authenticated listing that runs no model): run it;
 //   - hosted provider without one: config check.
-// With `component`, recent REAL calls are consulted too (provider-signal.ts): a
-// provider whose last calls kept failing is unhealthy even if it looks
-// reachable/configured. checkReadiness leaves it out and applies the signal
-// after its cache instead (see withProviderSignal).
+// Pure, like checkAnswerLlm: the real-call signal is applied by checkReadiness
+// after its cache (see withProviderSignal), never here.
 export async function checkProviderHealth(
   provider: { healthUrl?: string; assertConfigured(): void; probe?(): Promise<void> },
-  component?: ProviderComponent,
 ): Promise<ComponentHealth> {
-  let base: ComponentHealth;
-  if (provider.healthUrl) {
-    base = await checkHttpReachable(provider.healthUrl);
-  } else {
-    try {
-      provider.assertConfigured();
-    } catch {
-      return { status: 'unhealthy', latencyMs: 0, errorCode: 'NOT_CONFIGURED' };
-    }
-    if (provider.probe) {
-      try {
-        const { latencyMs } = await timed(() => provider.probe!());
-        base = { status: 'healthy', latencyMs: Math.round(latencyMs) };
-      } catch (err) {
-        return { status: 'unhealthy', latencyMs: 0, errorCode: classifyErrorCode(err) };
-      }
-    } else {
-      base = { status: 'healthy', latencyMs: 0 };
-    }
+  if (provider.healthUrl) return checkHttpReachable(provider.healthUrl);
+  try {
+    provider.assertConfigured();
+  } catch {
+    return { status: 'unhealthy', latencyMs: 0, errorCode: 'NOT_CONFIGURED' };
   }
-  if (base.status !== 'healthy' || !component) return base;
-  const down = providerDownSignal(component);
-  return down ? { status: 'unhealthy', latencyMs: base.latencyMs, errorCode: down } : base;
+  if (!provider.probe) return { status: 'healthy', latencyMs: 0 };
+  try {
+    const { latencyMs } = await timed(() => provider.probe!());
+    return { status: 'healthy', latencyMs: Math.round(latencyMs) };
+  } catch (err) {
+    return { status: 'unhealthy', latencyMs: 0, errorCode: classifyErrorCode(err) };
+  }
 }
 
 // unhealthy if a required component is down; degraded if anything else is not

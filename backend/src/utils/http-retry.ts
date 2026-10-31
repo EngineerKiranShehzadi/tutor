@@ -10,6 +10,10 @@ export interface RetryOptions {
   // false: a request that hit its own timeout is not retried (an LLM call's
   // timeout is the caller's whole deadline, so a retry would multiply it).
   retryTimeouts?: boolean;
+  // Asked before retrying a retryable status, with a clone of the response (its
+  // body can be read). false returns the response at once: e.g. a 429 whose
+  // body says the quota is used up, which waiting does not clear.
+  shouldRetry?: (res: Response) => Promise<boolean>;
 }
 
 // Statuses worth another attempt: rate limited, or a server-side failure.
@@ -69,6 +73,7 @@ export async function postJsonWithRetry(
       continue;
     }
     if (!RETRYABLE_STATUSES.has(res.status) || attempt >= maxRetries) return res;
+    if (opts.shouldRetry && !(await opts.shouldRetry(res.clone()).catch(() => true))) return res;
     await res.arrayBuffer().catch(() => undefined); // release the connection before waiting
     await sleep(Math.min(maxDelayMs, retryAfterMs(res) ?? backoff(attempt)));
   }

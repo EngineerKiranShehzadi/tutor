@@ -46,6 +46,7 @@ export const redactOpenAi = (s: string): string =>
   s.replace(/sk-[A-Za-z0-9_-]+/g, 'sk-***').replace(/Bearer\s+\S+/gi, 'Bearer ***');
 
 interface OpenAiError { detail: string; code: string | null; type: string | null }
+const isQuotaError = (e: OpenAiError): boolean => (e.code !== null && QUOTA_CODES.has(e.code)) || e.type === 'insufficient_quota';
 async function readError(res: Response): Promise<OpenAiError> {
   const text = await res.text().catch(() => '');
   try {
@@ -73,7 +74,12 @@ const toFinishReason = (f: string | null | undefined): string | undefined =>
   f === 'length' ? 'MAX_TOKENS' : f === 'stop' ? 'STOP' : (f ?? undefined) || undefined;
 
 export function createOpenAiLlmProvider(opts: OpenAiLlmOptions): LlmProvider {
-  const retry: RetryOptions = { maxRetries: 2, retryTimeouts: false, ...opts.retry };
+  // A quota / spend 429 is returned at once, not retried: waiting does not clear it.
+  const retry: RetryOptions = {
+    maxRetries: 2, retryTimeouts: false,
+    shouldRetry: async res => res.status !== 429 || !isQuotaError(await readError(res)),
+    ...opts.retry,
+  };
   // A model that turns out to reject a parameter (temperature with reasoning on, or
   // reasoning_effort "none" on a newer family) is remembered, so only the first call
   // pays for the rejected request.
@@ -108,8 +114,8 @@ export function createOpenAiLlmProvider(opts: OpenAiLlmOptions): LlmProvider {
   const fail = (status: number, e: OpenAiError): Error => {
     const code = e.code ?? e.type;
     if (status === 401) return new Error(`OpenAI rejected the API key (401) — check OPENAI_API_KEY: ${e.detail}`);
-    if (status === 403) return new Error(`OpenAI refused the request (403) — the key, organization or project has no access: ${e.detail}`);
-    if (status === 429 && ((e.code && QUOTA_CODES.has(e.code)) || e.type === 'insufficient_quota')) {
+    if (status === 403) return new Error(`OpenAI refused the request (403) — check OPENAI_API_KEY: the key, organization or project has no access: ${e.detail}`);
+    if (status === 429 && isQuotaError(e)) {
       return new Error(`OpenAI quota or spend limit reached (429 ${code}) — retrying will not help; check billing and limits: ${e.detail}`);
     }
     if (status === 429) return new Error(`OpenAI rate limit (429${code ? ` ${code}` : ''}) persisted after ${retry.maxRetries} retries: ${e.detail}`);
@@ -117,7 +123,10 @@ export function createOpenAiLlmProvider(opts: OpenAiLlmOptions): LlmProvider {
     return new Error(`OpenAI request rejected (${status}${code ? ` ${code}` : ''}): ${e.detail}`);
   };
 
-  // One request, with the two parameter fallbacks above. Returns the OK response.
+  // One request, with the parameter fallbacks above. Returns the OK response.
+  // Up to three 400s are learned on a model's first call: temperature at effort
+  // "none", then "none" itself, then temperature again at "low" (it is
+  // remembered per effort, because a model may accept it without reasoning).
   const call = async (req: LlmRequest, stream: boolean): Promise<Response> => {
     assertConfigured();
     const timeoutMs = req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -137,7 +146,7 @@ export function createOpenAiLlmProvider(opts: OpenAiLlmOptions): LlmProvider {
       }
       if (res.ok) return res;
       const e = await readError(res);
-      if (res.status === 400 && attempt < 2) {
+      if (res.status === 400 && attempt < 3) {
         if ('temperature' in body && /temperature/i.test(e.detail)) {
           noTemperature.add(`${req.model}|${body.reasoning_effort as string}`);
           logger.warn(`[OPENAI] ${req.model} rejected temperature with reasoning_effort=${body.reasoning_effort as string} — sending it without`);

@@ -26,8 +26,11 @@ export function recordProviderSuccess(c: ProviderComponent): void {
 export function recordProviderFailure(c: ProviderComponent, err: unknown, now = Date.now()): void {
   const code = classifyErrorCode(err);
   if (!AVAILABILITY_CODES.has(code)) return;
+  // A failure after a quiet period longer than the window starts a new run:
+  // two old failures plus one new one are not "two in a row".
   const prev = signals.get(c);
-  signals.set(c, { consecutiveFailures: (prev?.consecutiveFailures ?? 0) + 1, lastFailureAt: now, lastErrorCode: code });
+  const run = prev && now - prev.lastFailureAt <= SIGNAL_WINDOW_MS ? prev.consecutiveFailures : 0;
+  signals.set(c, { consecutiveFailures: run + 1, lastFailureAt: now, lastErrorCode: code });
 }
 
 /** The error code if recent real calls say the provider is down, else null. */
