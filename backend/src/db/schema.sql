@@ -35,8 +35,8 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
 
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_hash ON refresh_tokens(token_hash);
-CREATE INDEX IF NOT EXISTS idx_refresh_tokens_family ON refresh_tokens(family_id);
-CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires ON refresh_tokens(expires_at);
+-- family_id / expires_at indexes: migration 010 (this file also runs against
+-- existing databases, where those columns do not exist until 010 has run).
 
 -- ── PASSWORD RESET TOKENS (OTP-based) ──────────
 -- State machine: unused → verified → used
