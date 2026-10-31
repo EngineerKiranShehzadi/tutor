@@ -145,7 +145,7 @@ cases.push({
     const p = await promptFor(NOVA);
     const ruleCount = (SYSTEM_PROMPT.match(/^\d+\./gm) ?? []).length;
     const pass = p.startsWith(SYSTEM_PROMPT) && p.includes('Use ONLY the provided context. Do NOT use outside knowledge.')
-      && p.includes('I could not find this information in this lecture.') && ruleCount === 8;
+      && p.includes('I could not find this information in this lecture.') && ruleCount === 9;
     return { pass, detail: `startsWithSystemPrompt=${p.startsWith(SYSTEM_PROMPT)}, numberedRules=${ruleCount}` };
   },
 });
@@ -183,7 +183,7 @@ cases.push({
       p.indexOf(SYSTEM_PROMPT),
       p.indexOf('Lecture agent: Nova'),
       p.indexOf(`Lecture: "${TITLE}"`),
-      p.indexOf('[Lecture Content]'),
+      p.indexOf('[Lecture Content]', SYSTEM_PROMPT.length), // the rules also name this label
       p.indexOf('Conversation history'),
       p.indexOf('Current Student Question:'),
     ];
@@ -300,12 +300,12 @@ cases.push({
 });
 
 cases.push({
-  label: '15. Version/scope: ANSWER_PROMPT_VERSION unchanged; the service never loads profiles or touches the database',
+  label: '15. Version/scope: ANSWER_PROMPT_VERSION is v2 (bumped with the SYSTEM_PROMPT change); the service never loads profiles or touches the database',
   run: async () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'services', 'llm-gemini.service.ts'), 'utf8');
     const importLines = src.split('\n').filter(l => /^\s*import\b/.test(l)).join('\n');
     const loadsProfiles = /lecture-agent-profile\.service|config\/database|getAgentProfileByLectureId/.test(importLines + src.replace(/\/\/.*$/gm, ''));
-    const pass = ANSWER_PROMPT_VERSION === 'v1' && !loadsProfiles;
+    const pass = ANSWER_PROMPT_VERSION === 'v2' && !loadsProfiles;
     return { pass, detail: `ANSWER_PROMPT_VERSION=${ANSWER_PROMPT_VERSION}, loadsProfiles=${loadsProfiles}` };
   },
 });

@@ -187,10 +187,10 @@ async function runGroundednessVerification(params: OutputGuardrailParams): Promi
 
   if (!firstPass.ok) {
     if (env.ANSWER_VERIFICATION.FAIL_OPEN_ON_VERIFIER_ERROR) {
-      // No verdict was reached — the verifier never said the draft was
-      // wrong, it just couldn't run. The draft was already generated from
-      // retrieved evidence only; keep it. verified stays false so it is
-      // never written to answer memory, and format/PII guards still run.
+      // Opt-in only (ANSWER_VERIFICATION_FAIL_OPEN=true; default is fail
+      // closed, below). No verdict was reached — the verifier couldn't run.
+      // verified stays false so the draft is never written to answer
+      // memory, and format/PII guards still run.
       logger.warn(`[OUTPUT-GUARDRAIL] ⚠️  Verifier unavailable (${firstPass.failureReason}) — serving unverified grounded draft (fail-open)`);
       return buildResult({
         finalAnswer: params.draftAnswer, verified: false, decision: null,

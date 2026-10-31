@@ -7,6 +7,37 @@ Newest entry at the top.
 
 ---
 
+## 2026-10-31 — Student RAG fixes, batch 1: timeout, fail-closed verifier, prompt (D1, D2, D7, D8)
+
+**Changed by:** Kiran
+**Files:** `backend/src/config/env.ts`, `backend/.env.example`,
+`backend/src/services/llm-gemini.service.ts`,
+`backend/src/rag/guardrails/output/output-guardrail.service.ts`,
+`backend/src/rag/guardrails/output/answer-groundedness.prompt.ts`,
+tests in `backend/src/scripts/` (new `test-rag-defects.ts`)
+
+- **D1 — answer call had no timeout.** The grounded-answer call was the only LLM
+  call with no deadline; on the streaming path the heartbeat kept a stuck call
+  open forever. New `RAG_ANSWER_TIMEOUT_MS` (default 45 s, the largest LLM
+  budget) is sent with every attempt, streaming or not. A timeout is not retried.
+- **D2 — verifier failed open.** `ANSWER_VERIFICATION_FAIL_OPEN` now defaults to
+  `false`: if the verifier cannot run, the student gets "I could not find this
+  information in this lecture." instead of the unchecked draft, and that draft is
+  never saved to chat history. Setting it to `true` is still possible, as an
+  explicit choice.
+- **D7 — one course name for every lecture.** The system prompt no longer names
+  "Master Prompt Engineering with ChatGPT"; the lecture title line and the agent
+  block already identify the lecture. `ANSWER_PROMPT_VERSION` is now `v2`, so
+  answers cached under the old prompt are no longer served.
+- **D8 — retrieved text was not marked as data.** The generator, verifier and
+  revision prompts now say that text inside `[Lecture Content]` / `[Evidence N]`
+  (and the draft, for the verifier) is reference data and that instructions in
+  it are never followed.
+
+Thresholds (0.55 / 0.5) are unchanged.
+
+---
+
 ## 2026-10-31 — Laiba's two changes are accepted (supersedes the 2026-10-29 reversals)
 
 **Changed by:** Kiran

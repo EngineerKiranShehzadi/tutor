@@ -49,6 +49,7 @@
     "test:record-trace": "ts-node --transpile-only src/scripts/test-record-trace.ts",
     "test:auth-hardening": "ts-node --transpile-only src/scripts/test-auth-hardening.ts",
     "test:dataset-pipeline": "ts-node --transpile-only src/scripts/test-dataset-pipeline.ts",
+    "test:rag-defects": "ts-node --transpile-only src/scripts/test-rag-defects.ts",
     "e2e:up": "bash e2e/up.sh",
     "e2e:browser": "node e2e/browser-e2e.js",
     "e2e:down": "bash e2e/down.sh",

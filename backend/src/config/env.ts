@@ -273,6 +273,12 @@ export const env = {
       // attempt<=2 threshold — preserves today's exact gemini-2.5-flash ->
       // gemini-flash-latest fallback chain by default.
       FALLBACK_MODEL:  optional('RAG_ANSWER_FALLBACK_MODEL', 'gemini-flash-latest'),
+      // Deadline for one grounded-answer call (streaming or not). The largest
+      // LLM budget in the pipeline — thinking plus up to 8192 output tokens —
+      // but never unbounded: a stuck call would otherwise hold the request
+      // (and, on SSE, the heartbeat-kept socket) open forever. Each retry
+      // attempt gets its own deadline; a timeout itself is not retried.
+      TIMEOUT_MS:      positiveInt('RAG_ANSWER_TIMEOUT_MS', 45000),
     },
     QUERY_ROUTER: {
       PROVIDER: optional('QUERY_ROUTER_LLM_PROVIDER', 'gemini'),
@@ -451,11 +457,13 @@ export const env = {
     MAX_REVISIONS: parseInt(optional('ANSWER_VERIFICATION_MAX_REVISIONS', '1'), 10),
     // When the verifier itself could not run (timeout / provider error /
     // unparseable output, even after its one retry) there is no verdict
-    // against the draft — only an absence of one. Default true: serve the
-    // already-generated, evidence-grounded draft (never cached, still
-    // format/PII guarded) instead of replacing it with "not found". Set to
-    // false for strict mode (any verifier failure -> conservative fallback).
-    FAIL_OPEN_ON_VERIFIER_ERROR: optional('ANSWER_VERIFICATION_FAIL_OPEN', 'true') === 'true',
+    // against the draft. Default false (fail closed): serve the conservative
+    // "not found in this lecture" fallback. The verifier shares the provider
+    // with the generator, so the slowdown that trips its timeout is the same
+    // one most likely to have produced a bad draft. Set to true only as an
+    // explicit operator choice: the unverified draft is then served (never
+    // cached, still format/PII guarded).
+    FAIL_OPEN_ON_VERIFIER_ERROR: optional('ANSWER_VERIFICATION_FAIL_OPEN', 'false') === 'true',
   },
 
   // ── Selective Output Format Validation (post-generation output guardrail) ──

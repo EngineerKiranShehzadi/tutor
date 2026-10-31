@@ -31,6 +31,7 @@ import {
 } from '../services/chat.service';
 import { getEffectiveAnswerPromptVersion } from '../services/rag-answer-memory.service';
 import { EMBEDDING_MODEL_VERSION } from '../services/embedding.service';
+import { ANSWER_PROMPT_VERSION } from '../services/llm-gemini.service';
 import { geminiLlmProvider } from '../llm/providers/gemini-llm.provider';
 import type { OutputGuardrailResult } from '../rag/guardrails/output/answer-verification.types';
 import type { FinishedTrace } from '../observability/types';
@@ -349,14 +350,14 @@ cases.push({
 // ── G–H: cache version ──────────────────────────────────────────────────
 
 cases.push({
-  label: 'G. One effective version is used for memory lookup and write, and it is the agent version (not generic "v1")',
+  label: 'G. One effective version is used for memory lookup and write, and it is the agent version (not the generic version)',
   run: async () => {
     const w = newWorld(); const { deps } = makeDeps();
     await inWorld(w, () => ask(4, deps));
     const lookup = w.stmts.find(s => s.kind === 'memory-exact-lookup')!;
     const upsert = w.stmts.find(s => s.kind === 'memory-upsert')!;
     const expected = getEffectiveAnswerPromptVersion(w.profiles.find(p => p.lecture_id === 4)!);
-    const pass = lookup.params[5] === expected && upsert.params[11] === expected && expected !== 'v1' && expected.startsWith('v1+agent:')
+    const pass = lookup.params[5] === expected && upsert.params[11] === expected && expected !== ANSWER_PROMPT_VERSION && expected.startsWith(`${ANSWER_PROMPT_VERSION}+agent:`)
       && w.memory.length === 1 && w.memory[0].answer_prompt_version === expected;
     return { pass, detail: `lookup=${String(lookup.params[5]).slice(0, 14)}… write=${String(upsert.params[11]).slice(0, 14)}…` };
   },

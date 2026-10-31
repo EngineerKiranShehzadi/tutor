@@ -59,12 +59,12 @@ interface Row {
 interface Statement { kind: string; text: string; params: unknown[] }
 
 const seedRows = (): Row[] => ([
-  // Mirrors the two rows that exist in the dev database today (generic "v1").
+  // Two generic rows stored under the current global ANSWER_PROMPT_VERSION.
   { id: 79, student_id: STUDENT, lecture_id: LECTURE, normalized_query: 'what is the best learning methodology',
-    dataset_version_id: FAKE_VERSION_ID, embedding_model_version: EMBEDDING_MODEL_VERSION, answer_prompt_version: 'v1',
+    dataset_version_id: FAKE_VERSION_ID, embedding_model_version: EMBEDDING_MODEL_VERSION, answer_prompt_version: ANSWER_PROMPT_VERSION,
     answer: 'GENERIC ANSWER', source_chunk_ids: [1, 2], cache_eligible: true },
   { id: 80, student_id: STUDENT, lecture_id: LECTURE, normalized_query: 'why is doing a task yourself the best way',
-    dataset_version_id: FAKE_VERSION_ID, embedding_model_version: EMBEDDING_MODEL_VERSION, answer_prompt_version: 'v1',
+    dataset_version_id: FAKE_VERSION_ID, embedding_model_version: EMBEDDING_MODEL_VERSION, answer_prompt_version: ANSWER_PROMPT_VERSION,
     answer: 'ANOTHER GENERIC ANSWER', source_chunk_ids: [3], cache_eligible: true },
 ]);
 
@@ -299,7 +299,7 @@ cases.push({
       const upsert = statements.find(s => s.kind === 'upsert')!;
       const lookup = statements.find(s => s.kind === 'exact-lookup')!;
       const pass = upsert.params[11] === ANSWER_PROMPT_VERSION && lookup.params[5] === ANSWER_PROMPT_VERSION
-        && r.hit?.answer === 'GENERIC NEW' && rows[0].answer_prompt_version === 'v1';
+        && r.hit?.answer === 'GENERIC NEW' && rows[0].answer_prompt_version === ANSWER_PROMPT_VERSION;
       return { pass, detail: `version=${String(upsert.params[11])}` };
     });
   },
@@ -332,7 +332,7 @@ cases.push({
       await writeAnswerMemory(writeParams('NOVA ANSWER', novaV));
       await writeAnswerMemory(writeParams('NOVA ANSWER v2', novaV));                  // re-write same agent version = update that row only
       const genericStillServed = await lookupAnswerMemory(lookupParams());            // legacy lookup unaffected
-      const legacyRows = live.filter(r => r.answer_prompt_version === 'v1');
+      const legacyRows = live.filter(r => r.answer_prompt_version === ANSWER_PROMPT_VERSION);
       const agentRows = live.filter(r => r.answer_prompt_version === novaV);
       const kinds = new Set(statements.map(s => s.kind));
       const pass = preLookup.hit === null
