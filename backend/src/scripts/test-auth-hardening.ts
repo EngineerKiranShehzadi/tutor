@@ -703,6 +703,24 @@ test('AU5 updateAdminProfile on a Google-only admin (no password) → 400 with t
   };
 });
 
+// ── AU6: a dead refresh cookie is cleared (401 only, never on 409) ──────
+test('AU6 POST /auth/refresh-token: a revoked token → 401 and the refreshToken cookie is cleared; a 409 (concurrent refresh) keeps it', async (base) => {
+  const refresh = (token: string) => fetch(`${base}/api/v1/auth/refresh-token`, { method: 'POST', headers: { Cookie: `refreshToken=${token}` } });
+  const clearing = (res: Response) => (res.headers.getSetCookie?.() ?? []).find(c => /^refreshToken=;/.test(c) && /Expires=Thu, 01 Jan 1970/i.test(c));
+  const email = addr('dead-cookie');
+  const id = await insertUser(email);
+  const a = await login(email);
+  await Auth.revokeAllSessions(id);
+  const revoked = await refresh(a.refreshToken);
+  const b = await login(email);
+  const first = await refresh(b.refreshToken);           // rotates b
+  const raced = await refresh(b.refreshToken);           // same token again inside the grace window → 409
+  return {
+    pass: revoked.status === 401 && !!clearing(revoked) && first.status === 200 && raced.status === 409 && !clearing(raced),
+    detail: `revoked=${revoked.status} cleared=${!!clearing(revoked)} first=${first.status} raced=${raced.status} clearedOn409=${!!clearing(raced)}`,
+  };
+});
+
 // ── runner ───────────────────────────────────────────────────────────────
 async function cleanup(): Promise<void> {
   await query(`DELETE FROM users WHERE email LIKE $1`, [`%${DOMAIN}`]);

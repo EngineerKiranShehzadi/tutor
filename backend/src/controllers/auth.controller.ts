@@ -4,7 +4,7 @@ import * as https from 'https';
 import crypto from 'crypto';
 import * as AuthService from '../services/auth.service';
 import { sendSuccess, sendError } from '../utils/response';
-import { asyncHandler } from '../middleware/errorHandler';
+import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { AuthenticatedRequest } from '../types';
 import { env } from '../config/env';
 import { logger } from '../utils/logger';
@@ -103,7 +103,17 @@ export const refreshToken = asyncHandler(async (req: Request, res: Response) => 
     return;
   }
   logger.info('[AUTH] Token refresh requested');
-  const tokens = await AuthService.refreshAccessToken(token);
+  let tokens: Awaited<ReturnType<typeof AuthService.refreshAccessToken>>;
+  try {
+    tokens = await AuthService.refreshAccessToken(token);
+  } catch (err) {
+    // A dead session (revoked family, deleted user, expired): drop the cookie,
+    // or the frontend middleware — which gates on its presence — keeps opening
+    // protected pages for up to 7 days and bouncing client-side. Never on 409
+    // (a concurrent refresh): the browser already holds the winner's cookie.
+    if (err instanceof AppError && err.statusCode === 401) res.clearCookie(REFRESH_COOKIE, CLEAR_COOKIE_OPTS);
+    throw err;
+  }
   res.cookie(REFRESH_COOKIE, tokens.refreshToken, REFRESH_COOKIE_OPTS);
   logger.info('[AUTH] ✅ Access token refreshed');
   sendSuccess(res, 'Token refreshed', { accessToken: tokens.accessToken });
