@@ -268,9 +268,8 @@ export const askLectureAgent = async (
 ): Promise<{ answer: string; sources: QnaChunk[] }> => {
   const { studentId, lectureId, sessionId } = params;
   // Reassigned once the input guardrail runs — from that point on, every
-  // downstream stage (routing, persistence, logs, every LLM prompt) sees the
-  // guarded (possibly PII-sanitized) text. The one exception is the direct
-  // path's embed/search/rerank text — see unmaskedQuestion below.
+  // downstream stage (routing, persistence, logs, every LLM prompt, and the
+  // embed/search/rerank calls) sees the guarded (possibly PII-sanitized) text.
   let question = params.question;
 
   const trace = new RequestTrace('ask-lecture-agent');
@@ -455,20 +454,18 @@ export const askLectureAgent = async (
 
     // Carry the guarded (possibly PII-sanitized) text forward — every stage
     // from here on, including the DB write immediately below, sees this
-    // value instead of the raw original (except searchQuery, below).
+    // value instead of the raw original. That includes retrieval: the
+    // embedding (OpenAI) and rerank (Voyage) calls are third-party services,
+    // so the unmasked question must not reach them either.
     question = guardrailResult.sanitizedInput ?? question;
-    // The same text before PII masking. Used ONLY as the text that is
-    // embedded, vector-searched and reranked on the direct path — a masked
-    // "[PHONE]" would search for the placeholder, not the number. Never
-    // stored, logged, traced or sent to an LLM; those all use `question`.
-    const unmaskedQuestion = guardrailResult.retrievalInput ?? question;
     // Answer memory is skipped for a question that had PII masked. The
     // masked text can't tell "What is +92 300 1234567?" from "What is
     // +92 321 7654321?" (both become "what is [phone]"), for the exact key and for the
     // embedding the semantic lookup compares, so one student's cached answer
     // would be replayed for a different question. Keying on the unmasked
     // text instead would store the raw value in rag_answer_memory.
-    const piiMasked = unmaskedQuestion !== question;
+    // Only the PII guard sanitizes, so SANITIZE means "PII was masked".
+    const piiMasked = guardrailResult.action === 'SANITIZE';
     trace.setAttributes({
       ...(isContentCaptureEnabled() ? { [ATTR.INPUT_VALUE]: truncateContent(question, 500).value } : {}),
     });
@@ -747,11 +744,6 @@ export const askLectureAgent = async (
     // still needs one for the parent/effective question; it's computed
     // on-demand at the write-memory step below when this stays null.
     let questionEmbedding: number[] | null = null;
-    // What the DIRECT path embeds and reranks: the unmasked question when
-    // retrieval is using the student's own wording, else the rewrite (which
-    // was produced from the masked text). Decomposed subqueries come from an
-    // LLM call, so they are built from the masked text.
-    const searchQuery = retrievalQuery === question ? unmaskedQuestion : retrievalQuery;
 
     if (decomposition.mode === 'DECOMPOSED') {
       currentStage = 'decomposed-retrieval';
@@ -847,17 +839,15 @@ export const askLectureAgent = async (
     } else {
       // 5. Embed the retrieval query (reuse the embedding computed during
       // answer-memory lookup, if any, instead of generating it twice)
-      // The memory lookup embedded the masked question; reuse it only when
-      // that is also what we search with (i.e. nothing was masked).
-      if (precomputedEmbedding && searchQuery === retrievalQuery) {
+      if (precomputedEmbedding) {
         questionEmbedding = precomputedEmbedding;
       } else {
         logger.info(`[CHAT] 🔍 Embedding: "${logSafeText(retrievalQuery, 60)}"`);
         currentStage = 'generate-query-embedding';
         questionEmbedding = await trace.span(
           'generate-query-embedding',
-          () => generateEmbedding(searchQuery, true),
-          vec => ({ embeddingModelVersion: EMBEDDING_MODEL_VERSION, inputCharLength: searchQuery.length, vectorDimension: vec.length, retryCount: 0 })
+          () => generateEmbedding(retrievalQuery, true),
+          vec => ({ embeddingModelVersion: EMBEDDING_MODEL_VERSION, inputCharLength: retrievalQuery.length, vectorDimension: vec.length, retryCount: 0 })
         );
       }
 
@@ -910,7 +900,7 @@ export const askLectureAgent = async (
       chunks = await trace.span(
         'rerank-candidates',
         async () => {
-          const rankedAll = await rerankChunksFn(searchQuery, candidates, candidates.length);
+          const rankedAll = await rerankChunksFn(retrievalQuery, candidates, candidates.length);
           topRerankerScore = rankedAll[0]?.rerankScore ?? null;
           const { selected, dedupedAway } = dedupeAndSelect(rankedAll, 5);
           dedupedAwayCount = dedupedAway.length;
@@ -1095,11 +1085,7 @@ export const askLectureAgent = async (
         // implements). Answer-memory still needs one to support the
         // optional semantic-similarity lookup, so it's computed here, once,
         // only when actually persisting — never during retrieval itself.
-        // Stored with the answer, so it must be of the masked text (the same
-        // text the semantic lookup embeds) — not of the unmasked search query.
-        const memoryEmbedding = questionEmbedding && searchQuery === retrievalQuery
-          ? questionEmbedding
-          : await generateEmbedding(retrievalQuery, true);
+        const memoryEmbedding = questionEmbedding ?? await generateEmbedding(retrievalQuery, true);
         await trace.span(
           'write-answer-memory',
           () => writeAnswerMemory({

@@ -298,15 +298,19 @@ cases.push({
   },
 });
 
-// ── D9: the guardrail hands back the unmasked text for retrieval only ───
+// ── D9 (reversed): the guardrail hands back only the masked text ────────
+// Embedding (OpenAI) and rerank (Voyage) are hosted, so the unmasked question
+// must not be kept for retrieval: nothing in the result carries the raw value.
 cases.push({
-  label: 'D9. runInputGuardrails returns the masked text as sanitizedInput and the unmasked text as retrievalInput',
+  label: 'D9. runInputGuardrails returns only the masked text — no field of the result holds the raw phone/IP',
   run: async () => {
-    const pii = await runInputGuardrails('What is 203.45.67.89 used for?');
+    const pii = await runInputGuardrails('My number is +92 300 1234567, what is 203.45.67.89 used for?');
     const clean = await runInputGuardrails('What is a system prompt?');
-    const pass = pii.sanitizedInput === 'What is [IP_ADDRESS] used for?' && pii.retrievalInput === 'What is 203.45.67.89 used for?'
-      && clean.sanitizedInput === clean.retrievalInput;
-    return { pass, detail: `action=${pii.action}, sanitized="${pii.sanitizedInput}"` };
+    const dump = JSON.stringify(pii);
+    const pass = pii.action === 'SANITIZE' && pii.sanitizedInput === 'My number is [PHONE], what is [IP_ADDRESS] used for?'
+      && !dump.includes('300 1234567') && !dump.includes('203.45.67.89') && !('retrievalInput' in pii)
+      && clean.action === 'ALLOW' && clean.sanitizedInput === 'What is a system prompt?';
+    return { pass, detail: `action=${pii.action}, sanitized="${pii.sanitizedInput}", keys=${Object.keys(pii).join(',')}` };
   },
 });
 
@@ -1130,8 +1134,8 @@ cases.push({
       const lookups: string[] = [];
       const { deps, spies } = orchestratorDeps({
         runInputGuardrails: async () => (raw === masked
-          ? { action: 'ALLOW', sanitizedInput: raw, retrievalInput: raw }
-          : { action: 'SANITIZE', reason: 'PII_DETECTED', sanitizedInput: masked, retrievalInput: raw }),
+          ? { action: 'ALLOW', sanitizedInput: raw }
+          : { action: 'SANITIZE', reason: 'PII_DETECTED', sanitizedInput: masked }),
         lookupAnswerMemory: async p => { lookups.push(p.question); return { hit: null, embedding: [0.1, 0.2], datasetVersionId: 7, lookupFailed: false }; },
       });
       const { value } = await withFakeDb(() => askOrchestrator(deps, raw));

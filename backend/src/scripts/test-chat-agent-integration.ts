@@ -623,14 +623,14 @@ cases.push({
 });
 
 cases.push({
-  label: 'D9/ST2. Masked question is stored/sent to the LLM; the unmasked one is used only to embed, search and rerank; answer memory is skipped',
+  label: 'D9/ST2. Only the masked question is stored, sent to the LLM, embedded and reranked (embedding and rerank are third parties); answer memory is skipped',
   run: async () => {
     const RAW = 'What does 203.45.67.89 mean here?';
     const MASKED = 'What does [IP_ADDRESS] mean here?';
     const embedded: string[] = []; const reranked: string[] = [];
     const w = newWorld();
     const { deps, spies } = makeDeps({ extra: {
-      runInputGuardrails: async () => ({ action: 'SANITIZE', reason: 'PII_DETECTED', sanitizedInput: MASKED, retrievalInput: RAW }),
+      runInputGuardrails: async () => ({ action: 'SANITIZE', reason: 'PII_DETECTED', sanitizedInput: MASKED }),
       generateEmbedding: async t => { embedded.push(t); return EMB; },
       rerankChunks: async (q, c) => { reranked.push(q); return c.map(x => ({ ...x, rerankScore: 0.9 })); },
     } });
@@ -641,12 +641,12 @@ cases.push({
     const trace = spies.traces[0] as unknown as { attributes?: Record<string, unknown> };
     const pass = stored.every(q => q === MASKED)
       && spies.generate[0]?.args[0] === MASKED
-      && reranked.length === 1 && reranked[0] === RAW
+      && reranked.length === 1 && reranked[0] === MASKED
       // Only the search embeds; the masked text can't key a cached answer
       // (two different numbers mask to the same text), so memory is never read or written.
-      && embedded.length === 1 && embedded[0] === RAW
+      && embedded.length === 1 && embedded[0] === MASKED
       && memoryStmts.length === 0 && trace.attributes?.memoryResult === 'NOT_ATTEMPTED';
-    return { pass, detail: `embedded=[${embedded.map(t => (t === RAW ? 'RAW' : t === MASKED ? 'MASKED' : '?')).join(',')}], rerank=${reranked[0] === RAW ? 'RAW' : 'other'}, stored=${stored.map(q => (q === MASKED ? 'M' : 'X')).join('')}, memory=[${memoryStmts.join(',')}], memoryResult=${trace.attributes?.memoryResult}` };
+    return { pass, detail: `embedded=[${embedded.map(t => (t === RAW ? 'RAW' : t === MASKED ? 'MASKED' : '?')).join(',')}], rerank=${reranked[0] === RAW ? 'RAW' : reranked[0] === MASKED ? 'MASKED' : 'other'}, stored=${stored.map(q => (q === MASKED ? 'M' : 'X')).join('')}, memory=[${memoryStmts.join(',')}], memoryResult=${trace.attributes?.memoryResult}` };
   },
 });
 

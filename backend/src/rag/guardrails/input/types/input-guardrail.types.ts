@@ -14,11 +14,6 @@ export interface InputGuardrailResult {
   // Populated on SANITIZE (and carried through unchanged on ALLOW/REJECT) —
   // the text that should continue into the next guard / the query router.
   sanitizedInput?: string;
-  // Set by runInputGuardrails on ALLOW/SANITIZE: the text every guard
-  // accepted, before PII masking. For embedding / vector search / rerank
-  // only — never stored, logged, traced or put in an LLM prompt (those use
-  // sanitizedInput). Equal to sanitizedInput when no PII was found.
-  retrievalInput?: string;
   metadata?: InputGuardrailMetadata;
 }
 
