@@ -31,6 +31,7 @@ export const deleteUser = async (id: string, requestingAdminId: string) => {
 export const updateUserRole = async (id: string, role: string, requestingAdminId: string) => {
   if (!['STUDENT', 'ADMIN'].includes(role)) throw new AppError('Invalid role', 400);
   if (id === requestingAdminId && role !== 'ADMIN') throw new AppError('Cannot demote yourself', 400);
+  const { rows: before } = await query<{ role: string }>(`SELECT role FROM users WHERE id = $1`, [id]);
   const { rows } = await query<{
     id: string; name: string; email: string; role: string; is_verified: boolean; created_at: Date;
   }>(
@@ -40,7 +41,12 @@ export const updateUserRole = async (id: string, role: string, requestingAdminId
   );
   if (!rows[0]) throw new AppError('User not found', 404);
   const r = rows[0];
-  logger.info(`[USER] ✅ Role updated: user id=${id} → ${role}`);
+  // End the user's sessions so the change cannot be outlived by a refresh token
+  // minted under the old role. (Access tokens are fine: every request re-reads
+  // the role from the database.)
+  const changed = before[0]?.role !== role;
+  if (changed) await query(`DELETE FROM refresh_tokens WHERE user_id = $1`, [id]);
+  logger.info(`[USER] ✅ Role updated: user id=${id} → ${role}${changed ? ' (sessions revoked)' : ' (unchanged)'}`);
   return { id: r.id, name: r.name, email: r.email, role: r.role, isVerified: r.is_verified, createdAt: r.created_at.toISOString() };
 };
 
