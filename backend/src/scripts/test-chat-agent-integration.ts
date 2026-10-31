@@ -250,7 +250,7 @@ function makeDeps(opts: {
     },
     generateGreeting: async (...args: unknown[]) => { spies.order.push('greeting'); spies.greeting.push(args); return 'Hello from the tutor'; },
     getAllLectureChunks: async lectureId => { spies.summaryChunksFor.push(lectureId); return [fakeChunk(1, lectureId), fakeChunk(2, lectureId)]; },
-    generateLectureSummary: async () => { spies.summaryCalls++; return 'LECTURE SUMMARY TEXT'; },
+    generateLectureSummary: async () => { spies.summaryCalls++; return { summary: 'LECTURE SUMMARY TEXT', batchesAttempted: 1, batchesSucceeded: 1 }; },
     onTraceComplete: t => { spies.traces.push(t); },
     ...(opts.extra ?? {}),
   };

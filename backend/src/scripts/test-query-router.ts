@@ -191,7 +191,7 @@ cases.push({
     const totalAcrossBatches = batches.reduce((sum, b) => sum + b.length, 0);
 
     let batchCalls = 0, combineCalls = 0;
-    const summary = await generateLectureSummary(
+    const { summary, batchesAttempted, batchesSucceeded } = await generateLectureSummary(
       chunks,
       'Test Lecture',
       {
@@ -202,7 +202,8 @@ cases.push({
     );
 
     const pass = batches.length > 1 && totalAcrossBatches === chunks.length
-      && batchCalls === batches.length && combineCalls === 1 && summary === `combined:${batchCalls}`;
+      && batchCalls === batches.length && combineCalls === 1 && summary === `combined:${batchCalls}`
+      && batchesAttempted === batches.length && batchesSucceeded === batches.length;
     return { pass, detail: `batches=${batches.length}, batchCalls=${batchCalls}, combineCalls=${combineCalls}, summary="${summary}"` };
   },
 });
@@ -216,7 +217,7 @@ cases.push({
       answer: 'The Zorvath Protocol is a fictional three-step handshake used only in this test: ping, echo, confirm.',
       chunk_text: 'Topic: Zorvath Protocol\nQ: What is the Zorvath Protocol?\nA: The Zorvath Protocol is a fictional three-step handshake used only in this test: ping, echo, confirm.',
     });
-    const summary = await generateLectureSummary([distinctive], 'Test Lecture', {}, { timeoutMs: 15000 });
+    const { summary } = await generateLectureSummary([distinctive], 'Test Lecture', {}, { timeoutMs: 15000 });
     const pass = !!summary && summary.toLowerCase().includes('zorvath');
     return { pass, detail: `summary="${summary?.slice(0, 160)}"` };
   },
@@ -224,7 +225,10 @@ cases.push({
 
 cases.push({
   label: '23a. generateLectureSummary returns null for an empty chunk list (no network)',
-  run: async () => ({ pass: (await generateLectureSummary([], 'Empty Lecture')) === null }),
+  run: async () => {
+    const r = await generateLectureSummary([], 'Empty Lecture');
+    return { pass: r.summary === null && r.batchesAttempted === 0 && r.batchesSucceeded === 0 };
+  },
 });
 
 // ── Part B: chat.service wiring against a real lecture ──────────────────
@@ -332,7 +336,7 @@ async function runIntegrationChecks(): Promise<Record<string, CaseResult>> {
         classifyRoute: async () => ({ route: 'LECTURE_SUMMARY', source: 'rule' }),
         searchChunks: async () => { searchCalled++; return []; },
         getAllLectureChunks: async () => fixture,
-        generateLectureSummary: async (chunks) => { received = chunks; return 'A grounded summary.'; },
+        generateLectureSummary: async (chunks) => { received = chunks; return { summary: 'A grounded summary.', batchesAttempted: 1, batchesSucceeded: 1 }; },
       };
       await askLectureAgent({ studentId, lectureId, question: 'Summarize this lecture.', sessionId: session.id }, deps);
       results['19'] = { pass: searchCalled === 0, detail: `searchChunks calls=${searchCalled}` };
@@ -345,7 +349,7 @@ async function runIntegrationChecks(): Promise<Record<string, CaseResult>> {
       const deps: AskLectureAgentDeps = {
         classifyRoute: async () => ({ route: 'LECTURE_SUMMARY', source: 'rule' }),
         getAllLectureChunks: async () => [],
-        generateLectureSummary: async () => { summarizeCalled++; return 'should not be called'; },
+        generateLectureSummary: async () => { summarizeCalled++; return { summary: 'should not be called', batchesAttempted: 1, batchesSucceeded: 1 }; },
       };
       const result = await askLectureAgent({ studentId, lectureId, question: 'Summarize this lecture.', sessionId: session.id }, deps);
       results['23'] = {

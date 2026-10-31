@@ -150,7 +150,7 @@ function makeDeps(route: 'FACT_QUESTION' | 'GREETING' | 'LECTURE_SUMMARY' | 'CON
     writeAnswerMemory: async () => { spies.memWrite++; },
     generateGreeting: async () => { spies.greeting++; return 'hello'; },
     getAllLectureChunks: async l => { spies.summaryChunks++; return [chunk(1, l)]; },
-    generateLectureSummary: async () => { spies.summaryGen++; return 'SUMMARY'; },
+    generateLectureSummary: async () => { spies.summaryGen++; return { summary: 'SUMMARY', batchesAttempted: 1, batchesSucceeded: 1 }; },
     onTraceComplete: t => { spies.traces.push(t); },
   };
   return { deps, spies };

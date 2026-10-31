@@ -8,6 +8,23 @@ import { logger } from '../utils/logger';
 export const LECTURE_SUMMARY_UNAVAILABLE_MESSAGE =
   'I could not generate a summary for this lecture right now.';
 
+// Chunks exist but no summary could be produced (every batch failed, or the
+// combine step failed): an outage, never "the lecture is empty".
+export const LECTURE_SUMMARY_FAILED_MESSAGE =
+  "I couldn't generate a summary of this lecture right now. Please try again in a moment.";
+
+// Appended when only some batches were summarised, so a partial summary is
+// never presented as the whole lecture.
+export const PARTIAL_SUMMARY_NOTE =
+  "\n\n_Part of this lecture couldn't be summarised right now — ask again for a complete summary._";
+
+export interface LectureSummaryResult {
+  // null when there was no content, or nothing could be summarised.
+  summary: string | null;
+  batchesAttempted: number;
+  batchesSucceeded: number;
+}
+
 // Fetches one row per source Q&A for the lecture, in stored/insertion order
 // (chunks are inserted row-by-row in dataset order during processing — see
 // chunk.service.ts — which mirrors the lecture's logical/topic order).
@@ -154,15 +171,16 @@ export interface SummarizeDeps {
 // Hierarchical summarization: batches that fit a single request are
 // summarized directly; multiple batches are summarized independently
 // (grounded only in their own content) and then combined into one final,
-// still strictly-grounded summary. Returns null if there's no content or
-// every batch failed — caller is responsible for the user-facing fallback.
+// still strictly-grounded summary. summary is null if there's no content or
+// nothing could be summarised; batchesAttempted/batchesSucceeded let the
+// caller tell an empty lecture, an outage and a partial summary apart.
 export const generateLectureSummary = async (
   chunks: QnaChunk[],
   lectureTitle: string,
   deps: SummarizeDeps = {},
   opts: { timeoutMs?: number; maxCharsPerBatch?: number } = {}
-): Promise<string | null> => {
-  if (chunks.length === 0) return null;
+): Promise<LectureSummaryResult> => {
+  if (chunks.length === 0) return { summary: null, batchesAttempted: 0, batchesSucceeded: 0 };
 
   const summarizeBatch   = deps.summarizeBatch   ?? summarizeBatchWithGemini;
   const combineSummaries = deps.combineSummaries ?? combineSummariesWithGemini;
@@ -171,18 +189,18 @@ export const generateLectureSummary = async (
   const batches = buildSummaryBatches(chunks, opts.maxCharsPerBatch ?? MAX_CHARS_PER_BATCH);
   logger.info(`[LECTURE-SUMMARY] 📚 Summarizing ${chunks.length} chunk(s) in ${batches.length} batch(es)`);
 
-  if (batches.length === 1) {
-    return summarizeBatch(batches[0], lectureTitle, timeoutMs);
-  }
-
   const partials: string[] = [];
   for (const batch of batches) {
     const partial = await summarizeBatch(batch, lectureTitle, timeoutMs);
     if (partial) partials.push(partial);
   }
+  const counts = { batchesAttempted: batches.length, batchesSucceeded: partials.length };
+  if (partials.length < batches.length) {
+    logger.warn(`[LECTURE-SUMMARY] ⚠️  ${batches.length - partials.length}/${batches.length} batch(es) failed`);
+  }
 
-  if (partials.length === 0) return null;
-  if (partials.length === 1) return partials[0];
+  if (partials.length === 0) return { summary: null, ...counts };
+  if (partials.length === 1) return { summary: partials[0], ...counts };
 
-  return combineSummaries(partials, lectureTitle, timeoutMs);
+  return { summary: await combineSummaries(partials, lectureTitle, timeoutMs), ...counts };
 };

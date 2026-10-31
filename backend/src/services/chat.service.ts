@@ -31,7 +31,7 @@ import type { ConversationTurn, AnswerStreamHandlers } from './llm-gemini.servic
 import type { DedupeResult } from './rerank.service';
 import type { RetrievalQueryResult } from './query-rewriter.service';
 import type { RouteClassification } from './query-router.service';
-import type { SummarizeDeps } from './lecture-summary.service';
+import type { SummarizeDeps, LectureSummaryResult } from './lecture-summary.service';
 import type { MemoryLookupResult, WriteMemoryParams, LookupParams as MemoryLookupParams } from './rag-answer-memory.service';
 import type { AgentProfileLookup } from './lecture-agent-profile.service';
 
@@ -85,7 +85,7 @@ export interface AskLectureAgentDeps {
   getAllLectureChunks?:    (lectureId: number, datasetVersionId?: number) => Promise<QnaChunk[]>;
   // Test-only: pin the request to this dataset version instead of resolving the active one.
   datasetVersionId?:       number | null;
-  generateLectureSummary?: (chunks: QnaChunk[], lectureTitle: string, deps?: SummarizeDeps) => Promise<string | null>;
+  generateLectureSummary?: (chunks: QnaChunk[], lectureTitle: string, deps?: SummarizeDeps) => Promise<LectureSummaryResult>;
   lookupAnswerMemory?:     (params: MemoryLookupParams) => Promise<MemoryLookupResult>;
   writeAnswerMemory?:      (params: WriteMemoryParams) => Promise<void>;
   recordMemoryHit?:        (memoryId: number) => Promise<void>;
@@ -551,26 +551,46 @@ export const askLectureAgent = async (
         c => ({ chunkCount: c.length })
       );
 
-      currentStage = 'summarize-lecture-content';
-      const summary = allChunks.length > 0
-        ? await trace.span(
-            'summarize-lecture-content', // covers batching + per-batch summarize + combine as one stage
-            () => generateLectureSummaryFn(allChunks, lecture.title),
-            s => ({ summaryProduced: !!s })
-          )
-        : null;
-
-      if (!summary) {
-        const reason: NotFoundReason = allChunks.length === 0 ? 'EMPTY_LECTURE' : 'SUMMARY_CONTENT_EMPTY';
-        logger.warn(`[CHAT] ⚠️  No summary available for lecture #${lectureId} (${allChunks.length} chunk(s) found)`);
+      // No content at all: a real "nothing to summarise" answer.
+      if (allChunks.length === 0) {
+        logger.warn(`[CHAT] ⚠️  No summary available for lecture #${lectureId} (0 chunks found)`);
         currentStage = 'save-chat-entry';
         await trace.span('save-chat-entry', async () => {
           await saveChatEntry({ studentId, lectureId, question, answer: summaryUnavailable, sourceChunkIds: [], sessionId, traceId: trace.traceId });
           await touchSession(studentId, sessionId, question);
         }, () => ({ sourceChunkCount: 0 }));
-        finishTrace('SUCCESS', { responseStatus: 'NOT_FOUND', notFoundReason: reason, memoryResult: 'NOT_ATTEMPTED' });
+        finishTrace('SUCCESS', { responseStatus: 'NOT_FOUND', notFoundReason: 'EMPTY_LECTURE', memoryResult: 'NOT_ATTEMPTED' });
         return { answer: summaryUnavailable, sources: [] };
       }
+
+      currentStage = 'summarize-lecture-content';
+      const result = await trace.span(
+        'summarize-lecture-content', // covers batching + per-batch summarize + combine as one stage
+        () => generateLectureSummaryFn(allChunks, lecture.title),
+        r => ({ summaryProduced: !!r.summary, summaryBatchesAttempted: r.batchesAttempted, summaryBatchesSucceeded: r.batchesSucceeded }),
+        r => (!r.summary ? 'ERROR' : r.batchesSucceeded < r.batchesAttempted ? 'FALLBACK' : 'SUCCESS')
+      );
+      trace.setAttributes({ summaryBatchesAttempted: result.batchesAttempted, summaryBatchesSucceeded: result.batchesSucceeded });
+
+      // Content exists but nothing could be summarised — an LLM outage, not
+      // an empty lecture. Not saved to chat history, so the failure text is
+      // never replayed as context on later turns.
+      if (!result.summary) {
+        logger.error(`[CHAT] ❌ Summary failed for lecture #${lectureId}: ${result.batchesSucceeded}/${result.batchesAttempted} batch(es) succeeded — returning 503, nothing saved`);
+        finishTrace('ERROR', {
+          responseStatus: 'ERROR',
+          failedStage: 'summarize-lecture-content',
+          memoryResult: 'NOT_ATTEMPTED',
+          summaryBatchesAttempted: result.batchesAttempted,
+          summaryBatchesSucceeded: result.batchesSucceeded,
+        });
+        throw new AppError(summaryModule.LECTURE_SUMMARY_FAILED_MESSAGE, 503);
+      }
+
+      // Some batches failed: say so, so a partial summary is never presented
+      // as the whole lecture. (Summaries are never written to answer memory.)
+      const partial = result.batchesSucceeded < result.batchesAttempted;
+      const summary = partial ? `${result.summary}${summaryModule.PARTIAL_SUMMARY_NOTE}` : result.summary;
 
       const chunkIds = allChunks.map(c => c.id);
       currentStage = 'save-chat-entry';
@@ -578,7 +598,7 @@ export const askLectureAgent = async (
         await saveChatEntry({ studentId, lectureId, question, answer: summary, sourceChunkIds: chunkIds, sessionId, traceId: trace.traceId });
         await touchSession(studentId, sessionId, question);
       }, () => ({ sourceChunkCount: chunkIds.length }));
-      logger.info(`[CHAT] ✅ Summary answered for session #${sessionId} (${allChunks.length} chunk(s))`);
+      logger.info(`[CHAT] ✅ Summary answered for session #${sessionId} (${allChunks.length} chunk(s)${partial ? `, partial ${result.batchesSucceeded}/${result.batchesAttempted}` : ''})`);
       finishTrace('SUCCESS', { responseStatus: 'SUMMARY_ANSWERED', selectedChunkCount: chunkIds.length, memoryResult: 'NOT_ATTEMPTED' });
       return { answer: summary, sources: allChunks };
     }

@@ -31,6 +31,7 @@ import { askLectureAgent, LECTURE_NOT_FOUND_MESSAGE, type AskLectureAgentDeps } 
 import { VERIFICATION_UNAVAILABLE_MESSAGE } from '../rag/guardrails/output/output-guardrail.service';
 import type { OutputGuardrailResult } from '../rag/guardrails/output/answer-verification.types';
 import type { FinishedTrace } from '../observability/types';
+import { generateLectureSummary, LECTURE_SUMMARY_FAILED_MESSAGE, PARTIAL_SUMMARY_NOTE } from '../services/lecture-summary.service';
 
 interface CaseResult { pass: boolean; detail?: string }
 interface Case { label: string; run: () => Promise<CaseResult> }
@@ -543,6 +544,66 @@ cases.push({
     const named = (src.match(/currentStage = 'save-chat-entry';\n\s*(?:const savedEntryId = )?await trace\.span\('save-chat-entry'/g) ?? []).length;
     const pass = !/currentStage = 'unknown'/.test(src) && /currentStage = 'load-lecture';\n\s*const lecture = await getLectureById/.test(src) && saves === named && saves > 0;
     return { pass, detail: `save spans=${saves}, named=${named}` };
+  },
+});
+
+// ── S4: a summary outage is an error; a partial summary says so ─────────
+// Three chunks that land in three batches (maxCharsPerBatch is tiny), with
+// summarizeBatch scripted per batch.
+async function summaryThroughOrchestrator(batchOk: boolean[]) {
+  const lectureChunks = [1, 2, 3].map(i => chunk(i, `Q: q${i}\nA: ${'x'.repeat(50)}`));
+  let n = 0;
+  const realSummary = (cs: QnaChunk[], title: string) => generateLectureSummary(cs, title, {
+    summarizeBatch: async () => (batchOk[n++] ? `partial-${n}` : null),
+    combineSummaries: async parts => `combined(${parts.join('+')})`,
+  }, { maxCharsPerBatch: 10 });
+  const { deps, spies } = orchestratorDeps({
+    classifyRoute: async () => ({ route: 'LECTURE_SUMMARY', source: 'rule' }),
+    getAllLectureChunks: async () => lectureChunks,
+    generateLectureSummary: realSummary,
+  });
+  const { value, db } = await withFakeDb(() => askOrchestrator(deps, 'Summarize this lecture'));
+  return { value, db, spies };
+}
+
+cases.push({
+  label: 'S4a. Chunks exist but every summary batch fails → 503 "couldn\'t generate a summary", trace ERROR, nothing saved to chat_history',
+  run: async () => {
+    const { value: err, db, spies } = await summaryThroughOrchestrator([false, false, false]);
+    const t = spies.traces[0];
+    const pass = err instanceof AppError && err.statusCode === 503 && err.message === LECTURE_SUMMARY_FAILED_MESSAGE
+      && db.history.length === 0 && spies.traces.length === 1 && t.status === 'ERROR'
+      && t.attributes.failedStage === 'summarize-lecture-content' && t.attributes.summaryBatchesSucceeded === 0;
+    return { pass, detail: `status=${(err as AppError).statusCode}, history=${db.history.length}, trace=${t?.status}/${t?.attributes.failedStage}` };
+  },
+});
+
+cases.push({
+  label: 'S4b. One of three batches fails → the summary carries the "part of this lecture couldn\'t be summarised" note; batches traced',
+  run: async () => {
+    const { value: res, db, spies } = await summaryThroughOrchestrator([true, false, true]);
+    const answer = (res as { answer?: string }).answer ?? '';
+    const t = spies.traces[0];
+    const pass = !(res instanceof Error) && answer === `combined(partial-1+partial-3)${PARTIAL_SUMMARY_NOTE}`
+      && db.history[0]?.answer === answer && t.attributes.summaryBatchesAttempted === 3 && t.attributes.summaryBatchesSucceeded === 2
+      && t.attributes.responseStatus === 'SUMMARY_ANSWERED' && spies.memoryWrites.length === 0;
+    return { pass, detail: `answer="${answer.slice(0, 70)}…", batches=${t?.attributes.summaryBatchesSucceeded}/${t?.attributes.summaryBatchesAttempted}` };
+  },
+});
+
+cases.push({
+  label: 'S4c. All batches succeed → no note; an empty lecture still answers the "could not generate" message (EMPTY_LECTURE, saved)',
+  run: async () => {
+    const { value: res } = await summaryThroughOrchestrator([true, true, true]);
+    const answer = (res as { answer?: string }).answer ?? '';
+    const { deps, spies } = orchestratorDeps({
+      classifyRoute: async () => ({ route: 'LECTURE_SUMMARY', source: 'rule' }),
+      getAllLectureChunks: async () => [],
+    });
+    const { value: empty, db } = await withFakeDb(() => askOrchestrator(deps, 'Summarize this lecture'));
+    const pass = answer === 'combined(partial-1+partial-2+partial-3)' && !answer.includes(PARTIAL_SUMMARY_NOTE.trim())
+      && !(empty instanceof Error) && db.history.length === 1 && spies.traces[0]?.attributes.notFoundReason === 'EMPTY_LECTURE';
+    return { pass, detail: `answer="${answer}", empty=${(empty as { answer?: string }).answer}` };
   },
 });
 

@@ -176,7 +176,7 @@ async function runTracingChecks(): Promise<Record<string, CaseResult>> {
       const { trace } = await withTrace('Summarize this lecture.', {
         classifyRoute: async () => ({ route: 'LECTURE_SUMMARY', source: 'rule' }),
         getAllLectureChunks: async () => [fakeChunk(2, lectureId)],
-        generateLectureSummary: async () => 'A fixture summary.',
+        generateLectureSummary: async () => ({ summary: 'A fixture summary.', batchesAttempted: 1, batchesSucceeded: 1 }),
       }, ctx);
       const names = spanNames(trace);
       results['4'] = { pass: names.includes('fetch-all-lecture-chunks') && names.includes('summarize-lecture-content'), detail: `spans=${JSON.stringify(names)}` };

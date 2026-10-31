@@ -541,7 +541,7 @@ async function runIntegrationChecks(): Promise<Record<string, CaseResult>> {
       await askLectureAgent({ studentId, lectureId, question: 'Summarize this lecture.', sessionId: session.id }, {
         classifyRoute: async () => ({ route: 'LECTURE_SUMMARY', source: 'rule' }),
         getAllLectureChunks: async () => [chunk],
-        generateLectureSummary: async () => 'A fixture summary.',
+        generateLectureSummary: async () => ({ summary: 'A fixture summary.', batchesAttempted: 1, batchesSucceeded: 1 }),
       });
       const after = (await query<{ c: string }>(`SELECT COUNT(*) c FROM rag_answer_memory WHERE lecture_id = $1`, [lectureId])).rows[0].c;
       results['16'] = { pass: before === after, detail: `count before=${before}, after=${after}` };
