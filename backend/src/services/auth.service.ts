@@ -14,6 +14,10 @@ import { User, PasswordResetToken, EmailVerificationToken } from '../types';
 // resend-button cooldown, so that stays 60 seconds.
 const RESEND_COOLDOWN_SECONDS = 60;
 
+// A real bcrypt hash (of a random value) at the configured cost, compared
+// against when there is no account, so that path costs the same as a real one.
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync(crypto.randomBytes(16).toString('hex'), env.BCRYPT_SALT_ROUNDS);
+
 // ── LOGIN ─────────────────────────────────────────────
 type LoginResult =
   | { status: 'AUTHENTICATED'; user: Omit<User, 'password_hash'>; accessToken: string; refreshToken: string }
@@ -26,14 +30,13 @@ export const loginUser = async (email: string, password: string): Promise<LoginR
     [email.toLowerCase()]
   );
   const user = rows[0];
-  if (!user) {
-    logger.warn(`[AUTH] loginUser: no account found for "${email}"`);
+  // Missing accounts and Google-only accounts still run one bcrypt compare and
+  // get the same message as a wrong password, so neither the response nor its
+  // timing tells a caller whether (or how) an address is registered.
+  if (!user || !user.password_hash) {
+    await comparePassword(password, DUMMY_PASSWORD_HASH);
+    logger.warn(`[AUTH] loginUser: ${user ? 'Google-only account attempted password login' : 'no account found'} — "${email}"`);
     throw new AppError('Invalid email or password', 401);
-  }
-
-  if (!user.password_hash) {
-    logger.warn(`[AUTH] loginUser: Google-only account attempted password login — "${email}"`);
-    throw new AppError('This account uses Google sign-in. Please log in with Google.', 401);
   }
 
   const valid = await comparePassword(password, user.password_hash);
@@ -180,7 +183,7 @@ const issuePasswordResetOtp = async (email: string): Promise<void> => {
     // The real reason stays in the log. Burn a bcrypt hash so the response time
     // does not give the missing account away either.
     logger.warn(`[AUTH] password reset requested for unknown email "${email}" — no OTP sent`);
-    await bcrypt.hash('x', 12);
+    await bcrypt.compare('x', DUMMY_PASSWORD_HASH);
     return;
   }
 
@@ -461,7 +464,7 @@ export const resendSignupOtp = async (email: string): Promise<void> => {
   // reason stays in the log.
   if (!user || user.is_verified) {
     logger.warn(`[AUTH] resendSignupOtp: nothing to resend for "${email}" (${user ? 'already verified' : 'unknown email'})`);
-    await bcrypt.hash('x', 12);
+    await bcrypt.compare('x', DUMMY_PASSWORD_HASH);
     return;
   }
 
@@ -489,7 +492,7 @@ export const resendLoginOtp = async (email: string): Promise<number> => {
   const user = rows[0];
   if (!user || user.is_verified) {
     logger.warn(`[AUTH] resendLoginOtp: nothing to resend for "${email}" (${user ? 'already verified' : 'unknown email'})`);
-    await bcrypt.hash('x', 12);
+    await bcrypt.compare('x', DUMMY_PASSWORD_HASH);
     return RESEND_COOLDOWN_SECONDS;
   }
 
