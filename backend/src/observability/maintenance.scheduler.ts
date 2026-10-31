@@ -4,7 +4,10 @@ import { logger } from '../utils/logger';
 import { runAlertCheck } from './alerts.service';
 
 // Timers for the email alert check and the daily rag_request_log cleanup.
-// All timers are unref()'d and cleared by stopMaintenanceScheduler().
+// Retention always runs (it used to start only with email alerts, which ship
+// disabled, so the 90-day retention never ran); the alert check only when
+// OBSERVABILITY_ALERTS_ENABLED. All timers are unref()'d and cleared by
+// stopMaintenanceScheduler().
 
 const RETENTION_LOCK_KEY = 804002;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -46,16 +49,18 @@ export async function runRetention(): Promise<number> {
 }
 
 export function startMaintenanceScheduler(): void {
-  if (alertTimer || retentionTimer) return;
+  if (retentionTimer) return;
 
-  alertTimer = setInterval(() => {
-    if (alertRunning) return;
-    alertRunning = true;
-    runAlertCheck()
-      .catch(err => logger.error('[ALERTS] check failed', err))
-      .finally(() => { alertRunning = false; });
-  }, env.OBSERVABILITY.ALERT_CHECK_INTERVAL_MS);
-  alertTimer.unref();
+  if (env.OBSERVABILITY.ALERTS_ENABLED) {
+    alertTimer = setInterval(() => {
+      if (alertRunning) return;
+      alertRunning = true;
+      runAlertCheck()
+        .catch(err => logger.error('[ALERTS] check failed', err))
+        .finally(() => { alertRunning = false; });
+    }, env.OBSERVABILITY.ALERT_CHECK_INTERVAL_MS);
+    alertTimer.unref();
+  }
 
   const retention = (): void => {
     if (retentionRunning) return;
@@ -69,7 +74,13 @@ export function startMaintenanceScheduler(): void {
   retentionTimer = setInterval(retention, DAY_MS);
   retentionTimer.unref();
 
-  logger.info(`[ALERTS] scheduler started (check every ${env.OBSERVABILITY.ALERT_CHECK_INTERVAL_MS}ms, retention ${env.OBSERVABILITY.RETENTION_DAYS}d)`);
+  logger.info(`[MAINTENANCE] scheduler started: request-log retention ${env.OBSERVABILITY.RETENTION_DAYS}d (daily); `
+    + (alertTimer ? `email alerts every ${env.OBSERVABILITY.ALERT_CHECK_INTERVAL_MS}ms` : 'email alerts off (OBSERVABILITY_ALERTS_ENABLED=false)'));
+}
+
+// Which parts are running — for tests and diagnostics.
+export function maintenanceSchedulerState(): { retention: boolean; alerts: boolean } {
+  return { retention: retentionTimer !== null, alerts: alertTimer !== null };
 }
 
 export function stopMaintenanceScheduler(): void {

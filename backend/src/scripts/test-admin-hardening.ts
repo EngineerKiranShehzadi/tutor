@@ -48,6 +48,7 @@ import { computeEnrichedOverviewMetrics, overviewCache } from '../services/obser
 import { rateLimitStore } from '../graphql/resolvers/auth.resolver';
 import { ExpiringMap } from '../utils/expiring-map';
 import { globalLimiter, userLimiter } from '../middleware/rateLimiter';
+import { startMaintenanceScheduler, stopMaintenanceScheduler, maintenanceSchedulerState } from '../observability/maintenance.scheduler';
 
 const results: { name: string; pass: boolean; detail: string }[] = [];
 const check = (name: string, pass: boolean, detail: string) => {
@@ -613,6 +614,34 @@ const run = async () => {
       server.close();
       await globalLimiter.resetKey('127.0.0.1'); await globalLimiter.resetKey('::ffff:127.0.0.1');
       await userLimiter.resetKey('u:00000000-0000-4000-8000-0000000000a1');
+    }
+  }
+
+  // ── AD2: request-log retention runs even with email alerts off ───────
+  {
+    const obs = env.OBSERVABILITY as { ALERTS_ENABLED: boolean };
+    const saved = obs.ALERTS_ENABLED;
+    const serverSrc = readFileSync(join(__dirname, '..', 'server.ts'), 'utf8');
+    try {
+      obs.ALERTS_ENABLED = false;
+      stopMaintenanceScheduler();
+      startMaintenanceScheduler();
+      const off = maintenanceSchedulerState();
+      startMaintenanceScheduler(); // double start is a no-op
+      const again = maintenanceSchedulerState();
+      stopMaintenanceScheduler();
+      obs.ALERTS_ENABLED = true;
+      startMaintenanceScheduler();
+      const on = maintenanceSchedulerState();
+      stopMaintenanceScheduler();
+      const stopped = maintenanceSchedulerState();
+      check('AD2-1. ALERTS_ENABLED=false: the retention timer is registered and the alert timer is not; with alerts on both are; server.ts starts it outside tests regardless of alerts',
+        off.retention && !off.alerts && again.retention && !again.alerts && on.retention && on.alerts && !stopped.retention && !stopped.alerts
+          && /if \(env\.NODE_ENV !== 'test'\) \{\s*startMaintenanceScheduler\(\);/.test(serverSrc),
+        `off=${JSON.stringify(off)} on=${JSON.stringify(on)} stopped=${JSON.stringify(stopped)}`);
+    } finally {
+      stopMaintenanceScheduler();
+      obs.ALERTS_ENABLED = saved;
     }
   }
 
