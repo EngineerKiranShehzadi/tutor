@@ -733,7 +733,8 @@ const run = async () => {
                    FROM generate_series(1, 120) g RETURNING id)
                  INSERT INTO dataset_version_chunks (version_id, chunk_id, qa_id, chunk_index) SELECT $2, id, 'ad6-' || id, 0 FROM c`, [lec, ver]);
     await query('UPDATE lectures SET active_version_id = $2 WHERE id = $1', [lec, ver]);
-    const stu = (await query<{ id: string }>(`INSERT INTO users (name, email, password_hash, is_verified, role) VALUES ('AD6 Pager', $1, 'x', TRUE, 'STUDENT') RETURNING id`, [`ad6-${Date.now()}@example.test`])).rows[0].id;
+    const pager = `AD6 Pager ${Date.now()}`; // unique per run: the suite may reuse a database
+    const stu = (await query<{ id: string }>(`INSERT INTO users (name, email, password_hash, is_verified, role) VALUES ($2, $1, 'x', TRUE, 'STUDENT') RETURNING id`, [`ad6-${Date.now()}@example.test`, pager])).rows[0].id;
     await query(`INSERT INTO student_questions (student_id, lecture_id, question, created_at)
                  SELECT $1, $2, 'journey q' || g, NOW() - g * INTERVAL '1 minute' FROM generate_series(1, 120) g`, [stu, lec]);
 
@@ -744,7 +745,7 @@ const run = async () => {
     const studentsTotal = Number((await query<{ n: string }>(`SELECT COUNT(*) AS n FROM users WHERE role = 'STUDENT'`)).rows[0].n);
     const usersTotal = Number((await query<{ n: string }>(`SELECT COUNT(*) AS n FROM users`)).rows[0].n);
     const students = await getRegisteredStudents({ limit: 1000 });
-    const oneStudent = await getRegisteredStudents({ search: 'AD6 Pager', status: 'ACTIVE' });
+    const oneStudent = await getRegisteredStudents({ search: pager, status: 'ACTIVE' });
     const users = await getAllUsers({ limit: 1000 });
     const journey = await getStudentJourney(stu, { limit: 1000 });
     check('AD6-1. lectureChunks/registeredStudents/allUsers/studentJourney: limit=1000 is clamped to 100 and total is exact',
