@@ -7,6 +7,60 @@ Newest entry at the top.
 
 ---
 
+## 2026-11-01 — Student PII stays on the server, "00" numbers masked, format repairs checked, trace list from the request log (D9, R1–R4)
+
+**Changed by:** Kiran
+**Files:** `rag/guardrails/input/input-guardrail.service.ts` and its types, `services/chat.service.ts`,
+`rag/guardrails/shared/pii/pii-detector.service.ts`, `rag/guardrails/output/output-guardrail.service.ts`,
+`answer-verification.types.ts`, `format/response-format-repair.service.ts`, `format/response-format.types.ts`,
+`format/response-format.guard.ts`, `format/response-format-repair-check.service.ts` (new), `llm/llm.types.ts`,
+`services/observability/traces.service.ts`, `validation/observability.schema.ts`, comments in
+`observability/request-log.service.ts` and migration `018`; frontend monitor labels and Traces page; tests in
+`backend/src/scripts/`, `scripts/check-format-repair-live.ts` (new, `npm run check:format-repair-live`)
+
+**Deploy note:** no new migration. Deploy backend and frontend together (Traces page, two monitor labels).
+The trace list's filters need `REQUEST_LOG_ENABLED=true` (the default); with it off, a route, lecture,
+student, model, memory or error-code filter is refused with a 400 that says so. Run
+`npm run check:format-repair-live` once with the OpenAI key: it has not been run against the real model yet.
+
+**Student answers**
+- **D9 reversed — a student's phone number reached OpenAI and Voyage.** Retrieval used the question from
+  before PII masking. When D9 was made, embedding and rerank ran on our own machine; now embedding is OpenAI
+  and rerank is Voyage, so a number typed by a student left the server unmasked. Every stage, retrieval
+  included, now uses the masked question, and the guardrail no longer returns the unmasked text at all. D9's
+  reason (masking hurt recall) went away with ST1: only real PII is masked, not lecture numbers, and
+  retrieval never needs the student's own phone number.
+- **R1 — "00" numbers were not masked.** A leading `00` follows the same rule as `+` (7–15 digits after it):
+  00923001234567, 0014155552671 and 0092 300 1234567 are masked. A run that reads as a quantity is still left
+  alone (zero-padded binary such as 0010110101). A digit run starting with 0 is no longer read as a card
+  number (00447911123456 passes the card checksum and was labelled `[CREDIT_CARD]`).
+- **R1 — a section word anywhere nearby exempted an IP.** "Section 2 - 8.8.8.8" kept the address. The cue
+  word must now sit right before the dotted number; a list counts only when every earlier entry is itself a
+  four-part number ("Sections 3.1.2.1 and 3.1.2.2").
+- **R3 / R4 — format repairs are checked, not word-counted.** A list/table repair is an LLM rewrite made
+  after the answer was verified, so the text served was never checked. Word counts stood in for that, and
+  each patch opened another gap: a claim in a short table header ("Accuracy (%)" with 61/78/92), one item cut
+  from a 6–7 item list, a curly "isn’t" turned positive. They are removed. After an LLM repair, one call on
+  the answer-verification model compares the repair with the verified answer and lists anything added, left
+  out or changed. Any finding, or a failed call, keeps the original answer (`formatRepairRejected`
+  `NEW_CONTENT`, `LOST_CONTENT`, `CHANGED_MEANING` or `CHECK_FAILED`). It compares with the answer, not the
+  lecture, because a check against the lecture cannot see a dropped item. The deterministic list repair
+  (the answer's own "a, b and c" re-punctuated) needs no call. Cost: one call per LLM repair, about
+  $0.0002 on gpt-6-luna.
+
+**Operators**
+- **R2 — Traces and Errors filters found nothing on real Phoenix.** Phoenix's trace list returns spans
+  without attributes, so route, lecture, student, model, memory result and error code were blank and every
+  filter on them came back empty; the test passed only because its fake Phoenix sent attributes. The list
+  now reads `rag_request_log` (requests exported to Phoenix only, so every row opens): filters, sort and
+  paging run in SQL over the whole log instead of the latest 500 traces. The trace view still reads Phoenix.
+  Also fixed on the same page: "Success" now matches (Phoenix says OK), "Not attempted" is accepted (it was
+  a 422), and "Miss" includes misses whose answer was then cached. Search matches the trace ID only, and the
+  Question column points to the trace view: the log holds no question text (both were empty on real Phoenix
+  already).
+
+---
+
 ## 2026-11-01 — Final stack: gpt-6-luna on every LLM task; Gemini, Groq and the Voyage embedder removed
 
 **Changed by:** Kiran
