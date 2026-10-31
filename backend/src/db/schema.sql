@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
   expires_at TIMESTAMPTZ NOT NULL,          -- now + 5 minutes
   used       BOOLEAN     NOT NULL DEFAULT FALSE,
   verified   BOOLEAN     NOT NULL DEFAULT FALSE,  -- true after OTP verified
+  attempts   INT         NOT NULL DEFAULT 0,      -- wrong-guess counter, burns at 5
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -53,6 +54,7 @@ CREATE TABLE IF NOT EXISTS email_verification_tokens (
   code_hash  TEXT        NOT NULL,          -- bcrypt of 6-digit OTP (cost 12)
   expires_at TIMESTAMPTZ NOT NULL,          -- now + 5 minutes
   used       BOOLEAN     NOT NULL DEFAULT FALSE,
+  attempts   INT         NOT NULL DEFAULT 0,    -- wrong-guess counter, burns at 5
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

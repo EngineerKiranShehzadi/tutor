@@ -22,6 +22,7 @@ export interface PasswordResetToken {
   expires_at: Date;
   used: boolean;
   verified: boolean;
+  attempts: number;
   created_at: Date;
 }
 
@@ -31,6 +32,7 @@ export interface EmailVerificationToken {
   code_hash: string;
   expires_at: Date;
   used: boolean;
+  attempts: number;
   created_at: Date;
 }
 

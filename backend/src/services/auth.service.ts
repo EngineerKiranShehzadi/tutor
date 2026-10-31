@@ -133,6 +133,38 @@ export const logoutUser = async (userId: string, refreshToken: string) => {
   logger.info(`[AUTH] ✅ Refresh token revoked for user ${userId}`);
 };
 
+// ── OTP: GUESS LIMIT ──────────────────────────────────
+// A 6-digit code has only a million values, so without a cap it can be
+// brute-forced inside its lifetime. Each code gets OTP_MAX_ATTEMPTS guesses.
+// The guess is RESERVED (counter incremented, atomically) BEFORE the slow bcrypt
+// compare, so parallel requests cannot all pass a "still under the limit" check
+// and exceed the cap together.
+const OTP_MAX_ATTEMPTS = 5;
+const OTP_TOO_MANY_ATTEMPTS = 'Too many incorrect attempts. Please request a new code.';
+
+type OtpTable = 'password_reset_tokens' | 'email_verification_tokens';
+
+// Returns which guess this is (1..OTP_MAX_ATTEMPTS), or null when the code has
+// no guesses left or was already used.
+const reserveOtpAttempt = async (table: OtpTable, tokenId: string): Promise<number | null> => {
+  const { rows } = await query<{ attempts: number }>(
+    `UPDATE ${table} SET attempts = attempts + 1
+     WHERE id = $1 AND used = FALSE AND attempts < $2
+     RETURNING attempts`,
+    [tokenId, OTP_MAX_ATTEMPTS]
+  );
+  return rows[0]?.attempts ?? null;
+};
+
+// Throws the right error for a wrong code, burning the code on the last guess.
+const rejectWrongOtp = async (table: OtpTable, tokenId: string, attemptNo: number, message: string): Promise<never> => {
+  if (attemptNo >= OTP_MAX_ATTEMPTS) {
+    await query(`UPDATE ${table} SET used = TRUE WHERE id = $1`, [tokenId]);
+    throw new AppError(OTP_TOO_MANY_ATTEMPTS, 400);
+  }
+  throw new AppError(message, 400);
+};
+
 // ── OTP: INTERNAL ─────────────────────────────────────
 // Shared by requestPasswordReset and resendPasswordResetOtp
 const issuePasswordResetOtp = async (email: string): Promise<void> => {
@@ -215,15 +247,18 @@ export const verifyOtp = async (email: string, code: string): Promise<void> => {
     throw new AppError('Expired OTP. Please request a new one.', 400);
   }
 
+  const attemptNo = await reserveOtpAttempt('password_reset_tokens', token.id);
+  if (attemptNo === null) throw new AppError(OTP_TOO_MANY_ATTEMPTS, 400);
+
   const valid = await bcrypt.compare(code, token.code_hash);
   if (!valid) {
-    logger.warn(`[AUTH] verifyOtp: invalid OTP code for "${email}"`);
-    throw new AppError('Invalid OTP. Please check and try again.', 400);
+    logger.warn(`[AUTH] verifyOtp: invalid OTP code for "${email}" (attempt ${attemptNo}/${OTP_MAX_ATTEMPTS})`);
+    await rejectWrongOtp('password_reset_tokens', token.id, attemptNo, 'Invalid OTP. Please check and try again.');
   }
 
   // Mark verified — token is NOT consumed yet, only consumed after password reset
   await query(
-    'UPDATE password_reset_tokens SET verified = TRUE WHERE id = $1',
+    'UPDATE password_reset_tokens SET verified = TRUE WHERE id = $1 AND used = FALSE',
     [token.id]
   );
   logger.info(`[AUTH] ✅ Password reset OTP verified for "${email}"`);
@@ -476,18 +511,27 @@ export const verifySignupOtp = async (
     throw new AppError('Expired OTP. Please request a new one.', 400);
   }
 
+  const attemptNo = await reserveOtpAttempt('email_verification_tokens', token.id);
+  if (attemptNo === null) throw new AppError(OTP_TOO_MANY_ATTEMPTS, 400);
+
   const valid = await bcrypt.compare(code, token.code_hash);
   if (!valid) {
-    logger.warn(`[AUTH] verifySignupOtp: invalid OTP code for "${email}"`);
-    throw new AppError('Invalid OTP', 400);
+    logger.warn(`[AUTH] verifySignupOtp: invalid OTP code for "${email}" (attempt ${attemptNo}/${OTP_MAX_ATTEMPTS})`);
+    await rejectWrongOtp('email_verification_tokens', token.id, attemptNo, 'Invalid OTP');
   }
 
-  // Atomic: mark user verified + consume token
+  // Atomic: consume token + mark user verified. The token is consumed first and
+  // must flip exactly one row, so a second concurrent correct guess cannot also
+  // mint a session from the same code.
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    const consumed = await client.query(
+      'UPDATE email_verification_tokens SET used = TRUE WHERE id = $1 AND used = FALSE',
+      [token.id]
+    );
+    if (consumed.rowCount !== 1) throw new AppError('Invalid OTP', 400);
     await client.query('UPDATE users SET is_verified = TRUE WHERE id = $1', [user.id]);
-    await client.query('UPDATE email_verification_tokens SET used = TRUE WHERE id = $1', [token.id]);
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');
