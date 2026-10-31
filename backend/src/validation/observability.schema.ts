@@ -6,7 +6,10 @@ import { query, param, body } from 'express-validator';
 // introducing a second validation library.
 
 const ISO_DATE_MSG = 'must be a valid ISO 8601 timestamp';
-const isoDate = (field: string) => query(field).optional().isISO8601().withMessage(`${field} ${ISO_DATE_MSG}`).toDate();
+// Kept as the validated ISO string (no .toDate()): routes and services type it
+// as a string, hand it to the Phoenix client as one, and key the overview
+// cache on it.
+const isoDate = (field: string) => query(field).optional().isISO8601().withMessage(`${field} ${ISO_DATE_MSG}`);
 
 const SORT_FIELDS = ['start_time', 'latency_ms'];
 const ORDER_VALUES = ['asc', 'desc'];

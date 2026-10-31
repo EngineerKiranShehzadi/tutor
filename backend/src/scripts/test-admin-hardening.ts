@@ -975,7 +975,7 @@ const run = async () => {
       `graphql="${errs[0]?.message}" status=${(direct as AppError).statusCode}`);
   }
 
-  // ── X1: GET /traces?errorOnly reaches the service as a real filter ──
+  // ── X1/X2: trace-list query params reach the service as their real types ──
   {
     // Only the service the route calls is stubbed; the route, its validators and auth are real.
     // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -998,6 +998,9 @@ const run = async () => {
       check('X1-1. GET /traces?errorOnly=true hands errorOnly=true to listTraces (it was always false, so the Errors page listed successful traces); false/absent stay false',
         statuses.every(s => s === 200) && seen[0]?.errorOnly === true && seen[1]?.errorOnly === false && seen[2]?.errorOnly === false,
         `statuses=${statuses.join(',')} errorOnly=${seen.map(f => f.errorOnly).join(',')}`);
+      check('X2-1. startTime/endTime reach listTraces as the ISO strings they are typed as (they were Date objects)',
+        seen[0]?.startTime === '2026-10-01T00:00:00Z' && seen[0]?.endTime === '2026-10-02T00:00:00Z',
+        `startTime=${Object.prototype.toString.call(seen[0]?.startTime)} ${String(seen[0]?.startTime)}`);
     } finally {
       tracesSvc.listTraces = original;
       srv.close();
