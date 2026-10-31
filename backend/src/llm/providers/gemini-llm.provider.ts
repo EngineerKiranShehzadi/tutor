@@ -1,6 +1,8 @@
 import { GeminiSchemaType, type GeminiSchema, generateContent, generateContentStream, type GeminiGenerateResult } from '../../services/gemini-provider.service';
 import { toGeminiThinkingConfig } from './gemini-thinking';
 import type { LlmProvider } from './llm-provider.interface';
+import { AppError } from '../../middleware/errorHandler';
+import { env } from '../../config/env';
 import type { LlmRequest, LlmResponse, LlmSchema } from '../llm.types';
 
 // The only file in the codebase that maps the provider-neutral LlmSchema
@@ -51,6 +53,11 @@ const toLlmResponse = (result: GeminiGenerateResult, model: string): LlmResponse
 
 export const geminiLlmProvider: LlmProvider = {
   name: 'gemini',
+  assertConfigured(): void {
+    if (!env.GEMINI_API_KEY) {
+      throw new AppError('An LLM task uses provider "gemini" but GEMINI_API_KEY is not set — add it to the backend .env (never commit it).', 500);
+    }
+  },
 
   async generate(request: LlmRequest): Promise<LlmResponse> {
     const result = await generateContent({

@@ -62,6 +62,7 @@ const SUITES: Suite[] = [
   { name: 'smoke-providers', script: 'src/scripts/test-smoke-providers.ts' },
   { name: 'tune-thresholds', script: 'src/scripts/test-tune-thresholds.ts' },
   { name: 'hosted-providers', script: 'src/scripts/test-hosted-providers.ts' },
+  { name: 'openai-llm', script: 'src/scripts/test-openai-llm-provider.ts' },
   { name: 'retrieval-providers', script: 'src/scripts/test-retrieval-providers.ts' },
   { name: 'sampling', script: 'src/scripts/test-sampling.ts' },
   { name: 'monitor', script: 'src/scripts/test-monitor.ts' },

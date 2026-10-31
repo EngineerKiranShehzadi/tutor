@@ -38,6 +38,7 @@
     "test:smoke-providers": "ts-node --transpile-only src/scripts/test-smoke-providers.ts",
     "test:tune-thresholds": "ts-node --transpile-only src/scripts/test-tune-thresholds.ts",
     "test:hosted-providers": "ts-node --transpile-only src/scripts/test-hosted-providers.ts",
+    "test:openai-llm": "ts-node --transpile-only src/scripts/test-openai-llm-provider.ts",
     "test:db-guard": "ts-node --transpile-only src/scripts/test-db-guard.ts",
     "test:retrieval-providers": "ts-node --transpile-only src/scripts/test-retrieval-providers.ts",
     "test:llm-thinking": "ts-node --transpile-only src/scripts/test-llm-thinking.ts",

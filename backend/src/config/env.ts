@@ -312,11 +312,19 @@ export const env = {
 
   // ── Provider-neutral LLM configuration ─────────────────────────
   // Every LLM-dependent service picks its provider+model from here rather
-  // than hardcoding either — see src/llm/llm-provider.resolver.ts. Gemini is
-  // the only provider actually implemented today (src/llm/providers/
-  // gemini-llm.provider.ts); the resolver throws a clear error for any other
-  // PROVIDER value until a matching adapter is added.
+  // than hardcoding either — see src/llm/llm-provider.resolver.ts, which has
+  // the registered adapters (gemini, openai, groq) and throws a clear error
+  // for any other PROVIDER value. config/llm-providers.ts checks the selected
+  // providers' keys at startup.
   LLM: {
+    // OpenAI Chat Completions (llm/providers/openai-llm.provider.ts). The same
+    // OPENAI_API_KEY variable as RETRIEVAL.OPENAI_API_KEY (one key covers
+    // embedding and the LLM tasks); read here so the LLM layer never imports
+    // retrieval config.
+    OPENAI: {
+      API_KEY:  nonBlank('OPENAI_API_KEY', ''),
+      BASE_URL: nonBlank('OPENAI_BASE_URL', 'https://api.openai.com/v1'),
+    },
     RAG_ANSWER: {
       PROVIDER:        optional('RAG_LLM_PROVIDER', 'gemini'),
       MODEL:           optional('RAG_ANSWER_MODEL', 'gemini-2.5-flash'),

@@ -1,7 +1,8 @@
 import { env } from '../../config/env';
 import { logger } from '../../utils/logger';
 import type { LlmProvider } from './llm-provider.interface';
-import type { LlmRequest, LlmResponse, LlmSchema } from '../llm.types';
+import type { LlmRequest, LlmResponse } from '../llm.types';
+import { toJsonSchema } from '../json-schema';
 import { GroqRateLimiter, parseGroqDuration } from './groq-rate-limiter';
 
 // TEMPORARY free-tier provider for isolated testing (model: openai/gpt-oss-120b on Groq's OpenAI-compatible API).
@@ -31,24 +32,12 @@ export interface GroqProviderOptions {
 const CHARS_PER_TOKEN = 3.2;            // deliberately pessimistic for English text
 const MAX_RETRIES_429 = 3;
 
-type JsonSchema = Record<string, unknown>;
 type Booking = Awaited<ReturnType<GroqRateLimiter['acquire']>>;
 interface Exchange { res: Response; entry: Booking }
 
-// The only place LlmSchema is mapped onto JSON Schema for Groq (lower-case types; objects closed).
-export function toJsonSchema(schema: LlmSchema): JsonSchema {
-  const typeMap: Record<LlmSchema['type'], string> = { STRING: 'string', NUMBER: 'number', BOOLEAN: 'boolean', OBJECT: 'object', ARRAY: 'array' };
-  const out: JsonSchema = { type: typeMap[schema.type] };
-  if (schema.description !== undefined) out.description = schema.description;
-  if (schema.enum !== undefined) out.enum = schema.enum;
-  if (schema.items !== undefined) out.items = toJsonSchema(schema.items);
-  if (schema.properties !== undefined) {
-    out.properties = Object.fromEntries(Object.entries(schema.properties).map(([k, v]) => [k, toJsonSchema(v)]));
-    out.additionalProperties = false;
-  }
-  if (schema.required !== undefined) out.required = schema.required;
-  return out;
-}
+// JSON Schema for response_format (closed objects; required as written, since
+// Groq is sent strict: false). Re-exported so existing imports keep working.
+export { toJsonSchema };
 
 const redact = (s: string): string => s.replace(/gsk_[A-Za-z0-9_-]+/g, 'gsk_***').replace(/Bearer\s+\S+/gi, 'Bearer ***');
 const estimateTokens = (...parts: (string | undefined)[]) => Math.ceil(parts.reduce((n, p) => n + (p?.length ?? 0), 0) / CHARS_PER_TOKEN);
@@ -179,6 +168,10 @@ export function createGroqProvider(opts: GroqProviderOptions): LlmProvider {
 
   return {
     name: 'groq',
+
+    assertConfigured(): void {
+      if (!opts.apiKey()) throw new Error('An LLM task uses provider "groq" but GROQ_API_KEY is not set — add it to the backend .env (never commit it).');
+    },
 
     async generate(req: LlmRequest): Promise<LlmResponse> {
       const { res, entry } = await callWithSchemaFallback(req, false);

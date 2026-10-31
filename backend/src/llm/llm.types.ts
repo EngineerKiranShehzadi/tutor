@@ -29,8 +29,9 @@ export interface LlmRequest {
   maxOutputTokens?: number;
   // Provider-neutral reasoning effort. Each provider adapter translates it
   // into whatever its models accept (Gemini 2.5: a token budget; Gemini 3.x:
-  // a thinking level) and clamps to what the model allows; providers with no
-  // such control ignore it. Thinking tokens count against maxOutputTokens, so
+  // a thinking level; OpenAI: reasoning_effort, where off/minimal/unset are
+  // "none") and clamps to what the model allows; providers with no such
+  // control ignore it. Thinking tokens count against maxOutputTokens, so
   // small structured-output calls should keep this at 'off'/'minimal'.
   thinking?: LlmThinking;
   // When set, the provider must return JSON matching this shape in

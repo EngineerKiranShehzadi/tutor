@@ -7,6 +7,9 @@ export interface RetryOptions {
   maxDelayMs?: number;
   // Injectable so tests do not really wait.
   sleep?: (ms: number) => Promise<void>;
+  // false: a request that hit its own timeout is not retried (an LLM call's
+  // timeout is the caller's whole deadline, so a retry would multiply it).
+  retryTimeouts?: boolean;
 }
 
 // Statuses worth another attempt: rate limited, or a server-side failure.
@@ -58,7 +61,10 @@ export async function postJsonWithRetry(
         signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (err) {
-      if (attempt >= maxRetries) throw new NetworkError((err as Error).message || 'request failed');
+      const timedOut = (err as Error)?.name === 'TimeoutError';
+      if (attempt >= maxRetries || (timedOut && opts.retryTimeouts === false)) {
+        throw new NetworkError((err as Error).message || 'request failed');
+      }
       await sleep(backoff(attempt));
       continue;
     }

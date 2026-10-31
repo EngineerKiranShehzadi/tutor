@@ -4,6 +4,7 @@ import { verifyEmailTransport } from './services/email.service';
 import { purgeExpiredRefreshTokens } from './services/auth.service';
 import { env } from './config/env';
 import { assertRetrievalProvidersConfigured } from './config/retrieval-providers';
+import { assertLlmProvidersConfigured } from './config/llm-providers';
 import { logger } from './utils/logger';
 import { shutdownPhoenixExporter } from './observability/phoenix';
 import { startMaintenanceScheduler, stopMaintenanceScheduler } from './observability/maintenance.scheduler';
@@ -59,6 +60,7 @@ const installShutdownHandlers = (server: Server): void => {
 const start = async () => {
   try {
     assertRetrievalProvidersConfigured();
+    assertLlmProvidersConfigured();
     await connectDB();
 
     // Only verify email transport if credentials are configured
