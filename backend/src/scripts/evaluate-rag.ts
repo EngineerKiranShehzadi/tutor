@@ -1,7 +1,7 @@
 /**
  * RAG evaluation module — adapted from the LlamaIndex chunk-size evaluation
  * pattern (Faithfulness + Relevancy evaluators, response time) to this
- * project's Gemini + BGE stack.
+ * project's stack (the configured LLM, embedding and rerank providers).
  *
  * This project has no chunk_size to sweep (chunks are fixed Q&A rows, not
  * size-split text), so instead we sweep the retrieval candidate pool size
@@ -10,13 +10,12 @@
  *
  * Usage: npm run eval:rag [lectureId]
  */
-import { env } from '../config/env';
 import { query } from '../config/database';
 import { generateEmbedding } from '../services/embedding.service';
 import { searchChunks } from '../services/vector-search.service';
 import { rerankChunks } from '../services/rerank.service';
-import { generateAnswer } from '../services/llm-gemini.service';
-import { generateContent } from '../services/gemini-provider.service';
+import { generateAnswer } from '../services/answer-generation.service';
+import { judgeLlm, requireLiveLlm } from './live-llm';
 import { getLectureById } from '../services/lecture.service';
 import { QnaChunk } from '../types';
 import { logger } from '../utils/logger';
@@ -24,19 +23,13 @@ import { logger } from '../utils/logger';
 const NUM_EVAL_QUESTIONS = 20;
 const RERANK_TOP_N = 5;
 const CANDIDATE_POOL_SIZES = [5, 10, 15, 20, 30];
-const JUDGE_MODEL = 'gemini-2.5-flash';
-
-if (!env.GEMINI_API_KEY) {
-  console.error('GEMINI_API_KEY is not configured. Please add it to your .env file.');
-  process.exit(1);
-}
+requireLiveLlm();
 
 const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
 
 async function askJudge(prompt: string, attempt = 1): Promise<boolean> {
   try {
-    const result = await generateContent({ model: JUDGE_MODEL, prompt, temperature: 0 });
-    return result.text.trim().toUpperCase().startsWith('PASS');
+    return (await judgeLlm(prompt)).trim().toUpperCase().startsWith('PASS');
   } catch (err: unknown) {
     const msg = String((err as Error).message ?? '');
     const isRateLimit = msg.includes('429') || msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('resource_exhausted');

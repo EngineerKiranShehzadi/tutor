@@ -1,26 +1,19 @@
 /**
  * Sanity check: every real eval run so far scored 100% Faithfulness and
  * 100% Relevancy on every condition. Before trusting that as "the pipeline
- * is perfect," confirm the judge (gemini-flash-lite-latest, the same model
- * used in the real comparisons) can actually tell a bad answer from a good
+ * is perfect," confirm the judge (the answer-verification model, the same
+ * judge used in the real comparisons) can actually tell a bad answer from a good
  * one. Feeds it deliberately wrong answers alongside real good ones and
  * checks whether PASS/FAIL tracks reality.
  *
  * Usage: npm run test:judge-discrimination
  */
-import { env } from '../config/env';
-import { generateContent } from '../services/gemini-provider.service';
+import { judgeLlm, requireLiveLlm } from './live-llm';
 
-const JUDGE_MODEL = 'gemini-flash-lite-latest';
-
-if (!env.GEMINI_API_KEY) {
-  console.error('GEMINI_API_KEY is not configured.');
-  process.exit(1);
-}
+requireLiveLlm();
 
 async function askJudge(prompt: string): Promise<{ verdict: string; raw: string }> {
-  const result = await generateContent({ model: JUDGE_MODEL, prompt, temperature: 0 });
-  const raw = result.text.trim();
+  const raw = (await judgeLlm(prompt)).trim();
   return { verdict: raw.toUpperCase().startsWith('PASS') ? 'PASS' : 'FAIL', raw };
 }
 

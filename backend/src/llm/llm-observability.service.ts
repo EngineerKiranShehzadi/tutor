@@ -5,13 +5,9 @@ import { isContentCaptureEnabled, truncateContent } from '../observability/sanit
 import type { SafeMetadata } from '../observability/types';
 import type { LlmOperationType, LlmResponse } from './llm.types';
 
-// Provider-neutral counterpart to observability/gemini-diagnostics.ts's
-// withGeminiDiagnostic — same span/log mechanics (reused as-is from
-// tracer.ts/otel-semconv.ts/sanitize.ts, nothing duplicated), but
-// llm.provider/llm.model come from the actual resolved provider+model
-// instead of being hardcoded to Gemini. gemini-diagnostics.ts itself is
-// left untouched (still exercised directly by its own tests); every
-// LLM-dependent service call site now goes through this wrapper instead.
+// The one span/log wrapper every LLM-dependent service call goes through
+// (span/log mechanics reused from tracer.ts/otel-semconv.ts/sanitize.ts).
+// llm.provider/llm.model come from the actual resolved provider+model.
 
 export interface LlmDiagnostic {
   operationType: LlmOperationType;
@@ -68,8 +64,7 @@ export const extractLlmUsage = (r: LlmResponse) => ({
 
 // Times an LLM call, logs a safe diagnostic line, and — when a RequestTrace
 // is active for the current async context — creates a real nested LLM span
-// under whichever stage span is currently executing. Mirrors
-// withGeminiDiagnostic's behavior exactly, generalized to any provider.
+// under whichever stage span is currently executing.
 export async function withLlmDiagnostic<T>(
   meta: LlmSpanMeta,
   fn: () => Promise<T>,

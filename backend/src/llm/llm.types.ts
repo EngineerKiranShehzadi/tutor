@@ -1,15 +1,14 @@
 // Provider-neutral types shared by every LLM-dependent service (query
 // router, query rewriter, answer generator, lecture summarizer, prompt
 // injection classifier) and by every provider adapter under providers/.
-// Nothing in here may import from '@google/genai' (or any other provider
-// SDK) — that's the whole point of this module. Provider-specific
+// Nothing in here may import a provider SDK — that's the whole point of
+// this module. Provider-specific
 // translation lives entirely inside providers/*.ts.
 
 // A deliberately small JSON-schema-like subset — just enough to express the
 // structured-output shapes this codebase actually needs (flat/nested
 // objects, enums, arrays). Each provider adapter translates this into
-// whatever schema shape its own SDK wants (see providers/gemini-llm.
-// provider.ts's toGeminiSchema()).
+// whatever schema shape its API wants (see json-schema.ts's toJsonSchema()).
 export interface LlmSchema {
   type: 'STRING' | 'NUMBER' | 'BOOLEAN' | 'OBJECT' | 'ARRAY';
   description?: string;
@@ -28,18 +27,17 @@ export interface LlmRequest {
   temperature?: number;
   maxOutputTokens?: number;
   // Provider-neutral reasoning effort. Each provider adapter translates it
-  // into whatever its models accept (Gemini 2.5: a token budget; Gemini 3.x:
-  // a thinking level; OpenAI: reasoning_effort, where off/minimal/unset are
-  // "none") and clamps to what the model allows; providers with no such
-  // control ignore it. Thinking tokens count against maxOutputTokens, so
+  // into whatever its models accept (OpenAI: reasoning_effort, where
+  // off/minimal/unset are "none") and clamps to what the model allows;
+  // providers with no such control ignore it. Thinking tokens count against maxOutputTokens, so
   // small structured-output calls should keep this at 'off'/'minimal'.
   thinking?: LlmThinking;
   // When set, the provider must return JSON matching this shape in
   // `response.raw` (adapters handle whatever provider-specific flag turns
-  // structured output on, e.g. Gemini's responseMimeType+responseSchema).
+  // structured output on, e.g. OpenAI's strict json_schema response_format).
   responseSchema?: LlmSchema;
   // Aborts the underlying request — same AbortSignal.timeout() idiom used
-  // everywhere else in this codebase (embedding/rerank/gemini-provider).
+  // everywhere else in this codebase (embedding/rerank).
   timeoutMs?: number;
 }
 

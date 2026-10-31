@@ -21,6 +21,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { env } from '../config/env';
+import { requireLiveLlm } from './live-llm';
 import { query } from '../config/database';
 import { QnaChunk } from '../types';
 import {
@@ -30,7 +31,7 @@ import {
   writeAnswerMemory,
 } from '../services/rag-answer-memory.service';
 import { EMBEDDING_MODEL_VERSION } from '../services/embedding.service';
-import { ANSWER_PROMPT_VERSION } from '../services/llm-gemini.service';
+import { ANSWER_PROMPT_VERSION } from '../services/answer-generation.service';
 import {
   askLectureAgent,
   createChatSession,
@@ -44,10 +45,7 @@ import { assertThrowawayDb } from './test-db-guard-lib';
 
 assertThrowawayDb('test-rag-answer-memory');
 
-if (!env.GEMINI_API_KEY) {
-  console.error('GEMINI_API_KEY is not configured.');
-  process.exit(1);
-}
+requireLiveLlm();
 
 interface CaseResult { pass: boolean; skip?: boolean; detail?: string; }
 interface Case { label: string; run: () => Promise<CaseResult>; }
@@ -674,7 +672,7 @@ async function main() {
     '2': '2. Exact memory hit bypasses embedding',
     '3': '3. Exact memory hit bypasses lecture vector search',
     '4': '4. Exact memory hit bypasses reranking',
-    '5': '5. Exact memory hit bypasses Gemini answer generation',
+    '5': '5. Exact memory hit bypasses LLM answer generation',
     '6': '6. Exact memory hit saves a new chat_history row in the current session',
     '7': '7. Cached source chunk IDs are copied to the new chat-history row',
     '8': '8. Session updated_at is touched',

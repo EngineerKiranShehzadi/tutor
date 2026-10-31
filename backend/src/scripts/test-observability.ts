@@ -1,7 +1,7 @@
 /**
  * Validates Phase 1 of the observability layer: root trace + stage spans
  * (tracer.ts), safe metadata, not-found reason codes, Phoenix/OTel safety,
- * Gemini diagnostics, and the /health/live + /health/ready checks.
+ * LLM diagnostics, and the /health/live + /health/ready checks.
  *
  * Phase 2 (rag_request_traces/rag_trace_spans persistence, admin GraphQL
  * queries, System Health page) and Phase 3 (alerting, retention) are not
@@ -27,18 +27,13 @@ import {
   AskLectureAgentDeps,
 } from '../services/chat.service';
 import { checkLiveness, checkReadiness } from '../observability/health.service';
-import { withGeminiDiagnostic } from '../observability/gemini-diagnostics';
+import { withLlmDiagnostic, extractLlmUsage } from '../llm/llm-observability.service';
 import type { FinishedTrace } from '../observability/types';
 import type { OutputGuardrailResult } from '../rag/guardrails/output/answer-verification.types';
 import type { OutputGuardrailParams } from '../rag/guardrails/output/output-guardrail.service';
 import { assertThrowawayDb } from './test-db-guard-lib';
 
 assertThrowawayDb('test-observability');
-
-if (!env.GEMINI_API_KEY) {
-  console.error('GEMINI_API_KEY is not configured.');
-  process.exit(1);
-}
 
 interface CaseResult { pass: boolean; skip?: boolean; detail?: string; }
 interface Case { label: string; run: () => Promise<CaseResult>; }
@@ -60,11 +55,11 @@ const fakeChunk = (id: number, lectureId: number, overrides: Partial<QnaChunk> =
 
 const spanNames = (t: FinishedTrace) => t.spans.map(s => s.name);
 
-// The readiness check's Gemini probe (countTokens) is a real provider call.
-// Force the documented config-only path so nothing in this suite reaches
-// Gemini. env is `as const` at compile time only; the cast keeps this
-// assignment type-checked without `any`.
-(env.HEALTH as { GEMINI_CHECK_ENABLED: boolean }).GEMINI_CHECK_ENABLED = false;
+// No real LLM call from this suite: without a key the answer-LLM readiness
+// probe reports NOT_CONFIGURED without a request, and any LLM call that was
+// not stubbed fails at once instead of reaching the provider. env is `as const`
+// at compile time only; the cast keeps this assignment type-checked.
+(env.LLM.OPENAI as { API_KEY: string }).API_KEY = '';
 
 // Pass-through stub: the draft is returned untouched, as if verification
 // passed and no format/PII handling applied. Never calls a verifier LLM.
@@ -89,7 +84,7 @@ const stubOutputGuardrail = async (params: OutputGuardrailParams): Promise<Outpu
 
 // Every other stage that can reach a real LLM provider by default (input
 // guardrail's injection classifier fallback, query decomposition, greeting
-// generation). Applied to every traced request so no case can hit Gemini.
+// generation). Applied to every traced request so no case can hit an LLM.
 const noLlmDeps: AskLectureAgentDeps = {
   runInputGuardrails: async question => ({ action: 'ALLOW', sanitizedInput: question, metadata: {} }),
   decomposeQuery: async effectiveQuery => ({ mode: 'DIRECT', effectiveQuery, subqueries: [], reason: 'NOT_COMPOUND', llmUsed: false }),
@@ -163,7 +158,7 @@ async function runTracingChecks(): Promise<Record<string, CaseResult>> {
       results['2b'] = { pass: names.includes('generate-query-embedding'), detail: `spans=${JSON.stringify(names)}` };
     }
 
-    // 3. GREETING creates no embedding/search/rerank/Gemini spans
+    // 3. GREETING creates no embedding/search/rerank/answer-LLM spans
     {
       const { trace } = await withTrace('Hello', { classifyRoute: async () => ({ route: 'GREETING', source: 'rule' }) }, ctx);
       const names = spanNames(trace);
@@ -337,20 +332,22 @@ cases.push({
 });
 
 cases.push({
-  label: '15. Gemini operation type and latency are recorded (no live call needed)',
+  label: '15. LLM operation type, provider, model and latency are recorded (no live call needed)',
   run: async () => {
     let loggedLine = '';
     const originalWrite = process.stdout.write.bind(process.stdout);
     process.stdout.write = ((chunk: string) => { loggedLine += chunk; return true; }) as typeof process.stdout.write;
     try {
-      await withGeminiDiagnostic(
-        { spanName: 'gemini_rewriter_call', operationType: 'QUERY_REWRITE', model: 'gemini-2.5-flash' },
-        async () => ({ response: { usageMetadata: { promptTokenCount: 12, candidatesTokenCount: 34 } } })
+      await withLlmDiagnostic(
+        { spanName: 'rewriter_call', operationType: 'QUERY_REWRITE', provider: 'openai', model: 'gpt-6-luna' },
+        async () => ({ raw: '{}', provider: 'openai', model: 'gpt-6-luna', usage: { inputTokens: 12, outputTokens: 34 } }),
+        extractLlmUsage
       );
     } finally {
       process.stdout.write = originalWrite;
     }
-    const pass = loggedLine.includes('op=QUERY_REWRITE') && loggedLine.includes('model=gemini-2.5-flash') && loggedLine.includes('success=true');
+    const pass = loggedLine.includes('op=QUERY_REWRITE') && loggedLine.includes('provider=openai') && loggedLine.includes('model=gpt-6-luna')
+      && loggedLine.includes('success=true') && loggedLine.includes('inputTokens=12') && loggedLine.includes('outputTokens=34');
     return { pass, detail: loggedLine.trim().slice(0, 200) };
   },
 });
@@ -395,7 +392,7 @@ cases.push({
 });
 
 cases.push({
-  label: '21. Gemini health checks use caching/TTL rather than calling on every request',
+  label: '21. Readiness checks use caching/TTL rather than calling on every request',
   run: async () => {
     const start1 = Date.now();
     await checkReadiness();
@@ -462,7 +459,7 @@ async function main() {
     '1': '1. A FACT_QUESTION creates the expected root trace',
     '2': '2. Only executed stages create child spans (embedding reused from memory lookup)',
     '2b': '2b. A fresh embedding span appears when memory lookup provides none',
-    '3': '3. A GREETING does not create embedding/search/rerank/Gemini spans',
+    '3': '3. A GREETING does not create embedding/search/rerank/answer-LLM spans',
     '4': '4. A LECTURE_SUMMARY creates summary-specific spans',
     '5': '5. A CONTEXTUAL_FOLLOW_UP creates a rewrite span',
     '6': '6. Exact-memory hit does not create embedding/search/rerank/generation spans',

@@ -56,7 +56,7 @@ import { finishDatasetVersion, rollbackDataset, failDatasetVersion, reconcileLec
 import { EMBEDDING_MODEL_VERSION } from '../services/embedding.service';
 import observabilityRoutes from '../routes/observability.routes';
 import { resolveLlmProvider } from '../llm/llm-provider.resolver';
-import { generateAnswer } from '../services/llm-gemini.service';
+import { generateAnswer } from '../services/answer-generation.service';
 import { STAGE_SPAN_KIND, OpenInferenceSpanKind } from '../observability/otel-semconv';
 import { OUTPUT_GUARDRAIL_REASONS } from '../rag/guardrails/output/answer-verification.types';
 

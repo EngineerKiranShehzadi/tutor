@@ -1,5 +1,4 @@
 import { AppError } from '../middleware/errorHandler';
-import { geminiLlmProvider } from './providers/gemini-llm.provider';
 import { groqLlmProvider } from './providers/groq-llm.provider';
 import { openAiLlmProvider } from './providers/openai-llm.provider';
 import type { LlmProvider } from './providers/llm-provider.interface';
@@ -10,7 +9,6 @@ import type { LlmProvider } from './providers/llm-provider.interface';
 // LlmProvider interface. Adding a new provider means adding one adapter
 // under providers/ and one case here — no other file changes.
 const PROVIDERS: Record<string, LlmProvider> = {
-  gemini: geminiLlmProvider,
   openai: openAiLlmProvider,
   // Temporary free-tier provider for isolated testing (never the default).
   groq: groqLlmProvider,

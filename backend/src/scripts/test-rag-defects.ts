@@ -13,7 +13,7 @@ import { env } from '../config/env';
 import { resolveLlmProvider } from '../llm/llm-provider.resolver';
 import type { LlmRequest, LlmResponse } from '../llm/llm.types';
 import type { LlmProvider } from '../llm/providers/llm-provider.interface';
-import { generateAnswer, SYSTEM_PROMPT, ANSWER_PROMPT_VERSION, buildHistoryBlock, HISTORY_MAX_CHARS } from '../services/llm-gemini.service';
+import { generateAnswer, SYSTEM_PROMPT, ANSWER_PROMPT_VERSION, buildHistoryBlock, HISTORY_MAX_CHARS } from '../services/answer-generation.service';
 import { runOutputGuardrail } from '../rag/guardrails/output/output-guardrail.service';
 import { buildGroundednessSystemPrompt, ANSWER_REVISION_SYSTEM_PROMPT } from '../rag/guardrails/output/answer-groundedness.prompt';
 import type { QnaChunk } from '../types';

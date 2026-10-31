@@ -1,12 +1,12 @@
 import type { LlmRequest, LlmResponse } from '../llm.types';
 
-// Every provider adapter (gemini-llm.provider.ts, openai-llm.provider.ts,
-// groq-llm.provider.ts, and any future one) implements exactly this.
+// Every provider adapter (openai-llm.provider.ts, groq-llm.provider.ts, and
+// any future one) implements exactly this.
 // Business services never see the provider's own SDK types — only this
 // interface and the plain types in llm.types.ts.
 export interface LlmProvider {
   // Stable identifier used for observability (llm.provider) and error
-  // messages — e.g. 'gemini'.
+  // messages — e.g. 'openai'.
   readonly name: string;
   // Throws a clear error if the provider cannot work as configured (missing
   // API key). No network call. Run at startup for every selected provider

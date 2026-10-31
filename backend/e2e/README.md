@@ -24,10 +24,10 @@ Add `-- --lecture-copy <id>` to also check a backfilled copy of a real lecture.
 ## 2. Browser end-to-end (18 checks, real Chromium + frontend + backend + embedding model)
 ```bash
 cd backend
-npm run e2e:up        # fresh DB askai_e2e_test, embed proxy :5101, backend :5055 (Gemini STUBBED), frontend :3055
+npm run e2e:up        # fresh DB askai_e2e_test, embed proxy :5101, backend :5055 (LLM STUBBED), frontend :3055
 npm run e2e:browser   # screenshots -> /tmp/askai-e2e/shots, results -> /tmp/askai-e2e/results.json
 npm run e2e:down
 ```
-**Gemini is stubbed** in this run (`src/scripts/e2e-server.ts`): the API key is over quota (HTTP 429), so real answer
-generation and the real groundedness verifier are NOT exercised. Retrieval, versions, cache, SQL, embeddings are real.
+**The LLM is stubbed** in this run (`src/scripts/e2e-server.ts`), so no API key is needed and nothing is spent: real
+answer generation and the real groundedness verifier are NOT exercised. Retrieval, versions, cache, SQL, embeddings are real.
 Playwright is loaded from `PLAYWRIGHT_PATH` (default: the npx cache); Chromium must be installed for it.

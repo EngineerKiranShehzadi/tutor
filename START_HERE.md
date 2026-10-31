@@ -52,13 +52,13 @@ EMBEDDING_PROVIDER=local-http
 RERANK_PROVIDER=local-http
 ```
 
-The LLM tasks are set to `openai` too. Without `OPENAI_API_KEY` the backend still starts and only warns; greetings and summaries then fail. If you have a Gemini key, set the `*_LLM_PROVIDER` lines to `gemini`, the `*_MODEL` lines to `gemini-2.5-flash`, and add `GEMINI_API_KEY`.
+The LLM tasks use OpenAI `gpt-6-luna` (the only LLM provider). Without `OPENAI_API_KEY` the backend still starts and only warns; greetings and summaries then fail.
 
 | Works normally | Will not work (needs the embedding server) |
 |---|---|
 | Login, signup, profile | Normal chat questions: you get an error message, which is expected |
 | Admin pages, analytics, lectures, videos | Dataset upload or rebuild: don't do it (see below) |
-| Greetings and "Summarize this lecture" (need an LLM key: `OPENAI_API_KEY`, or a Gemini key as above) | Anything that creates new chunks and embeds them |
+| Greetings and "Summarize this lecture" (need `OPENAI_API_KEY`) | Anything that creates new chunks and embeds them |
 | Your own features that read `lecture_qna_chunks` directly: quizzes, flashcards, mastery, the unanswered-question queue | |
 
 `/api/v1/health/ready` will show the embedding server and reranker as down. That is expected on your machine.

@@ -19,8 +19,8 @@ export function describeHealth(h: ReadinessResult | null): { level: Level; text:
       : { level: 'unknown', text: 'Health check could not be loaded', notes: [] };
   }
 
-  // "degraded" with no errorCode means "not verified" (e.g. the Gemini
-  // check is disabled) — not a problem, just something we can't confirm.
+  // "degraded" with no errorCode means "not verified" (a check that only
+  // verified configuration) — not a problem, just something we can't confirm.
   const unverified = entries
     .filter(([, c]) => c.status === 'degraded' && !c.errorCode)
     .map(([k]) => `${componentLabel(k)} connectivity not checked`);

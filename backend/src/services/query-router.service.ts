@@ -182,7 +182,7 @@ const classifyWithLlm = async (question: string, timeoutMs: number): Promise<Lec
     const model = env.LLM.QUERY_ROUTER.MODEL;
     const result = await withLlmDiagnostic(
       {
-        spanName: 'gemini_router_call',
+        spanName: 'router_call',
         operationType: 'ROUTE_CLASSIFICATION',
         provider: provider.name,
         model,
@@ -215,8 +215,8 @@ export const classifyRoute = async (
   opts: {
     timeoutMs?: number;
     // Test-only seam, same rationale as query-rewriter.service.ts's
-    // geminiCaller: keeps the deterministic test suite network/quota-free.
-    geminiClassifier?: typeof classifyWithLlm;
+    // llmCaller: keeps the deterministic test suite network/quota-free.
+    llmClassifier?: typeof classifyWithLlm;
   } = {}
 ): Promise<RouteClassification> => {
   try {
@@ -225,7 +225,7 @@ export const classifyRoute = async (
       return { route: ruleMatch, source: 'rule' };
     }
 
-    const classifier = opts.geminiClassifier ?? classifyWithLlm;
+    const classifier = opts.llmClassifier ?? classifyWithLlm;
     const llmRoute = await classifier(question, opts.timeoutMs ?? DEFAULT_ROUTER_TIMEOUT_MS);
     if (llmRoute) {
       return { route: llmRoute, source: 'llm' };

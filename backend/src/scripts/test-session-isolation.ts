@@ -8,7 +8,7 @@
  * Fully mocked: the shared pg pool's `query` is an in-memory fake that models
  * lectures, lecture_agent_profiles, chat_sessions, chat_history and
  * student_questions, and throws on any unknown SQL. Every LLM/network
- * dependency of the pipeline is injected; the Gemini provider is a tripwire.
+ * dependency of the pipeline is injected; the LLM provider is a tripwire.
  * Nothing touches the real database.
  *
  * Usage: node_modules/.bin/ts-node --transpile-only src/scripts/test-session-isolation.ts
@@ -17,7 +17,7 @@ import pool from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { LectureAgentProfile, QnaChunk } from '../types';
 import { askLectureAgent, createChatSession, AskLectureAgentDeps } from '../services/chat.service';
-import { geminiLlmProvider } from '../llm/providers/gemini-llm.provider';
+import { openAiLlmProvider } from '../llm/providers/openai-llm.provider';
 import { INSTRUCTIONS_BY_VIDEO_ID } from './seed-agent-profiles';
 import type { FinishedTrace } from '../observability/types';
 
@@ -71,10 +71,10 @@ const newWorld = (): World => ({
 
 async function inWorld<T>(world: World, fn: () => Promise<T>): Promise<T> {
   const original = pool.query;
-  const tripwire = async () => { throw new Error('Gemini provider reached'); };
-  const g = geminiLlmProvider.generate, gs = geminiLlmProvider.generateStream;
-  geminiLlmProvider.generate = tripwire;
-  geminiLlmProvider.generateStream = tripwire as never;
+  const tripwire = async () => { throw new Error('LLM provider reached'); };
+  const g = openAiLlmProvider.generate, gs = openAiLlmProvider.generateStream;
+  openAiLlmProvider.generate = tripwire;
+  openAiLlmProvider.generateStream = tripwire as never;
   let nextId = 9000;
   (pool as unknown as { query: unknown }).query = async (text: string, params: unknown[] = []) => {
     const t = text.replace(/\s+/g, ' ').trim();
@@ -116,8 +116,8 @@ async function inWorld<T>(world: World, fn: () => Promise<T>): Promise<T> {
   };
   try { return await fn(); } finally {
     (pool as unknown as { query: unknown }).query = original;
-    geminiLlmProvider.generate = g;
-    geminiLlmProvider.generateStream = gs;
+    openAiLlmProvider.generate = g;
+    openAiLlmProvider.generateStream = gs;
   }
 }
 

@@ -141,10 +141,7 @@ export const generateAnswer = async (
   unavailableAspects: string[] = []
 ): Promise<string> => {
   // Falls back to env.LLM.RAG_ANSWER.FALLBACK_MODEL after 2 failed attempts
-  // on the primary model (default gemini-2.5-flash -> gemini-flash-latest,
-  // preserving the exact chain this used before it became configurable —
-  // gemini-1.5-flash is fully retired (404), which is why that fallback
-  // target changed from what it originally was).
+  // on the primary model (same provider; unset, it is RAG_ANSWER_MODEL).
   const modelName = attempt <= 2 ? env.LLM.RAG_ANSWER.MODEL : env.LLM.RAG_ANSWER.FALLBACK_MODEL;
   const provider = resolveLlmProvider(env.LLM.RAG_ANSWER.PROVIDER);
 
@@ -167,7 +164,7 @@ ${historyBlock ? `\n${historyBlock}` : ''}
 Current Student Question:
 ${question}${uncoveredBlock}${unavailableBlock}`;
 
-  logger.info(`[LLM] 🤖 Sending prompt to Gemini (${chunks.length} chunks, question="${logSafeText(question, 60)}")`);
+  logger.info(`[LLM] 🤖 Sending prompt to ${provider.name}/${modelName} (${chunks.length} chunks, question="${logSafeText(question, 60)}")`);
 
   let streamedAny = false;
 
@@ -176,7 +173,7 @@ ${question}${uncoveredBlock}${unavailableBlock}`;
     const request = { model: modelName, userPrompt: prompt, temperature: 0.3, maxOutputTokens: 8192, thinking: env.LLM.RAG_ANSWER.THINKING, timeoutMs };
     const result = await withLlmDiagnostic(
       {
-        spanName: 'gemini_answer_call',
+        spanName: 'answer_call',
         operationType: 'GROUNDED_ANSWER',
         provider: provider.name,
         model: modelName,
@@ -209,7 +206,7 @@ ${question}${uncoveredBlock}${unavailableBlock}`;
       throw new AppError('Empty response from AI model', 500);
     }
 
-    logger.info(`[LLM] ✅ Gemini answered (${answer.length} chars, finish=${finishReason})`);
+    logger.info(`[LLM] ✅ ${provider.name}/${modelName} answered (${answer.length} chars, finish=${finishReason})`);
     return answer;
   } catch (err: unknown) {
     const msg = String((err as Error).message ?? '');
@@ -218,7 +215,7 @@ ${question}${uncoveredBlock}${unavailableBlock}`;
 
     if ((isRateLimit || isOverloaded) && attempt <= 3) {
       const wait = Math.pow(2, attempt) * 3000; // 6s, 12s, 24s
-      const fallbackNote = attempt >= 2 ? ' (switching to gemini-flash-latest)' : '';
+      const fallbackNote = attempt >= 2 ? ` (switching to ${env.LLM.RAG_ANSWER.FALLBACK_MODEL})` : '';
       logger.warn(`[LLM] Transient error on attempt ${attempt}/3${fallbackNote} — retrying in ${wait / 1000}s...`);
       if (streamedAny) stream?.onReset?.();
       await sleep(wait);
@@ -227,7 +224,7 @@ ${question}${uncoveredBlock}${unavailableBlock}`;
 
     recordProviderFailure('answerLlm', err);
     if (err instanceof AppError) throw err;
-    logger.error('[LLM] ❌ Gemini error:', err);
+    logger.error(`[LLM] ❌ ${provider.name}/${modelName} error:`, err);
     throw new AppError('AI model failed to generate a response. Please try again.', 500);
   }
 };

@@ -7,23 +7,45 @@ Newest entry at the top.
 
 ---
 
-## 2026-11-01 — Final stack: gpt-6-luna on every LLM task
+## 2026-11-01 — Final stack: gpt-6-luna on every LLM task; Gemini removed
 
 **Changed by:** Kiran
-**Files:** `config/env.ts`, `llm/providers/openai-llm.provider.ts` (comments), `.env.example`,
-`docs/OPENAI_SWITCH.md`; tests `test-openai-llm-provider.ts`, `test-request-log.ts`, `test-admin-hardening.ts`
+**Files:** `config/env.ts`, `llm/providers/openai-llm.provider.ts`, `llm/llm-provider.resolver.ts`,
+`observability/health.service.ts`, `observability/otel-semconv.ts`, `services/answer-generation.service.ts`
+(renamed from `llm-gemini.service.ts`) and its importers, the four services that name an LLM span,
+`package.json` (`@google/genai` removed); deleted `llm/providers/gemini-llm.provider.ts`, `gemini-thinking.ts`,
+`services/gemini-provider.service.ts`, `observability/gemini-diagnostics.ts`; `.env.example`,
+`docs/OPENAI_SWITCH.md`, `docs/OBSERVABILITY.md`, `START_HERE.md`, `e2e/README.md`; frontend landing page, Status
+banner and Retrieval inspector wording; scripts in `backend/src/scripts/` (new `live-llm.ts`)
 
 **Final stack:** embedding OpenAI `text-embedding-3-small` at 1024 dimensions, rerank Voyage `rerank-3`, all ten
 LLM tasks OpenAI `gpt-6-luna`.
 
 **Deploy note:** no migration. Set every `*_LLM_MODEL`, `RAG_ANSWER_MODEL` and `RAG_ANSWER_FALLBACK_MODEL` to
-`gpt-6-luna` (as in `.env.example`), and drop any `LLM_PRICING_JSON` entry for the old model.
+`gpt-6-luna` (as in `.env.example`), and drop any `LLM_PRICING_JSON` entry for the old model. `GEMINI_API_KEY`
+and `HEALTH_GEMINI_CHECK_ENABLED` are no longer read: remove them. Run `npm install` (one dependency fewer).
+Traces written before this keep the old span names (`gemini_answer_call` and so on); new ones use the new names.
 
 - **The model identifier was wrong everywhere.** The repo named an older, different model. That broke three
   things: `est_cost_usd` was NULL for every request (one unpriced call nulls the whole row), the readiness probe
   asked OpenAI for a model the service never uses, and `smoke:providers` skipped its $0.01 spend cap (the cap is
   only enforced for a priced model). `gpt-6-luna` is now the only built-in price: $0.10 input / $0.50 output per
   1M tokens ($0.01 cached input; priced as uncached, so the estimate errs high).
+- **Gemini was still the default for every LLM task.** A missing or misspelled `*_LLM_PROVIDER` /
+  `*_LLM_MODEL` line silently selected Gemini. Every task now defaults to `openai` / `gpt-6-luna`, and the answer's
+  retry fallback defaults to `RAG_ANSWER_MODEL` (no more provider-name check in `env.ts`). A test loads the config
+  with no `.env` and no LLM variables and checks all ten tasks resolve to OpenAI `gpt-6-luna`.
+- **Gemini removed.** The adapter, the SDK wrapper, the thinking mapper, the unused Gemini diagnostics and the
+  `@google/genai` package are gone. Readiness no longer has a Gemini branch: the answer LLM is checked only through
+  its adapter's free probe, so nothing outside the resolver switches on a provider name.
+- **Spans no longer label OpenAI work as Gemini.** `gemini_answer_call`, `gemini_router_call`,
+  `gemini_rewriter_call`, `gemini_summary_batch_call` and `gemini_summary_combine_call` are now `answer_call`,
+  `router_call`, `rewriter_call`, `summary_batch_call` and `summary_combine_call` (in traces, Phoenix and the
+  monitor). `llm-gemini.service.ts` is now `answer-generation.service.ts`; its logs name the real provider and
+  model, and a retry names the real fallback model instead of a hardcoded Gemini one.
+- **Scripts.** The evaluation scripts (`eval:rag`, the dedup and reorder comparisons, the judge check) and the
+  live router/rewriter/memory checks use the configured provider: the judge is the answer-verification model, and
+  a missing key stops them with one line. The e2e server and the offline tests stub the OpenAI adapter.
 
 ---
 

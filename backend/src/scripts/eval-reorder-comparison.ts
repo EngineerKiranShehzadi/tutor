@@ -12,13 +12,12 @@
  *
  * Usage: npm run eval:reorder-comparison [lectureId]
  */
-import { env } from '../config/env';
 import { query } from '../config/database';
 import { generateEmbedding } from '../services/embedding.service';
 import { searchChunks } from '../services/vector-search.service';
 import { rerankChunks, reorderForContext } from '../services/rerank.service';
-import { generateAnswer } from '../services/llm-gemini.service';
-import { generateContent } from '../services/gemini-provider.service';
+import { generateAnswer } from '../services/answer-generation.service';
+import { judgeLlm, requireLiveLlm } from './live-llm';
 import { getLectureById } from '../services/lecture.service';
 import { QnaChunk } from '../types';
 import { logger } from '../utils/logger';
@@ -27,21 +26,13 @@ const NUM_EVAL_QUESTIONS = 8;
 const CANDIDATE_POOL_SIZE = 15; // fixed — matches production default in chat.service.ts
 const RERANK_TOP_N = 5;
 
-if (!env.GEMINI_API_KEY) {
-  console.error('GEMINI_API_KEY is not configured.');
-  process.exit(1);
-}
-// gemini-2.5-flash's free-tier daily quota (20 req/day) was exhausted by
-// generateAnswer() calls alone, and gemini-1.5-flash is fully retired (404).
-// Judge on gemini-flash-lite-latest — a separate quota bucket with capacity.
-const JUDGE_MODEL = 'gemini-flash-lite-latest';
+requireLiveLlm();
 
 const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
 
 async function askJudge(prompt: string, attempt = 1): Promise<boolean> {
   try {
-    const result = await generateContent({ model: JUDGE_MODEL, prompt, temperature: 0 });
-    return result.text.trim().toUpperCase().startsWith('PASS');
+    return (await judgeLlm(prompt)).trim().toUpperCase().startsWith('PASS');
   } catch (err: unknown) {
     const msg = String((err as Error).message ?? '');
     const isRateLimit = msg.includes('429') || msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('resource_exhausted');
@@ -135,8 +126,8 @@ async function runCondition(
 ): Promise<ConditionResult[]> {
   const results: ConditionResult[] = [];
   for (const [i, { question, top5, wastedSlots }] of prepared.entries()) {
-    // Gemini free tier allows 5 req/min; each question makes 3 calls
-    // (1 generate + 2 judges), so pace requests to avoid constant 429s.
+    // Each question makes 3 calls (1 generate + 2 judges); pace them so a
+    // low rate-limit tier does not answer with constant 429s.
     if (i > 0) await sleep(15_000);
     const start = Date.now();
     const contextChunks = reorderOn ? reorderForContext(top5) : top5;

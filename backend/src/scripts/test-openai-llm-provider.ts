@@ -230,7 +230,7 @@ const rejects = async (p: Promise<unknown>): Promise<Error> => p.then(() => new 
     let threw = '';
     try { noKey.assertConfigured!(); } catch (e) { threw = (e as Error).message; }
     const sentNothing = await rejects(noKey.generate({ model: 'gpt-6-luna', userPrompt: 'x' }));
-    const llm = { OPENAI: { API_KEY: '' }, RAG_ANSWER: { PROVIDER: 'openai' }, QUERY_ROUTER: { PROVIDER: 'openai' }, GREETING: { PROVIDER: 'gemini' } };
+    const llm = { OPENAI: { API_KEY: '' }, RAG_ANSWER: { PROVIDER: 'openai' }, QUERY_ROUTER: { PROVIDER: 'openai' }, GREETING: { PROVIDER: 'openai' } };
     const groups = [...selectedLlmProviders(llm).entries()].map(([k, v]) => `${k}:${v.join('+')}`).join(' ');
     const { env } = await import('../config/env');
     const o = env.LLM.OPENAI as { API_KEY: string };
@@ -248,8 +248,8 @@ const rejects = async (p: Promise<unknown>): Promise<Error> => p.then(() => new 
     o.API_KEY = savedKey;
     check('11. Missing OPENAI_API_KEY: assertConfigured names it and no request is made; at startup it stops a production boot (naming the tasks) and warns in development; a provider typo stops startup anywhere; the OPENAI block is not a task',
       /OPENAI_API_KEY is not set/.test(threw) && /OPENAI_API_KEY is not set/.test(sentNothing.message)
-        && groups === 'openai:RAG_ANSWER+QUERY_ROUTER gemini:GREETING'
-        && /OPENAI_API_KEY is not set .*used by RAG_ANSWER, QUERY_ROUTER/.test(prod) && dev === 'no throw'
+        && groups === 'openai:RAG_ANSWER+QUERY_ROUTER+GREETING'
+        && /OPENAI_API_KEY is not set .*used by RAG_ANSWER, QUERY_ROUTER, GREETING/.test(prod) && dev === 'no throw'
         && /Unknown LLM provider "opneai"/.test(typo) && withKey === 'no throw',
       `groups="${groups}" prod="${prod.slice(0, 90)}" typo="${typo.slice(0, 50)}"`);
   }

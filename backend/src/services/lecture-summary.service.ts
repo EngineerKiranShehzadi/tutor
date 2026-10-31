@@ -114,7 +114,7 @@ const summarizeBatchWithGemini = async (
     const model = env.LLM.LECTURE_SUMMARY.MODEL;
     const result = await withLlmDiagnostic(
       {
-        spanName: 'gemini_summary_batch_call',
+        spanName: 'summary_batch_call',
         operationType: 'PARTIAL_SUMMARY',
         provider: provider.name,
         model,
@@ -157,7 +157,7 @@ const combineSummariesWithGemini = async (
     const model = env.LLM.LECTURE_SUMMARY.MODEL;
     const result = await withLlmDiagnostic(
       {
-        spanName: 'gemini_summary_combine_call',
+        spanName: 'summary_combine_call',
         operationType: 'FINAL_SUMMARY',
         provider: provider.name,
         model,

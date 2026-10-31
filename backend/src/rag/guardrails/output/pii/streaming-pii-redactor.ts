@@ -1,5 +1,5 @@
 import { scanForPii } from '../../shared/pii/pii-detector.service';
-import type { AnswerStreamHandlers } from '../../../../services/llm-gemini.service';
+import type { AnswerStreamHandlers } from '../../../../services/answer-generation.service';
 
 // Redacts PII in the streamed draft BEFORE it is sent, using the same shared
 // detector as the final-answer PII guard (output-pii-leakage.guard.ts).

@@ -2,7 +2,7 @@ import { env } from '../config/env';
 import { resolveLlmProvider } from '../llm/llm-provider.resolver';
 import { withLlmDiagnostic, extractLlmUsage } from '../llm/llm-observability.service';
 import type { LlmSchema } from '../llm/llm.types';
-import { type ConversationTurn } from './llm-gemini.service';
+import { type ConversationTurn } from './answer-generation.service';
 import { logger } from '../utils/logger';
 import { logSafeText } from '../observability/sanitize';
 
@@ -101,7 +101,7 @@ const callLlmRewriter = async (
     const model = env.LLM.QUERY_REWRITE.MODEL;
     const result = await withLlmDiagnostic(
       {
-        spanName: 'gemini_rewriter_call',
+        spanName: 'rewriter_call',
         operationType: 'QUERY_REWRITE',
         provider: provider.name,
         model,
@@ -149,7 +149,7 @@ export const resolveRetrievalQuery = async (
     // callLlmRewriter. Live semantic-quality tests (does it *correctly*
     // resolve "it" to the right referent?) live in a separate :live suite
     // that intentionally omits this override.
-    geminiCaller?: typeof callLlmRewriter;
+    llmCaller?: typeof callLlmRewriter;
   } = {}
 ): Promise<RetrievalQueryResult> => {
   try {
@@ -163,8 +163,8 @@ export const resolveRetrievalQuery = async (
       return { query: question, wasRewritten: false, attempted: false };
     }
 
-    const geminiCaller = opts.geminiCaller ?? callLlmRewriter;
-    const rewritten = await geminiCaller(question, recentHistory, opts.timeoutMs ?? DEFAULT_REWRITE_TIMEOUT_MS);
+    const llmCaller = opts.llmCaller ?? callLlmRewriter;
+    const rewritten = await llmCaller(question, recentHistory, opts.timeoutMs ?? DEFAULT_REWRITE_TIMEOUT_MS);
     if (!rewritten) {
       return { query: question, wasRewritten: false, attempted: true };
     }

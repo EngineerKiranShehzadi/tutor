@@ -3,12 +3,12 @@
  * computeAgentConfigFingerprint, getEffectiveAnswerPromptVersion, and the
  * optional answerPromptVersion on lookup/write.
  *
- * No real database and no Gemini: the shared pg pool's `query` is replaced
+ * No real database and no LLM: the shared pg pool's `query` is replaced
  * with an in-memory fake that models rag_answer_memory's UNIQUE key (incl.
  * answer_prompt_version) and its exact/semantic lookup SQL. The fake throws
  * on any statement shape the service isn't supposed to issue, and every
  * statement is recorded so tests can assert nothing was deleted or updated
- * outside the upsert. Embeddings are stubbed; the Gemini provider is
+ * outside the upsert. Embeddings are stubbed; the LLM provider is
  * replaced with a tripwire that fails the run if it is ever called.
  *
  * Usage: node_modules/.bin/ts-node --transpile-only src/scripts/test-agent-memory-versioning.ts
@@ -17,7 +17,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import pool from '../config/database';
 import { LectureAgentProfile } from '../types';
-import { ANSWER_PROMPT_VERSION } from '../services/llm-gemini.service';
+import { ANSWER_PROMPT_VERSION } from '../services/answer-generation.service';
 import { EMBEDDING_MODEL_VERSION } from '../services/embedding.service';
 import {
   computeAgentConfigFingerprint,
@@ -28,7 +28,7 @@ import {
   LookupParams,
   WriteMemoryParams,
 } from '../services/rag-answer-memory.service';
-import { geminiLlmProvider } from '../llm/providers/gemini-llm.provider';
+import { openAiLlmProvider } from '../llm/providers/openai-llm.provider';
 import { INSTRUCTIONS_BY_VIDEO_ID } from './seed-agent-profiles';
 
 interface CaseResult { pass: boolean; detail?: string }
@@ -73,11 +73,11 @@ async function withFakeDb<T>(rows: Row[], fn: (ctx: { rows: Row[]; statements: S
   const statements: Statement[] = [];
   let nextId = 1000;
   const original = pool.query;
-  const geminiTripwire = async () => { throw new Error('Gemini provider was called — tests must never reach it'); };
-  const origGen = geminiLlmProvider.generate;
-  const origStream = geminiLlmProvider.generateStream;
-  geminiLlmProvider.generate = geminiTripwire;
-  geminiLlmProvider.generateStream = geminiTripwire as never;
+  const llmTripwire = async () => { throw new Error('LLM provider was called — tests must never reach it'); };
+  const origGen = openAiLlmProvider.generate;
+  const origStream = openAiLlmProvider.generateStream;
+  openAiLlmProvider.generate = llmTripwire;
+  openAiLlmProvider.generateStream = llmTripwire as never;
 
   (pool as unknown as { query: unknown }).query = async (text: string, params: unknown[] = []) => {
     const t = text.replace(/\s+/g, ' ').trim();
@@ -132,8 +132,8 @@ async function withFakeDb<T>(rows: Row[], fn: (ctx: { rows: Row[]; statements: S
     return await fn({ rows, statements });
   } finally {
     (pool as unknown as { query: unknown }).query = original;
-    geminiLlmProvider.generate = origGen;
-    geminiLlmProvider.generateStream = origStream;
+    openAiLlmProvider.generate = origGen;
+    openAiLlmProvider.generateStream = origStream;
   }
 }
 
@@ -362,11 +362,11 @@ cases.push({
 // ── J: no external calls ───────────────────────────────────────────────
 
 cases.push({
-  label: 'J. No Gemini calls: tripwire provider never fired; service references no generation/LLM entry points',
+  label: 'J. No LLM calls: tripwire provider never fired; service references no generation/LLM entry points',
   run: async () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'services', 'rag-answer-memory.service.ts'), 'utf8');
     const code = src.replace(/\/\/.*$/gm, '');
-    const usesLlm = /generateAnswer\b|generateAnswerFromLLM|geminiLlmProvider|generateContent/.test(code);
+    const usesLlm = /generateAnswer\b|generateAnswerFromLLM|resolveLlmProvider|openAiLlmProvider|generateContent/.test(code);
     // Exercise every versioned code path once with the tripwire installed.
     const outcome = await withFakeDb([], async () => {
       const v = getEffectiveAnswerPromptVersion(CLARITY);

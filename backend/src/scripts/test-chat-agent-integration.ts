@@ -11,7 +11,7 @@
  *  - Every LLM/network dependency of the pipeline is injected through
  *    AskLectureAgentDeps (input/output guardrails, router, embedding,
  *    search, rerank, decomposition, answer generation, greeting, summary).
- *  - The Gemini provider is replaced with a tripwire that fails the run if
+ *  - The LLM provider is replaced with a tripwire that fails the run if
  *    anything reaches it.
  * The real lecture-agent-profile service and the real answer-memory service
  * run against the fake, so agent selection and cache-version propagation
@@ -31,8 +31,8 @@ import {
 } from '../services/chat.service';
 import { getEffectiveAnswerPromptVersion } from '../services/rag-answer-memory.service';
 import { EMBEDDING_MODEL_VERSION } from '../services/embedding.service';
-import { ANSWER_PROMPT_VERSION } from '../services/llm-gemini.service';
-import { geminiLlmProvider } from '../llm/providers/gemini-llm.provider';
+import { ANSWER_PROMPT_VERSION } from '../services/answer-generation.service';
+import { openAiLlmProvider } from '../llm/providers/openai-llm.provider';
 import type { OutputGuardrailResult } from '../rag/guardrails/output/answer-verification.types';
 import type { FinishedTrace } from '../observability/types';
 import { INSTRUCTIONS_BY_VIDEO_ID } from './seed-agent-profiles';
@@ -94,13 +94,13 @@ const newWorld = (over: Partial<World> = {}): World => ({
   ...over,
 });
 
-// Installs the fake over pool.query + a Gemini tripwire for the duration of fn.
+// Installs the fake over pool.query + a LLM tripwire for the duration of fn.
 async function inWorld<T>(world: World, fn: () => Promise<T>): Promise<T> {
   const original = pool.query;
-  const tripwire = async () => { throw new Error('Gemini provider reached — a pipeline dependency was not injected'); };
-  const g = geminiLlmProvider.generate, gs = geminiLlmProvider.generateStream;
-  geminiLlmProvider.generate = tripwire;
-  geminiLlmProvider.generateStream = tripwire as never;
+  const tripwire = async () => { throw new Error('LLM provider reached — a pipeline dependency was not injected'); };
+  const g = openAiLlmProvider.generate, gs = openAiLlmProvider.generateStream;
+  openAiLlmProvider.generate = tripwire;
+  openAiLlmProvider.generateStream = tripwire as never;
   let nextId = 5000;
 
   (pool as unknown as { query: unknown }).query = async (text: string, params: unknown[] = []) => {
@@ -185,8 +185,8 @@ async function inWorld<T>(world: World, fn: () => Promise<T>): Promise<T> {
     return await fn();
   } finally {
     (pool as unknown as { query: unknown }).query = original;
-    geminiLlmProvider.generate = g;
-    geminiLlmProvider.generateStream = gs;
+    openAiLlmProvider.generate = g;
+    openAiLlmProvider.generateStream = gs;
   }
 }
 

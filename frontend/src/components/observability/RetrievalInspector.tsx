@@ -63,7 +63,7 @@ export function RetrievalInspector({ spans }: { spans: ObservabilitySpan[] }) {
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-100">
           <p className="text-[13px] font-bold text-slate-900">Final context supplied</p>
-          <p className="text-[11px] text-slate-400 mt-0.5">{generate ? `${generate.attributes.contextChunkCount ?? reranked.length} chunk(s) sent to Gemini` : 'Not available'}</p>
+          <p className="text-[11px] text-slate-400 mt-0.5">{generate ? `${generate.attributes.contextChunkCount ?? reranked.length} chunk(s) sent to the answer model` : 'Not available'}</p>
         </div>
         <div className="p-5 space-y-2">
           {String(generate?.attributes.contextChunkIds ?? '').split(',').filter(Boolean).map((id, i) => (

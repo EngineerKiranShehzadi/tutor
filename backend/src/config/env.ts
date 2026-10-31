@@ -103,13 +103,16 @@ const parseLlmPricing = (raw: string): Record<string, LlmPrice> => {
   return out;
 };
 
+// Every LLM task defaults to OpenAI gpt-6-luna, so a missing *_LLM_PROVIDER /
+// *_LLM_MODEL line selects the production model, never another provider.
+const DEFAULT_LLM_PROVIDER = 'openai';
+const DEFAULT_LLM_MODEL = 'gpt-6-luna';
+
 // The answer model's retry fallback (used once an answer call has failed twice)
-// must be a model of the SAME provider. Unset: Gemini keeps its
-// gemini-2.5-flash -> gemini-flash-latest chain; any other provider retries
-// its own RAG_ANSWER_MODEL (e.g. gpt-6-luna), never a Gemini model name.
-const RAG_PROVIDER = optional('RAG_LLM_PROVIDER', 'gemini');
-const RAG_MODEL = optional('RAG_ANSWER_MODEL', 'gemini-2.5-flash');
-const RAG_FALLBACK_MODEL = nonBlank('RAG_ANSWER_FALLBACK_MODEL', '') || (RAG_PROVIDER === 'gemini' ? 'gemini-flash-latest' : RAG_MODEL);
+// must be a model of the SAME provider. Unset, it retries RAG_ANSWER_MODEL.
+const RAG_PROVIDER = optional('RAG_LLM_PROVIDER', DEFAULT_LLM_PROVIDER);
+const RAG_MODEL = optional('RAG_ANSWER_MODEL', DEFAULT_LLM_MODEL);
+const RAG_FALLBACK_MODEL = nonBlank('RAG_ANSWER_FALLBACK_MODEL', '') || RAG_MODEL;
 
 export const env = {
   NODE_ENV:      optional('NODE_ENV', 'development'),
@@ -214,8 +217,6 @@ export const env = {
 
   BCRYPT_SALT_ROUNDS: positiveInt('BCRYPT_SALT_ROUNDS', 12),
 
-  GEMINI_API_KEY: optional('GEMINI_API_KEY', ''),
-
   GOOGLE: {
     CLIENT_ID:     optional('GOOGLE_CLIENT_ID', ''),
     CLIENT_SECRET: optional('GOOGLE_CLIENT_SECRET', ''),
@@ -223,10 +224,10 @@ export const env = {
   },
 
   // Raw dataset archival only — see services/s3-storage.service.ts. Not
-  // read anywhere else in the app. Left unset by default (unlike
-  // GEMINI_API_KEY, not `required()`) so the app still boots without AWS
-  // configured; the upload endpoint fails fast with a clear error only if
-  // a dataset is actually uploaded before these are set.
+  // read anywhere else in the app. Left unset by default (not `required()`)
+  // so the app still boots without AWS configured; the upload endpoint fails
+  // fast with a clear error only if a dataset is actually uploaded before
+  // these are set.
   S3: {
     BUCKET_NAME:      optional('S3_DATASET_BUCKET', ''),
     REGION:           optional('S3_REGION', optional('AWS_REGION', '')),
@@ -308,11 +309,10 @@ export const env = {
 
   HEALTH: {
     CACHE_TTL_MS:          nonNegativeInt('HEALTH_CHECK_CACHE_TTL_MS', 60000),
-    GEMINI_CHECK_ENABLED:  optional('HEALTH_GEMINI_CHECK_ENABLED', 'true') === 'true',
   },
 
   // ── Groq (TEMPORARY free-tier test provider; see llm/providers/groq-llm.provider.ts) ──
-  // Only used when a service's *_PROVIDER is set to 'groq'. Gemini stays the default everywhere.
+  // Only used when a service's *_PROVIDER is set to 'groq'. OpenAI stays the default everywhere.
   // The limits below are CLIENT-SIDE ceilings kept under the free-tier numbers for openai/gpt-oss-120b
   // (about 30 requests/min, 8,000 tokens/min, 200,000 tokens/day); Groq's own response headers tighten them further.
   GROQ: {
@@ -332,7 +332,7 @@ export const env = {
   // ── Provider-neutral LLM configuration ─────────────────────────
   // Every LLM-dependent service picks its provider+model from here rather
   // than hardcoding either — see src/llm/llm-provider.resolver.ts, which has
-  // the registered adapters (gemini, openai, groq) and throws a clear error
+  // the registered adapters (openai, groq) and throws a clear error
   // for any other PROVIDER value. config/llm-providers.ts checks the selected
   // providers' keys at startup.
   LLM: {
@@ -348,7 +348,7 @@ export const env = {
       PROVIDER:        RAG_PROVIDER,
       MODEL:           RAG_MODEL,
       THINKING: thinking('RAG_ANSWER_THINKING', 'low'),
-      // Used once retry attempts exceed llm-gemini.service.ts's own
+      // Used once retry attempts exceed answer-generation.service.ts's own
       // attempt<=2 threshold. Same provider only — see RAG_FALLBACK_MODEL.
       FALLBACK_MODEL:  RAG_FALLBACK_MODEL,
       // Deadline for one grounded-answer call (streaming or not). The largest
@@ -359,28 +359,28 @@ export const env = {
       TIMEOUT_MS:      positiveInt('RAG_ANSWER_TIMEOUT_MS', 45000),
     },
     QUERY_ROUTER: {
-      PROVIDER: optional('QUERY_ROUTER_LLM_PROVIDER', 'gemini'),
-      MODEL:    optional('QUERY_ROUTER_LLM_MODEL', 'gemini-2.5-flash'),
+      PROVIDER: optional('QUERY_ROUTER_LLM_PROVIDER', DEFAULT_LLM_PROVIDER),
+      MODEL:    optional('QUERY_ROUTER_LLM_MODEL', DEFAULT_LLM_MODEL),
       THINKING: thinking('QUERY_ROUTER_THINKING', 'minimal'),
     },
     // Natural reply to greetings/small talk (services/greeting-response.
     // service.ts). Higher temperature than the classifiers so replies vary;
     // falls back to a fixed message if the call fails.
     GREETING: {
-      PROVIDER:    optional('GREETING_LLM_PROVIDER', 'gemini'),
-      MODEL:       optional('GREETING_LLM_MODEL', 'gemini-2.5-flash'),
+      PROVIDER:    optional('GREETING_LLM_PROVIDER', DEFAULT_LLM_PROVIDER),
+      MODEL:       optional('GREETING_LLM_MODEL', DEFAULT_LLM_MODEL),
       THINKING: thinking('GREETING_THINKING', 'minimal'),
       TIMEOUT_MS:  positiveInt('GREETING_LLM_TIMEOUT_MS', 6000),
       TEMPERATURE: finiteFloat('GREETING_LLM_TEMPERATURE', 0.7),
     },
     QUERY_REWRITE: {
-      PROVIDER: optional('QUERY_REWRITE_LLM_PROVIDER', 'gemini'),
-      MODEL:    optional('QUERY_REWRITE_LLM_MODEL', 'gemini-2.5-flash'),
+      PROVIDER: optional('QUERY_REWRITE_LLM_PROVIDER', DEFAULT_LLM_PROVIDER),
+      MODEL:    optional('QUERY_REWRITE_LLM_MODEL', DEFAULT_LLM_MODEL),
       THINKING: thinking('QUERY_REWRITE_THINKING', 'minimal'),
     },
     LECTURE_SUMMARY: {
-      PROVIDER: optional('LECTURE_SUMMARY_LLM_PROVIDER', 'gemini'),
-      MODEL:    optional('LECTURE_SUMMARY_LLM_MODEL', 'gemini-2.5-flash'),
+      PROVIDER: optional('LECTURE_SUMMARY_LLM_PROVIDER', DEFAULT_LLM_PROVIDER),
+      MODEL:    optional('LECTURE_SUMMARY_LLM_MODEL', DEFAULT_LLM_MODEL),
       THINKING: thinking('LECTURE_SUMMARY_THINKING', 'low'),
     },
     GUARDRAIL: {
@@ -389,8 +389,8 @@ export const env = {
       // whether its Stage B semantic classifier may be used for genuinely
       // ambiguous input once Stage A's deterministic signals can't decide.
       ENABLED:     optional('GUARDRAIL_LLM_ENABLED', 'true') === 'true',
-      PROVIDER:    optional('GUARDRAIL_LLM_PROVIDER', 'gemini'),
-      MODEL:       optional('GUARDRAIL_LLM_MODEL', 'gemini-2.5-flash'),
+      PROVIDER:    optional('GUARDRAIL_LLM_PROVIDER', DEFAULT_LLM_PROVIDER),
+      MODEL:       optional('GUARDRAIL_LLM_MODEL', DEFAULT_LLM_MODEL),
       THINKING: thinking('GUARDRAIL_THINKING', 'minimal'),
       TIMEOUT_MS:  positiveInt('GUARDRAIL_LLM_TIMEOUT_MS', 4000),
       TEMPERATURE: finiteFloat('GUARDRAIL_LLM_TEMPERATURE', 0),
@@ -400,8 +400,8 @@ export const env = {
     // only reached for candidate compound queries (see compound-query.
     // detector.ts), never on every question.
     QUERY_DECOMPOSITION: {
-      PROVIDER:    optional('QUERY_DECOMPOSITION_LLM_PROVIDER', 'gemini'),
-      MODEL:       optional('QUERY_DECOMPOSITION_LLM_MODEL', 'gemini-2.5-flash'),
+      PROVIDER:    optional('QUERY_DECOMPOSITION_LLM_PROVIDER', DEFAULT_LLM_PROVIDER),
+      MODEL:       optional('QUERY_DECOMPOSITION_LLM_MODEL', DEFAULT_LLM_MODEL),
       THINKING: thinking('QUERY_DECOMPOSITION_THINKING', 'minimal'),
       TIMEOUT_MS:  positiveInt('QUERY_DECOMPOSITION_LLM_TIMEOUT_MS', 4000),
       TEMPERATURE: finiteFloat('QUERY_DECOMPOSITION_LLM_TEMPERATURE', 0),
@@ -413,8 +413,8 @@ export const env = {
     // never on every question and never as a second call for a query
     // decomposition already resolved.
     ADAPTIVE_RETRIEVAL: {
-      PROVIDER:    optional('ADAPTIVE_RETRIEVAL_LLM_PROVIDER', 'gemini'),
-      MODEL:       optional('ADAPTIVE_RETRIEVAL_LLM_MODEL', 'gemini-2.5-flash'),
+      PROVIDER:    optional('ADAPTIVE_RETRIEVAL_LLM_PROVIDER', DEFAULT_LLM_PROVIDER),
+      MODEL:       optional('ADAPTIVE_RETRIEVAL_LLM_MODEL', DEFAULT_LLM_MODEL),
       THINKING: thinking('ADAPTIVE_RETRIEVAL_THINKING', 'minimal'),
       TIMEOUT_MS:  positiveInt('ADAPTIVE_RETRIEVAL_LLM_TIMEOUT_MS', 4000),
       TEMPERATURE: finiteFloat('ADAPTIVE_RETRIEVAL_LLM_TEMPERATURE', 0),
@@ -424,13 +424,13 @@ export const env = {
     // RAG_ANSWER_MODEL (the generator) so a different/cheaper/stricter
     // model can judge/correct output without touching generation config.
     ANSWER_VERIFICATION: {
-      PROVIDER:    optional('ANSWER_VERIFICATION_LLM_PROVIDER', 'gemini'),
-      MODEL:       optional('ANSWER_VERIFICATION_LLM_MODEL', 'gemini-2.5-flash'),
+      PROVIDER:    optional('ANSWER_VERIFICATION_LLM_PROVIDER', DEFAULT_LLM_PROVIDER),
+      MODEL:       optional('ANSWER_VERIFICATION_LLM_MODEL', DEFAULT_LLM_MODEL),
       THINKING: thinking('ANSWER_VERIFICATION_THINKING', 'off'),
       TIMEOUT_MS:  positiveInt('ANSWER_VERIFICATION_LLM_TIMEOUT_MS', 8000),
       TEMPERATURE: finiteFloat('ANSWER_VERIFICATION_LLM_TEMPERATURE', 0),
-      // Output cap for the verdict call. Thinking tokens count against it, and
-      // Gemini 3.x cannot switch thinking off, so raise this there.
+      // Output cap for the verdict call. Reasoning tokens count against it, so
+      // raise this if ANSWER_VERIFICATION_THINKING is raised.
       MAX_OUTPUT_TOKENS: positiveInt('ANSWER_VERIFICATION_MAX_OUTPUT_TOKENS', 500),
     },
     // Used only when Selective Output Format Validation finds a grounded
@@ -441,8 +441,8 @@ export const env = {
     // independent of RAG_ANSWER_MODEL/ANSWER_VERIFICATION_MODEL — this only
     // ever reformats, never regenerates or re-judges content.
     OUTPUT_FORMAT_REPAIR: {
-      PROVIDER:    optional('OUTPUT_FORMAT_REPAIR_LLM_PROVIDER', 'gemini'),
-      MODEL:       optional('OUTPUT_FORMAT_REPAIR_LLM_MODEL', 'gemini-2.5-flash'),
+      PROVIDER:    optional('OUTPUT_FORMAT_REPAIR_LLM_PROVIDER', DEFAULT_LLM_PROVIDER),
+      MODEL:       optional('OUTPUT_FORMAT_REPAIR_LLM_MODEL', DEFAULT_LLM_MODEL),
       THINKING: thinking('OUTPUT_FORMAT_REPAIR_THINKING', 'minimal'),
       TIMEOUT_MS:  positiveInt('OUTPUT_FORMAT_REPAIR_LLM_TIMEOUT_MS', 4000),
       TEMPERATURE: finiteFloat('OUTPUT_FORMAT_REPAIR_LLM_TEMPERATURE', 0),

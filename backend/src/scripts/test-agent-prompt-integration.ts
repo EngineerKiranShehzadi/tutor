@@ -1,8 +1,8 @@
 /**
- * Validates the agent-instruction integration in llm-gemini.service.ts
+ * Validates the agent-instruction integration in answer-generation.service.ts
  * (buildAgentInstructionBlock + generateAnswer's optional agentProfile).
  *
- * No Gemini request is ever made: the shared Gemini provider object's
+ * No LLM request is ever made: the shared LLM provider object's
  * `generate` is replaced with a recorder for the duration of each case, and
  * the answer-retry sleep is made instantaneous. Nothing connects to
  * PostgreSQL and no agent profile is loaded from the database — profiles
@@ -20,8 +20,8 @@ import {
   ANSWER_PROMPT_VERSION,
   ConversationTurn,
   AnswerStreamHandlers,
-} from '../services/llm-gemini.service';
-import { geminiLlmProvider } from '../llm/providers/gemini-llm.provider';
+} from '../services/answer-generation.service';
+import { openAiLlmProvider } from '../llm/providers/openai-llm.provider';
 import type { LlmRequest, LlmResponse } from '../llm/llm.types';
 import { INSTRUCTIONS_BY_VIDEO_ID } from './seed-agent-profiles';
 
@@ -80,13 +80,13 @@ async function withFakeProvider<T>(
   fn: (requests: LlmRequest[]) => Promise<T>
 ): Promise<{ value: T; requests: LlmRequest[] }> {
   const requests: LlmRequest[] = [];
-  const originalGenerate = geminiLlmProvider.generate;
+  const originalGenerate = openAiLlmProvider.generate;
   const originalSetTimeout = globalThis.setTimeout;
-  geminiLlmProvider.generate = async (req: LlmRequest): Promise<LlmResponse> => {
+  openAiLlmProvider.generate = async (req: LlmRequest): Promise<LlmResponse> => {
     requests.push(req);
     const step = script[Math.min(requests.length - 1, script.length - 1)];
     if (step instanceof Error) throw step;
-    return { raw: step, provider: 'gemini', model: req.model, finishReason: 'STOP' };
+    return { raw: step, provider: 'openai', model: req.model, finishReason: 'STOP' };
   };
   // generateAnswer sleeps 6s/12s between transient-error retries.
   (globalThis as { setTimeout: unknown }).setTimeout = ((cb: () => void) => { cb(); return 0; }) as unknown;
@@ -94,7 +94,7 @@ async function withFakeProvider<T>(
     const value = await fn(requests);
     return { value, requests };
   } finally {
-    geminiLlmProvider.generate = originalGenerate;
+    openAiLlmProvider.generate = originalGenerate;
     globalThis.setTimeout = originalSetTimeout;
   }
 }
@@ -302,7 +302,7 @@ cases.push({
 cases.push({
   label: '15. Version/scope: ANSWER_PROMPT_VERSION is v3 (bumped with the SYSTEM_PROMPT change, S12); the service never loads profiles or touches the database',
   run: async () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'services', 'llm-gemini.service.ts'), 'utf8');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'services', 'answer-generation.service.ts'), 'utf8');
     const importLines = src.split('\n').filter(l => /^\s*import\b/.test(l)).join('\n');
     const loadsProfiles = /lecture-agent-profile\.service|config\/database|getAgentProfileByLectureId/.test(importLines + src.replace(/\/\/.*$/gm, ''));
     const pass = ANSWER_PROMPT_VERSION === 'v3' && !loadsProfiles;

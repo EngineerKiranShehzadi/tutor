@@ -2,11 +2,11 @@
  * Dedup before/after, restricted to the highest-duplicate-count questions
  * specifically (wastedSlots >= 3 in the raw top-5), not a general random
  * sample. Screening (retrieval+rerank) is free/local, so we can screen a
- * wide pool cheaply and only spend Gemini quota on the filtered subset that
+ * wide pool cheaply and only spend LLM calls on the filtered subset that
  * gives the fix its best chance of showing a measurable effect.
  *
- * Uses ONE model for generation throughout both conditions (set via
- * GENERATION_MODEL below) to avoid the confound risk flagged in review.
+ * Uses ONE model for generation throughout both conditions (the configured
+ * answer model, RAG_ANSWER_MODEL) to avoid the confound risk flagged in review.
  *
  * Usage: npm run eval:dedup-highwaste [lectureId]
  */
@@ -15,22 +15,18 @@ import { query } from '../config/database';
 import { generateEmbedding } from '../services/embedding.service';
 import { searchChunks } from '../services/vector-search.service';
 import { rerankChunks, dedupeAndSelect, reorderForContext } from '../services/rerank.service';
-import { generateContent } from '../services/gemini-provider.service';
+import { JUDGE_MODEL, answerLlm, judgeLlm, requireLiveLlm } from './live-llm';
 import { getLectureById } from '../services/lecture.service';
 import { QnaChunk } from '../types';
 import { logger } from '../utils/logger';
 
-const SCREEN_POOL_SIZE = 40;       // wide screening pool (free — no Gemini calls)
+const SCREEN_POOL_SIZE = 40;       // wide screening pool (free — no LLM calls)
 const MIN_WASTED_SLOTS = 3;        // filter: only the worst-affected questions
 const MAX_EVAL_QUESTIONS = 8;      // cap on how many filtered questions get generate+judge
 const CANDIDATE_POOL_SIZE = 15;
-const GENERATION_MODEL = 'gemini-3.1-flash-lite'; // single model, both conditions
-const JUDGE_MODEL = 'gemini-flash-lite-latest';
+const GENERATION_MODEL = env.LLM.RAG_ANSWER.MODEL; // single model, both conditions
 
-if (!env.GEMINI_API_KEY) {
-  console.error('GEMINI_API_KEY is not configured.');
-  process.exit(1);
-}
+requireLiveLlm();
 
 const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
 
@@ -66,8 +62,7 @@ function buildContext(chunks: QnaChunk[]): string {
 async function generateAnswerFixedModel(question: string, chunks: QnaChunk[]): Promise<string> {
   const prompt = `${SYSTEM_PROMPT}\n\nLecture Q&A Context:\n${buildContext(chunks)}\n\nCurrent Student Question:\n${question}`;
   return callWithRetry(async () => {
-    const result = await generateContent({ model: GENERATION_MODEL, prompt, temperature: 0.3, maxOutputTokens: 8192 });
-    const answer = result.text;
+    const answer = await answerLlm(prompt, { temperature: 0.3, maxOutputTokens: 8192 });
     if (!answer?.trim()) throw new Error('Empty response');
     return answer;
   }, 'GEN');
@@ -75,8 +70,7 @@ async function generateAnswerFixedModel(question: string, chunks: QnaChunk[]): P
 
 async function askJudge(prompt: string): Promise<boolean> {
   return callWithRetry(async () => {
-    const result = await generateContent({ model: JUDGE_MODEL, prompt, temperature: 0 });
-    return result.text.trim().toUpperCase().startsWith('PASS');
+    return (await judgeLlm(prompt)).trim().toUpperCase().startsWith('PASS');
   }, 'JUDGE');
 }
 
@@ -200,7 +194,7 @@ async function main() {
   const lectureId = parseInt(process.argv[2] ?? '1', 10);
   const lecture = await getLectureById(lectureId);
   logger.info(`[EVAL-HW] Target lecture #${lectureId}: "${lecture.title}"`);
-  logger.info(`[EVAL-HW] Generation model: ${GENERATION_MODEL} (fixed, both conditions) | Judge model: gemini-flash-lite-latest`);
+  logger.info(`[EVAL-HW] Generation model: ${GENERATION_MODEL} (fixed, both conditions) | Judge model: ${JUDGE_MODEL}`);
 
   const prepared = await screenAndFilter(lectureId);
   if (prepared.length === 0) {

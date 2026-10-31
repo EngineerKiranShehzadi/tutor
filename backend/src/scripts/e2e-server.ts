@@ -1,14 +1,14 @@
 /**
  * TEST-ONLY server entry for the browser end-to-end run (backend/e2e/README.md).
  *
- * Everything is the real backend EXCEPT the Gemini calls, which are replaced by
- * a small deterministic stub — because the Gemini API key in this environment is
- * over quota (HTTP 429), and because a stub makes the answers checkable:
+ * Everything is the real backend EXCEPT the LLM calls, which are replaced by a
+ * small deterministic stub — so the run needs no API key and spends nothing, and
+ * because a stub makes the answers checkable:
  *   - answer generation: returns "According to the lecture: <the Answer: text of
  *     the FIRST retrieved chunk>" — so which dataset version was retrieved is
  *     visible in the answer text itself;
  *   - groundedness verifier: VERIFIED;
- *   - every other schema-based Gemini call (router / injection classifier /
+ *   - every other schema-based LLM call (router / injection classifier /
  *     decomposition / rewrite / planner) fails, so the code's own safe defaults apply.
  * Retrieval, reranking, embeddings, answer memory, versions, SQL are all real.
  *
@@ -26,7 +26,9 @@ if (!/(localhost|127\.0\.0\.1)/.test(dbUrl) || !/(test|pipe)/i.test(dbUrl.split(
   process.exit(2);
 }
 
-import { geminiLlmProvider } from '../llm/providers/gemini-llm.provider';
+import { selectedLlmProviders } from '../config/llm-providers';
+import { resolveLlmProvider } from '../llm/llm-provider.resolver';
+import type { LlmProvider } from '../llm/providers/llm-provider.interface';
 import type { LlmRequest, LlmResponse } from '../llm/llm.types';
 
 const delayMs = (): number => {
@@ -41,32 +43,35 @@ const firstAnswer = (prompt: string): string => {
   return a ? a[1].trim() : '';
 };
 
-const respond = (req: LlmRequest, raw: string): LlmResponse => ({ raw, provider: 'gemini', model: req.model, finishReason: 'STOP' });
-
-if (process.env.E2E_LLM !== 'real') {
-  geminiLlmProvider.generate = async (req: LlmRequest): Promise<LlmResponse> => {
+const stub = (provider: LlmProvider): void => {
+  const respond = (req: LlmRequest, raw: string): LlmResponse => ({ raw, provider: provider.name, model: req.model, finishReason: 'STOP' });
+  provider.generate = async (req: LlmRequest): Promise<LlmResponse> => {
     if (req.responseSchema) {
       const props = (req.responseSchema as { properties?: Record<string, unknown> }).properties ?? {};
       if ('decision' in props) {
         return respond(req, JSON.stringify({ decision: 'VERIFIED', unsupportedClaims: [], missingAspects: [], reason: 'e2e stub verifier' }));
       }
-      throw new Error('e2e stub: structured Gemini call not available (code falls back to its defaults)');
+      throw new Error('e2e stub: structured LLM call not available (code falls back to its defaults)');
     }
     await sleep(delayMs());
     const ans = firstAnswer(req.userPrompt);
     if (!ans) return respond(req, 'I could not find this information in this lecture.');
     return respond(req, `According to the lecture: ${ans}`);
   };
-  geminiLlmProvider.generateStream = async (req: LlmRequest, onDelta: (t: string) => void): Promise<LlmResponse> => {
-    const r = await geminiLlmProvider.generate(req);
+  provider.generateStream = async (req: LlmRequest, onDelta: (t: string) => void): Promise<LlmResponse> => {
+    const r = await provider.generate(req);
     onDelta(r.raw);
     return r;
   };
+};
 
+// Every provider an LLM task selects (openai by default) gets the stub.
+if (process.env.E2E_LLM !== 'real') {
+  for (const name of selectedLlmProviders().keys()) stub(resolveLlmProvider(name));
 }
 
 console.log(process.env.E2E_LLM === 'real'
   ? '[e2e-server] REAL LLM calls (no stub) — providers/models come from the environment (see e2e/groq-env.sh)'
-  : '[e2e-server] Gemini replaced by a deterministic stub — retrieval/versions/memory are real');
+  : '[e2e-server] LLM replaced by a deterministic stub — retrieval/versions/memory are real');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 require('../server');

@@ -8,7 +8,7 @@ import { logger } from '../utils/logger';
 import { EMBEDDING_MODEL_VERSION } from './embedding.service';
 import { RERANKER_MODEL_VERSION, DEFAULT_MIN_RERANK_SCORE } from './rerank.service';
 import { SIMILARITY_THRESHOLD } from './vector-search.service';
-import { ANSWER_PROMPT_VERSION } from './llm-gemini.service';
+import { ANSWER_PROMPT_VERSION } from './answer-generation.service';
 import { RequestTrace, recordTrace } from '../observability/tracer';
 import { ATTR } from '../observability/otel-semconv';
 import { isContentCaptureEnabled, truncateContent, logSafeText } from '../observability/sanitize';
@@ -27,7 +27,7 @@ import { runOutputGuardrail, VERIFICATION_UNAVAILABLE_MESSAGE } from '../rag/gua
 import { createPiiSafeStream } from '../rag/guardrails/output/pii/streaming-pii-redactor';
 import type { OutputGuardrailParams } from '../rag/guardrails/output/output-guardrail.service';
 import type { OutputGuardrailResult } from '../rag/guardrails/output/answer-verification.types';
-import type { ConversationTurn, AnswerStreamHandlers } from './llm-gemini.service';
+import type { ConversationTurn, AnswerStreamHandlers } from './answer-generation.service';
 import type { DedupeResult } from './rerank.service';
 import type { RetrievalQueryResult } from './query-rewriter.service';
 import type { RouteClassification } from './query-router.service';
@@ -331,8 +331,8 @@ export const askLectureAgent = async (
   // (including every nested service function called below, no matter how
   // many modules deep) — see RequestTrace.runAsActive()/getActiveTrace() in
   // tracer.ts. This is what lets withLlmDiagnostic() (llm/llm-observability.
-  // service.ts) attach real nested LLM spans (gemini_router_call,
-  // gemini_answer_call, prompt_injection_classifier_call, ...) under
+  // service.ts) attach real nested LLM spans (router_call,
+  // answer_call, prompt_injection_classifier_call, ...) under
   // whichever trace.span() is currently executing, without threading
   // `trace` through every function signature in the pipeline.
   return trace.runAsActive(() => runAskLectureAgent());
@@ -497,7 +497,7 @@ export const askLectureAgent = async (
     const rerankChunksFn        = deps.rerankChunks          ?? (await import('./rerank.service')).rerankChunks;
     const dedupeAndSelect       = deps.dedupeAndSelect       ?? (await import('./rerank.service')).dedupeAndSelect;
     const reorderForContext     = deps.reorderForContext     ?? (await import('./rerank.service')).reorderForContext;
-    const generateAnswer        = deps.generateAnswer        ?? (await import('./llm-gemini.service')).generateAnswer;
+    const generateAnswer        = deps.generateAnswer        ?? (await import('./answer-generation.service')).generateAnswer;
     const resolveRetrievalQuery = deps.resolveRetrievalQuery ?? (await import('./query-rewriter.service')).resolveRetrievalQuery;
     const classifyRoute         = deps.classifyRoute         ?? (await import('./query-router.service')).classifyRoute;
     const generateGreeting      = deps.generateGreeting      ?? (await import('./greeting-response.service')).generateGreetingResponse;
@@ -947,7 +947,7 @@ export const askLectureAgent = async (
 
       // 6d. Everything survived retrieval but the relevance floor removed every
       // candidate — same not-found outcome as zero candidates, without ever
-      // calling Gemini with an empty context.
+      // calling the LLM with an empty context.
       if (chunks.length === 0) {
         logger.warn(`[CHAT] ⚠️  All candidates fell below the relevance floor — returning not-found message`);
         currentStage = 'save-chat-entry';
@@ -980,7 +980,7 @@ export const askLectureAgent = async (
       'generate-grounded-answer',
       // uncoveredAspects is only ever non-empty for a decomposed query with
       // partial coverage — see generateAnswer's doc comment in
-      // llm-gemini.service.ts for how it's used (a note, never merged into
+      // answer-generation.service.ts for how it's used (a note, never merged into
       // the grounded context itself).
       async () => {
         const draft = await generateAnswer(question, contextChunks, lecture.title, historyTurns, uncoveredAspects, 1, draftStream, agentProfile, unavailableAspects);

@@ -1,65 +1,58 @@
 /**
- * Per-task thinking control + chat history window.
- * No network, no DB, no live Gemini: the @google/genai Models methods are
- * stubbed and the request config they receive is inspected.
+ * Per-task thinking control, per-task provider/model defaults, and the chat
+ * history window. No network, no DB, no key: fetch is stubbed and the
+ * request body the OpenAI adapter sends is inspected.
  *
  * Usage: npm run test:llm-thinking
  */
 import { spawnSync } from 'child_process';
 import * as path from 'path';
 
-process.env.GEMINI_API_KEY = process.env.GEMINI_API_KEY || 'test-key-not-used';
+process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'sk-test-key-not-used';
 
 interface Case { label: string; run: () => boolean | Promise<boolean> }
 const cases: Case[] = [];
 
-type Captured = { model: string; config: Record<string, unknown> };
-const captured: Captured[] = [];
+const captured: Record<string, unknown>[] = [];
 
 async function main() {
-  const { geminiLlmProvider } = await import('../llm/providers/gemini-llm.provider');
-  const { toGeminiThinkingConfig } = await import('../llm/providers/gemini-thinking');
+  const { resolveLlmProvider } = await import('../llm/llm-provider.resolver');
   const { selectHistoryTurns } = await import('../services/chat.service');
   const { env } = await import('../config/env');
+  type Thinking = Parameters<typeof import('../llm/providers/openai-llm.provider').toOpenAiReasoningEffort>[0];
 
-  // The SDK talks to Gemini over fetch: replace it so nothing leaves the
-  // process, and record the outgoing request body (generationConfig holds
-  // the thinkingConfig the model would receive).
-  const fakeBody = { candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }], usageMetadata: {} };
-  globalThis.fetch = (async (url: unknown, init?: { body?: string }) => {
-    const body = JSON.parse(init?.body ?? '{}') as { generationConfig?: Record<string, unknown> };
-    captured.push({ model: String(url), config: body.generationConfig ?? {} });
-    const streaming = String(url).includes('streamGenerateContent');
-    return new Response(streaming ? `data: ${JSON.stringify(fakeBody)}\n\n` : JSON.stringify(fakeBody), {
-      status: 200,
-      headers: { 'content-type': streaming ? 'text/event-stream' : 'application/json' },
-    });
+  // Nothing leaves the process: every Chat Completions request is answered
+  // here, and its body (reasoning_effort is what the model would receive) kept.
+  const completion = { model: 'gpt-6-luna', choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } };
+  globalThis.fetch = (async (_url: unknown, init?: { body?: string }) => {
+    const body = JSON.parse(init?.body ?? '{}') as Record<string, unknown>;
+    captured.push(body);
+    if (body.stream) {
+      const sse = [{ model: 'gpt-6-luna', choices: [{ index: 0, delta: { content: 'ok' }, finish_reason: 'stop' }] }, { model: 'gpt-6-luna', choices: [], usage: completion.usage }]
+        .map(c => `data: ${JSON.stringify(c)}\n\n`).join('') + 'data: [DONE]\n\n';
+      return new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    }
+    return new Response(JSON.stringify(completion), { status: 200, headers: { 'content-type': 'application/json' } });
   }) as typeof fetch;
 
-  const sent = async (model: string, thinking?: Parameters<typeof toGeminiThinkingConfig>[1], stream = false) => {
+  const llm = resolveLlmProvider('openai');
+  const sent = async (thinking?: Thinking, stream = false) => {
     captured.length = 0;
-    const req = { model, userPrompt: 'q', thinking };
-    if (stream) await geminiLlmProvider.generateStream!(req, () => undefined);
-    else await geminiLlmProvider.generate(req);
-    return captured[0].config.thinkingConfig as Record<string, unknown> | undefined;
+    const req = { model: env.LLM.RAG_ANSWER.MODEL, userPrompt: 'q', thinking };
+    if (stream) await llm.generateStream!(req, () => undefined);
+    else await llm.generate(req);
+    return captured[0]?.reasoning_effort;
   };
-  const eq = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
   // ── reaches the provider request ────────────────────────────────
-  cases.push({ label: '2.5 model: low -> thinkingBudget 1024 in request', run: async () => eq(await sent('gemini-2.5-flash-lite', 'low'), { thinkingBudget: 1024 }) });
-  cases.push({ label: '2.5 model: off and minimal -> thinkingBudget 0', run: async () =>
-    eq(await sent('gemini-2.5-flash-lite', 'off'), { thinkingBudget: 0 }) && eq(await sent('gemini-2.5-flash', 'minimal'), { thinkingBudget: 0 }) });
-  cases.push({ label: '2.5 Pro cannot be disabled: off -> budget 128', run: async () => eq(await sent('gemini-2.5-pro', 'off'), { thinkingBudget: 128 }) });
-  cases.push({ label: '3.8 Flash: low -> thinkingLevel LOW, no thinkingBudget', run: async () => eq(await sent('gemini-3.8-flash', 'low'), { thinkingLevel: 'LOW' }) });
-  cases.push({ label: '3.8 Flash: medium/high pass through', run: async () =>
-    eq(await sent('gemini-3.8-flash', 'medium'), { thinkingLevel: 'MEDIUM' }) && eq(await sent('gemini-3.8-flash', 'high'), { thinkingLevel: 'HIGH' }) });
-  cases.push({ label: '3.8 Flash rejects MINIMAL: off/minimal clamp to LOW', run: async () =>
-    eq(await sent('gemini-3.8-flash', 'off'), { thinkingLevel: 'LOW' }) && eq(await sent('gemini-3.8-flash', 'minimal'), { thinkingLevel: 'LOW' }) });
-  cases.push({ label: 'earlier 3.x Flash accepts MINIMAL', run: async () => eq(await sent('gemini-3-flash-preview', 'minimal'), { thinkingLevel: 'MINIMAL' }) });
-  cases.push({ label: 'streaming request carries thinking too (2.5 and 3.x)', run: async () =>
-    eq(await sent('gemini-2.5-flash', 'low', true), { thinkingBudget: 1024 }) && eq(await sent('gemini-3.8-flash', 'low', true), { thinkingLevel: 'LOW' }) });
-  cases.push({ label: 'thinking unset or unknown model family -> no thinkingConfig sent', run: async () =>
-    (await sent('gemini-2.5-flash')) === undefined && (await sent('gemini-flash-latest', 'low')) === undefined });
+  cases.push({ label: 'thinking reaches the request as reasoning_effort: low/medium/high as named', run: async () =>
+    (await sent('low')) === 'low' && (await sent('medium')) === 'medium' && (await sent('high')) === 'high' });
+  cases.push({ label: 'off and minimal -> reasoning_effort none (no reasoning tokens billed)', run: async () =>
+    (await sent('off')) === 'none' && (await sent('minimal')) === 'none' });
+  cases.push({ label: 'thinking unset -> reasoning_effort none, still sent (the model default is never relied on)', run: async () =>
+    (await sent(undefined)) === 'none' });
+  cases.push({ label: 'streaming request carries reasoning_effort too', run: async () =>
+    (await sent('low', true)) === 'low' && captured[0]?.stream === true });
 
   // ── defaults / env parsing (child process with the vars blanked) ─
   const TASKS = ['RAG_ANSWER', 'ANSWER_VERIFICATION', 'QUERY_ROUTER', 'QUERY_REWRITE', 'GUARDRAIL', 'QUERY_DECOMPOSITION',
@@ -83,6 +76,30 @@ async function main() {
   cases.push({ label: 'env overrides honored; invalid value falls back to default', run: () => {
     const o = readEnv({ QUERY_ROUTER_THINKING: 'HIGH', RAG_ANSWER_THINKING: 'bogus', CHAT_HISTORY_TURNS: '4' });
     return o.t.QUERY_ROUTER === 'high' && o.t.RAG_ANSWER === 'low' && o.chat === 4;
+  } });
+
+  // ── provider / model defaults (child process, no .env, no LLM vars) ─
+  // The child gets only what env.ts requires to load, and dotenv is stubbed so
+  // backend/.env cannot fill anything in: every *_LLM_PROVIDER, *_LLM_MODEL,
+  // RAG_LLM_PROVIDER, RAG_ANSWER_MODEL and RAG_ANSWER_FALLBACK_MODEL is unset.
+  cases.push({ label: 'every *_LLM_PROVIDER / *_LLM_MODEL unset (no .env): all ten tasks resolve to provider openai, model gpt-6-luna; answer fallback gpt-6-luna', run: () => {
+    const bin = path.join(__dirname, '..', '..', 'node_modules', '.bin', 'ts-node');
+    const code = `require('dotenv').config = () => ({ parsed: {} });
+      const { env } = require('../config/env');
+      const { resolveLlmProvider } = require('../llm/llm-provider.resolver');
+      const { selectedLlmProviders } = require('../config/llm-providers');
+      const tasks = {};
+      for (const [k, c] of Object.entries(env.LLM)) if (c && c.PROVIDER !== undefined) tasks[k] = { provider: c.PROVIDER, resolved: resolveLlmProvider(c.PROVIDER).name, model: c.MODEL };
+      console.log(JSON.stringify({ tasks, fallback: env.LLM.RAG_ANSWER.FALLBACK_MODEL, selected: [...selectedLlmProviders().keys()], dotenvRead: env.DB.URL !== '' }));`;
+    const childEnv = { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', NODE_ENV: 'development', DB_PASSWORD: 'unused', JWT_SECRET: 'j'.repeat(40), JWT_REFRESH_SECRET: 'r'.repeat(40) };
+    const r = spawnSync(bin, ['--transpile-only', '-e', code], { cwd: __dirname, env: childEnv, encoding: 'utf8' });
+    const o = JSON.parse(r.stdout.trim().split('\n').pop() || '{}') as { tasks?: Record<string, { provider: string; resolved: string; model: string }>; fallback?: string; selected?: string[]; dotenvRead?: boolean };
+    const tasks = Object.entries(o.tasks ?? {});
+    const ok = tasks.length === TASKS.length && TASKS.every(t => o.tasks?.[t] !== undefined)
+      && tasks.every(([, t]) => t.provider === 'openai' && t.resolved === 'openai' && t.model === 'gpt-6-luna')
+      && o.fallback === 'gpt-6-luna' && JSON.stringify(o.selected) === '["openai"]' && o.dotenvRead === false;
+    if (!ok) console.log(`      child: status=${r.status} ${r.stdout.trim().slice(-400)} ${r.stderr.trim().slice(-300)}`);
+    return ok;
   } });
 
   // ── CHAT_HISTORY_TURNS ──────────────────────────────────────────

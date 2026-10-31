@@ -1,6 +1,6 @@
 /**
  * Unit tests for the recursive sanitization/truncation utility
- * (observability/sanitize.ts). No DB, no network, no Gemini — pure
+ * (observability/sanitize.ts). No DB, no network, no LLM — pure
  * function tests, same manual-assertion convention as every other test
  * script in this project (see test-observability.ts).
  *

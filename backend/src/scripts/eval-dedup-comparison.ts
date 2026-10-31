@@ -15,32 +15,25 @@
  *
  * Usage: npm run eval:dedup-comparison [lectureId]
  */
-import { env } from '../config/env';
 import { query } from '../config/database';
 import { generateEmbedding } from '../services/embedding.service';
 import { searchChunks } from '../services/vector-search.service';
 import { rerankChunks, dedupeAndSelect, reorderForContext } from '../services/rerank.service';
-import { generateAnswer } from '../services/llm-gemini.service';
-import { generateContent } from '../services/gemini-provider.service';
+import { generateAnswer } from '../services/answer-generation.service';
+import { judgeLlm, requireLiveLlm } from './live-llm';
 import { getLectureById } from '../services/lecture.service';
 import { QnaChunk } from '../types';
 import { logger } from '../utils/logger';
 
 const NUM_EVAL_QUESTIONS = 8;
 const CANDIDATE_POOL_SIZE = 15;
-const JUDGE_MODEL = 'gemini-flash-lite-latest';
-
-if (!env.GEMINI_API_KEY) {
-  console.error('GEMINI_API_KEY is not configured.');
-  process.exit(1);
-}
+requireLiveLlm();
 
 const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
 
 async function askJudge(prompt: string, attempt = 1): Promise<boolean> {
   try {
-    const result = await generateContent({ model: JUDGE_MODEL, prompt, temperature: 0 });
-    return result.text.trim().toUpperCase().startsWith('PASS');
+    return (await judgeLlm(prompt)).trim().toUpperCase().startsWith('PASS');
   } catch (err: unknown) {
     const msg = String((err as Error).message ?? '');
     const isRateLimit = msg.includes('429') || msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('resource_exhausted');

@@ -2,15 +2,15 @@
  * Validates the history-aware query-rewriting step added to askLectureAgent
  * (see query-rewriter.service.ts). Covers the rewriter's own detection,
  * parsing, and fallback logic directly — fast and deterministic, no live
- * services needed for most cases — plus two live Gemini rewrite-quality
+ * services needed for most cases — plus two live LLM rewrite-quality
  * checks and a chat.service wiring check against a real lecture from the DB
  * (embedding/rerank/answer-generation calls are stubbed via
  * askLectureAgent's deps seam, so no Python embedding/rerank server or
- * extra Gemini calls are needed for that part).
+ * extra LLM calls are needed for that part).
  *
  * Usage: npm run test:query-rewriter
  */
-import { env } from '../config/env';
+import { requireLiveLlm } from './live-llm';
 import { query } from '../config/database';
 import {
   isContextDependent,
@@ -28,10 +28,7 @@ import { assertThrowawayDb } from './test-db-guard-lib';
 
 assertThrowawayDb('test-query-rewriter');
 
-if (!env.GEMINI_API_KEY) {
-  console.error('GEMINI_API_KEY is not configured.');
-  process.exit(1);
-}
+requireLiveLlm();
 
 interface CaseResult {
   pass: boolean;
@@ -136,7 +133,7 @@ cases.push({
 
 // 10. No rewriting call occurs when the question is already self-contained
 // (elapsed time is the observable proxy for "no network round-trip happened" —
-// a real Gemini call takes hundreds of ms+, a skipped one returns near-instantly).
+// a real LLM call takes hundreds of ms+, a skipped one returns near-instantly).
 cases.push({
   label: '10. No rewrite call is made for a self-contained question',
   run: async () => {
@@ -151,7 +148,7 @@ cases.push({
 
 // 8 & 9. chat.service wiring — verified together against a real lecture, with
 // the AI/network calls stubbed via askLectureAgent's deps seam so this needs
-// only a live Postgres connection, not the embedding/rerank/Gemini services.
+// only a live Postgres connection, not the embedding/rerank/LLM services.
 async function runWiringCheck(): Promise<{ eight: CaseResult; nine: CaseResult }> {
   const { rows: lectureRows } = await query<{ id: number }>(`SELECT id FROM lectures WHERE status = 'READY' LIMIT 1`);
   const { rows: userRows } = await query<{ id: string }>(`SELECT id FROM users LIMIT 1`);

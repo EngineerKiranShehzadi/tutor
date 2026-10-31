@@ -4,7 +4,7 @@
  * improved "not found in lecture" fallback paths in chat.service.ts.
  *
  * Two tiers, like test-query-rewriter.ts:
- *  - Part A: pure/deterministic rule checks, a couple of live Gemini
+ *  - Part A: pure/deterministic rule checks, a couple of live LLM
  *    quality checks (route classification + summary grounding), and a
  *    static dead-code check — no DB required.
  *  - Part B: chat.service wiring, verified against a real lecture from the
@@ -14,7 +14,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import { env } from '../config/env';
+import { requireLiveLlm } from './live-llm';
 import { query } from '../config/database';
 import { QnaChunk } from '../types';
 import {
@@ -38,10 +38,7 @@ import { assertThrowawayDb } from './test-db-guard-lib';
 
 assertThrowawayDb('test-query-router');
 
-if (!env.GEMINI_API_KEY) {
-  console.error('GEMINI_API_KEY is not configured.');
-  process.exit(1);
-}
+requireLiveLlm();
 
 interface CaseResult {
   pass: boolean;
@@ -210,7 +207,7 @@ cases.push({
 });
 
 cases.push({
-  label: '22. Summary generation stays grounded in the provided lecture content (live Gemini check)',
+  label: '22. Summary generation stays grounded in the provided lecture content (live LLM check)',
   run: async () => {
     const distinctive = fakeChunk(901, {
       topic: 'Zorvath Protocol',
@@ -276,7 +273,7 @@ async function runIntegrationChecks(): Promise<Record<string, CaseResult>> {
       };
     }
 
-    // 10 & 12a. Zero vector candidates → exact fallback, no Gemini, saved correctly
+    // 10 & 12a. Zero vector candidates → exact fallback, no LLM, saved correctly
     {
       let answerCalled = 0;
       const deps: AskLectureAgentDeps = {
@@ -292,7 +289,7 @@ async function runIntegrationChecks(): Promise<Record<string, CaseResult>> {
       results['12a'] = { pass: stored?.answer === LECTURE_NOT_FOUND_MESSAGE && stored?.question === q, detail: `stored answer="${stored?.answer}"` };
     }
 
-    // 11 & 12b. All candidates below the relevance floor → same fallback, no Gemini, saved correctly
+    // 11 & 12b. All candidates below the relevance floor → same fallback, no LLM, saved correctly
     {
       let answerCalled = 0;
       const deps: AskLectureAgentDeps = {
@@ -413,8 +410,8 @@ async function main() {
   console.log('\n--- chat.service wiring (real lecture, stubbed AI calls) ---');
   const labels: Record<string, string> = {
     '9': '9. FACT_QUESTION uses embedding/vector-search/rerank pipeline with the original question',
-    '10': '10. Zero vector candidates → exact fallback, no Gemini call',
-    '11': '11. All candidates below relevance floor → exact fallback, no Gemini call',
+    '10': '10. Zero vector candidates → exact fallback, no LLM call',
+    '11': '11. All candidates below relevance floor → exact fallback, no LLM call',
     '12a': '12 (path 1). Fallback saved correctly',
     '12b': '12 (path 2). Fallback saved correctly',
     '15': '15. Rewritten query used for embedding and reranking',

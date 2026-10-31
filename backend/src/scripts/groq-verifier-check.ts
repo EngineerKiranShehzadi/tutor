@@ -4,7 +4,7 @@
  * ~8 model calls (a few thousand tokens). Needs GROQ_API_KEY in .env.
  */
 import { verifyAnswerGroundedness } from '../rag/guardrails/output/answer-groundedness-verifier.service';
-import { generateAnswer } from '../services/llm-gemini.service';
+import { generateAnswer } from '../services/answer-generation.service';
 import { groqLimiter } from '../llm/providers/groq-llm.provider';
 import { env } from '../config/env';
 import type { QnaChunk } from '../types';

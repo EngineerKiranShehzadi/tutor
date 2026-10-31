@@ -236,7 +236,7 @@ export default function Home() {
               {[
                 { icon: 'fas fa-database',   text: 'pgvector powered' },
                 { icon: 'fas fa-microphone', text: 'Voice enabled' },
-                { icon: 'fas fa-robot',      text: 'Gemini AI powered' },
+                { icon: 'fas fa-robot',      text: 'OpenAI powered' },
               ].map(({ icon, text }) => (
                 <div key={text} className="flex items-center gap-1.5 text-[14px]" style={{ color: '#64748b' }}>
                   <i className={`${icon} text-[11px]`} style={{ color: '#60a5fa' }} />{text}

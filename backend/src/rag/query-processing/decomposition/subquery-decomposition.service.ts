@@ -100,7 +100,7 @@ export const decomposeQuery = async (
   effectiveQuery: string,
   opts: {
     // Test-only seam, same rationale as query-router.service.ts's
-    // geminiClassifier / query-rewriter.service.ts's geminiCaller.
+    // llmClassifier / query-rewriter.service.ts's llmCaller.
     decompositionCaller?: typeof callDecompositionLlm;
   } = {}
 ): Promise<SubqueryDecompositionResult> => {

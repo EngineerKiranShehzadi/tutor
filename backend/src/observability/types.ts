@@ -17,10 +17,6 @@ export type NotFoundReason =
   | 'RERANKER_FAILURE'
   | 'SUMMARY_CONTENT_EMPTY';
 
-export type GeminiOperationType =
-  | 'ROUTE_CLASSIFICATION' | 'QUERY_REWRITE' | 'GROUNDED_ANSWER'
-  | 'PARTIAL_SUMMARY' | 'FINAL_SUMMARY';
-
 // Bumped whenever the *guarantee* behind a custom root-span attribute this
 // codebase's overview aggregation depends on changes — not on every deploy,
 // and never inferred from deploy time alone. Version "2" is this contract,

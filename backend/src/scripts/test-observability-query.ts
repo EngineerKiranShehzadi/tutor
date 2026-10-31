@@ -38,15 +38,15 @@ cases.push({
   run: () => {
     const span = mapPhoenixSpan(rawSpan({
       span_id: 's1',
-      name: 'gemini_answer_call',
+      name: 'answer_call',
       attributes: {
         'openinference.span.kind': 'LLM',
-        'llm.model_name': 'gemini-2.5-flash',
+        'llm.model_name': 'gpt-6-luna',
         'llm.token_count.prompt': 120,
         'llm.token_count.completion': 40,
       },
     }));
-    const pass = span.kind === 'LLM' && span.model === 'gemini-2.5-flash' && span.tokens?.prompt === 120 && span.tokens?.completion === 40 && span.tokens?.total === 160;
+    const pass = span.kind === 'LLM' && span.model === 'gpt-6-luna' && span.tokens?.prompt === 120 && span.tokens?.completion === 40 && span.tokens?.total === 160;
     return { pass, detail: JSON.stringify({ kind: span.kind, model: span.model, tokens: span.tokens, attrs: span.attributes }) };
   },
 });

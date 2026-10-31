@@ -98,12 +98,12 @@ export const STAGE_SPAN_KIND: Record<string, OpenInferenceSpanKind> = {
   'write-answer-memory': OpenInferenceSpanKind.CHAIN,
   'record-memory-hit': OpenInferenceSpanKind.CHAIN,
 
-  // Nested Gemini call spans (children of the CHAIN spans above)
-  gemini_router_call: OpenInferenceSpanKind.LLM,
-  gemini_rewriter_call: OpenInferenceSpanKind.LLM,
-  gemini_answer_call: OpenInferenceSpanKind.LLM,
-  gemini_summary_batch_call: OpenInferenceSpanKind.LLM,
-  gemini_summary_combine_call: OpenInferenceSpanKind.LLM,
+  // Nested LLM call spans (children of the CHAIN spans above)
+  router_call: OpenInferenceSpanKind.LLM,
+  rewriter_call: OpenInferenceSpanKind.LLM,
+  answer_call: OpenInferenceSpanKind.LLM,
+  summary_batch_call: OpenInferenceSpanKind.LLM,
+  summary_combine_call: OpenInferenceSpanKind.LLM,
 
   // Provider-neutral LLM call spans (src/llm/llm-observability.service.ts) —
   // named after the operation rather than a provider, since the underlying

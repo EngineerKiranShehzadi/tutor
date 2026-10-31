@@ -34,8 +34,7 @@ export interface ReadinessResult {
 // balancer / uptime monitor sees it. That is the database, pgvector, the
 // embedding provider, the reranker (a rerank failure fails the question) and
 // the answer LLM, whichever provider it is. `degraded` (HTTP 200) is left for
-// what is uncertain rather than down: a check that only verified config (e.g.
-// HEALTH_GEMINI_CHECK_ENABLED=false), or an answer provider with no probe
+// what is uncertain rather than down: an answer provider with no probe
 // (UNVERIFIED_PROVIDER) — never `healthy` for something that wasn't checked.
 type ComponentName = keyof ReadinessResult['components'];
 export const requiredComponents = (): ComponentName[] => [
@@ -43,8 +42,7 @@ export const requiredComponents = (): ComponentName[] => [
 ];
 
 // Probes the provider that answers questions (RAG_LLM_PROVIDER / RAG_ANSWER_MODEL),
-// never with a paid call:
-//  - gemini: countTokens, or a config check when HEALTH_GEMINI_CHECK_ENABLED=false;
+// never with a paid call, and never by switching on the provider's name:
 //  - a provider with a probe() (openai: GET /models/{model}, no tokens): run it;
 //  - one without (groq): degraded UNVERIFIED_PROVIDER — never "healthy" unchecked.
 // Pure: it does not consult the real-call signal. checkReadiness caches this
@@ -54,7 +52,6 @@ export async function checkAnswerLlm(
   provider = env.LLM.RAG_ANSWER.PROVIDER,
   model = env.LLM.RAG_ANSWER.MODEL,
 ): Promise<ComponentHealth> {
-  if (provider === 'gemini') return checkGemini();
   let llm: ReturnType<typeof resolveLlmProvider>;
   try {
     llm = resolveLlmProvider(provider);
@@ -195,28 +192,6 @@ export async function checkProviderHealth(
   if (base.status !== 'healthy' || !component) return base;
   const down = providerDownSignal(component);
   return down ? { status: 'unhealthy', latencyMs: base.latencyMs, errorCode: down } : base;
-}
-
-async function checkGemini(): Promise<ComponentHealth> {
-  if (!env.GEMINI_API_KEY) {
-    return { status: 'unhealthy', latencyMs: 0, errorCode: 'NOT_CONFIGURED' };
-  }
-  if (!env.HEALTH.GEMINI_CHECK_ENABLED) {
-    // Config-only check — key is present, connectivity unverified. Marked
-    // degraded (uncertain), never a real network call on this path.
-    return { status: 'degraded', latencyMs: 0 };
-  }
-  try {
-    const { countTokens } = await import('../services/gemini-provider.service');
-    const start = process.hrtime.bigint();
-    // countTokens is a lightweight, no-generation call — validates auth and
-    // connectivity without producing any model output.
-    await countTokens('gemini-2.5-flash', 'ping');
-    const latencyMs = Number(process.hrtime.bigint() - start) / 1e6;
-    return { status: 'healthy', latencyMs: Math.round(latencyMs) };
-  } catch (err) {
-    return { status: 'unhealthy', latencyMs: 0, errorCode: classifyErrorCode(err) };
-  }
 }
 
 // unhealthy if a required component is down; degraded if anything else is not

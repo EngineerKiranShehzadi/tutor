@@ -82,8 +82,8 @@ maintenance window.
 
 1. Back up Neon (`backend/ops/neon-migration/RUNBOOK.md`).
 2. Put the settings above and the tuned thresholds from step 2.4 into
-   `~/askaitutor-secrets/backend.env.production`. You can drop `GEMINI_API_KEY` there: no
-   task selects Gemini any more.
+   `~/askaitutor-secrets/backend.env.production`. Drop `GEMINI_API_KEY` there: the Gemini
+   adapter is gone.
 3. Re-embed against Neon from this machine, loading that file for this one command only:
    `set -a; . ~/askaitutor-secrets/backend.env.production; set +a; REEMBED_ALLOW_REMOTE=1 npm run reembed:all -- --apply`.
    The script prints the target host first. Check it.
@@ -101,8 +101,8 @@ To go back:
 2. Restore `local-http` for embedding and rerank.
 3. Restore the old thresholds, with `RETRIEVAL_THRESHOLDS_TUNED_FOR=local-http:local-http`.
 
-The LLM providers can be switched back independently: every adapter (Gemini, Groq) stays
-registered.
+The LLM tasks are not part of a rollback: OpenAI is the only LLM provider, and the answers
+do not depend on which vectors are active.
 
 Retention keeps only the active version and one previous one. After a second upload under
 OpenAI, the BGE vectors are gone, and going back means re-embedding.

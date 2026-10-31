@@ -29,10 +29,9 @@ export interface OpenAiLlmOptions {
 const DEFAULT_TIMEOUT_MS = 60_000;
 const PROBE_TIMEOUT_MS = 3_000;
 
-// The provider-neutral thinking level → reasoning_effort. "minimal" is "no reasoning",
-// as on the previous default model (gemini-2.5-flash: minimal = a thinking budget of 0)
-// and as llm.types.ts asks of small structured calls; reasoning_effort is sent as "none",
-// not "minimal". Unset also means none: the model's own default is never relied on.
+// The provider-neutral thinking level → reasoning_effort. "minimal" means "no reasoning",
+// as llm.types.ts asks of small structured calls, so it is sent as "none", not "minimal".
+// Unset also means none: the model's own default is never relied on.
 const EFFORT: Record<LlmThinking, string> = { off: 'none', minimal: 'none', low: 'low', medium: 'medium', high: 'high' };
 export const toOpenAiReasoningEffort = (thinking: LlmThinking | undefined): string => EFFORT[thinking ?? 'off'];
 
@@ -69,7 +68,7 @@ interface ChatChunk {
   error?: { message?: string };
 }
 
-// Same provider-neutral values the Gemini adapter reports (chat code checks 'MAX_TOKENS').
+// Provider-neutral finish reasons (chat code checks 'MAX_TOKENS').
 const toFinishReason = (f: string | null | undefined): string | undefined =>
   f === 'length' ? 'MAX_TOKENS' : f === 'stop' ? 'STOP' : (f ?? undefined) || undefined;
 

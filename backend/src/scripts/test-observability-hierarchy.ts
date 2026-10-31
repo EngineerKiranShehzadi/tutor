@@ -2,7 +2,7 @@
  * Unit tests for RequestTrace's span hierarchy (observability/tracer.ts):
  * real spanId/parentSpanId nesting via AsyncLocalStorage, arbitrary depth,
  * concurrent-trace isolation, and malformed-hierarchy export safety
- * (observability/phoenix.ts's tree-walk). No DB, no network, no Gemini.
+ * (observability/phoenix.ts's tree-walk). No DB, no network, no LLM.
  *
  * Usage: npm run test:observability-hierarchy
  */

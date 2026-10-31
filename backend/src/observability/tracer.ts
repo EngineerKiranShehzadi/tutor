@@ -39,7 +39,7 @@ function generateSpanId(): string {
   return randomUUID().replace(/-/g, '').slice(0, 16);
 }
 
-// Lets a deeply-nested service call (query-router, llm-gemini, etc.) find
+// Lets a deeply-nested service call (query-router, answer-generation, etc.) find
 // "the current request's trace and current parent span" without the trace
 // object being threaded through every function signature in the pipeline.
 // AsyncLocalStorage (see trace-context.ts) correctly propagates across every

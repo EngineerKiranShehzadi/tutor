@@ -4,7 +4,7 @@ import { env } from '../config/env';
 import { QnaChunk, LectureAgentProfile } from '../types';
 import { logger } from '../utils/logger';
 import { EMBEDDING_MODEL_VERSION } from './embedding.service';
-import { ANSWER_PROMPT_VERSION } from './llm-gemini.service';
+import { ANSWER_PROMPT_VERSION } from './answer-generation.service';
 
 // ── Effective answer prompt version ─────────────────────────────────────
 // The answer_prompt_version column (TEXT, part of the UNIQUE key and both
@@ -13,7 +13,7 @@ import { ANSWER_PROMPT_VERSION } from './llm-gemini.service';
 // with a lecture agent's instructions gets "<base>+agent:<sha256>", where the
 // hash covers exactly what the agent contributes to the prompt (its name and
 // its trimmed instructions — the same values buildAgentInstructionBlock in
-// llm-gemini.service.ts uses). Consequences, all by plain equality on the
+// answer-generation.service.ts uses). Consequences, all by plain equality on the
 // existing column:
 //  - editing an agent's name/instructions changes the version, so previous
 //    cache rows simply stop matching (no deletion, no manual bump);
@@ -25,7 +25,7 @@ import { ANSWER_PROMPT_VERSION } from './llm-gemini.service';
 // "the lecture's content" (see getActiveDatasetVersionId).
 //
 // If the fixed agent prompt text itself (the precedence rule or block layout
-// in llm-gemini.service.ts) ever changes, bump ANSWER_PROMPT_VERSION — same
+// in answer-generation.service.ts) ever changes, bump ANSWER_PROMPT_VERSION — same
 // rule as for SYSTEM_PROMPT.
 const AGENT_FINGERPRINT_FORMAT = 1;
 

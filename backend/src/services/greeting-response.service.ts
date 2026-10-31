@@ -1,7 +1,7 @@
 import { env } from '../config/env';
 import { resolveLlmProvider } from '../llm/llm-provider.resolver';
 import { withLlmDiagnostic, extractLlmUsage } from '../llm/llm-observability.service';
-import type { ConversationTurn } from './llm-gemini.service';
+import type { ConversationTurn } from './answer-generation.service';
 import { logger } from '../utils/logger';
 
 // Used whenever the LLM call fails, times out, or returns nothing usable —
