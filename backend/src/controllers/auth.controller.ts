@@ -69,15 +69,6 @@ const COOKIE_OPTS = {
 // host, so an application should not rewrite it. Addresses are stored and
 // looked up as typed; the service layer lowercases them, which is safe because
 // providers treat addresses case-insensitively.
-export const registerValidators = [
-  body('name').trim().notEmpty().withMessage('Name is required').isLength({ max: 100 }),
-  body('email').isEmail().withMessage('Valid email required'),
-  body('password')
-    .isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
-    .matches(/[A-Z]/).withMessage('Password must contain an uppercase letter')
-    .matches(/[0-9]/).withMessage('Password must contain a number'),
-];
-
 export const loginValidators = [
   body('email').isEmail().withMessage('Valid email required'),
   body('password').notEmpty().withMessage('Password is required'),
@@ -88,15 +79,6 @@ export const resendLoginOtpValidators = [
 ];
 
 // ── Controllers ───────────────────────────────────────
-export const register = asyncHandler(async (req: Request, res: Response) => {
-  const { name, email, password } = req.body;
-  logger.info(`[AUTH] Register attempt: name="${name}" email="${email}"`);
-  const { user, accessToken, refreshToken } = await AuthService.registerUser(name, email, password);
-  res.cookie('refreshToken', refreshToken, COOKIE_OPTS);
-  logger.info(`[AUTH] ✅ Register success: "${email}" → user id=${user.id}`);
-  sendSuccess(res, 'Account created successfully', { user, accessToken }, 201);
-});
-
 export const login = asyncHandler(async (req: Request, res: Response) => {
   const { email, password } = req.body;
   logger.info(`[AUTH] Login attempt: "${email}"`);

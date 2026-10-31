@@ -25,7 +25,7 @@ api.interceptors.response.use(
 
     // These endpoints return 401 as a legitimate business error (wrong password,
     // Google-only account, bad OTP, etc.) — never treat them as expired sessions.
-    const AUTH_ENDPOINTS = ['/auth/login', '/auth/register', '/auth/refresh-token',
+    const AUTH_ENDPOINTS = ['/auth/login', '/auth/refresh-token',
                             '/auth/verify-email', '/auth/forgot-password', '/auth/reset-password'];
     if (AUTH_ENDPOINTS.some(p => original.url?.includes(p))) {
       if (original.url?.includes('/auth/refresh-token')) {
@@ -67,8 +67,6 @@ export default api;
 
 // ── Typed helpers ─────────────────────────────────────
 export const authApi = {
-  register:         (data: { name: string; email: string; password: string }) =>
-                      api.post('/auth/register', data),
   login:            (data: { email: string; password: string }) =>
                       api.post('/auth/login', data),
   resendLoginOtp:   (email: string) => api.post('/auth/resend-login-otp', { email }),

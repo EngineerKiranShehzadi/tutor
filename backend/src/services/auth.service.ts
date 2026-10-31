@@ -9,35 +9,6 @@ import { env } from '../config/env';
 import { logger } from '../utils/logger';
 import { User, PasswordResetToken, EmailVerificationToken } from '../types';
 
-// ── REGISTER ──────────────────────────────────────────
-export const registerUser = async (name: string, email: string, password: string) => {
-  logger.info(`[AUTH] registerUser: email="${email}" name="${name}"`);
-  // Lowercased to match how the address is stored on insert below, and how
-  // every other lookup in this file does it. Previously this relied on
-  // normalizeEmail() having already lowercased the address upstream.
-  const existing = await query<User>('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
-  if (existing.rows[0]) {
-    logger.warn(`[AUTH] registerUser: email already in use — "${email}"`);
-    throw new AppError('Email already in use', 409);
-  }
-
-  const password_hash = await hashPassword(password);
-  const { rows } = await query<User>(
-    `INSERT INTO users (name, email, password_hash)
-     VALUES ($1, $2, $3)
-     RETURNING id, name, email, avatar_url, created_at`,
-    [name.trim(), email.toLowerCase(), password_hash]
-  );
-
-  const user = rows[0];
-  const accessToken  = generateAccessToken(user.id, 'STUDENT');
-  const refreshToken = generateRefreshToken(user.id, 'STUDENT');
-  await storeRefreshToken(user.id, refreshToken);
-
-  logger.info(`[AUTH] ✅ User registered: "${user.email}" (id=${user.id})`);
-  return { user, accessToken, refreshToken };
-};
-
 // ── LOGIN ─────────────────────────────────────────────
 type LoginResult =
   | { status: 'AUTHENTICATED'; user: Omit<User, 'password_hash'>; accessToken: string; refreshToken: string }

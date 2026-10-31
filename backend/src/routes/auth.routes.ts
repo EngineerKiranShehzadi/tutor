@@ -6,7 +6,6 @@ import * as C from '../controllers/auth.controller';
 
 const router = Router();
 
-router.post('/register',          authLimiter, C.registerValidators,        validate, C.register);
 router.post('/login',             authLimiter, C.loginValidators,           validate, C.login);
 router.post('/resend-login-otp',  authLimiter, C.resendLoginOtpValidators,   validate, C.resendLoginOtp);
 router.post('/refresh-token',                                               C.refreshToken);
