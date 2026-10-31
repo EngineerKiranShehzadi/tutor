@@ -25,12 +25,16 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
   id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   token_hash  TEXT NOT NULL,
+  family_id   UUID NOT NULL DEFAULT uuid_generate_v4(),  -- one per login, kept across rotations
+  rotated_at  TIMESTAMPTZ,                                -- NULL = live; set = exchanged (kept for reuse detection)
   expires_at  TIMESTAMPTZ NOT NULL,
   created_at  TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_hash ON refresh_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_family ON refresh_tokens(family_id);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires ON refresh_tokens(expires_at);
 
 -- ── PASSWORD RESET TOKENS (OTP-based) ──────────
 -- State machine: unused → verified → used

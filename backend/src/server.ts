@@ -1,6 +1,7 @@
 import { createApp } from './app';
 import pool, { connectDB } from './config/database';
 import { verifyEmailTransport } from './services/email.service';
+import { purgeExpiredRefreshTokens } from './services/auth.service';
 import { env } from './config/env';
 import { assertRetrievalProvidersConfigured } from './config/retrieval-providers';
 import { logger } from './utils/logger';
@@ -78,6 +79,14 @@ const start = async () => {
       if (env.OBSERVABILITY.ALERTS_ENABLED && env.NODE_ENV !== 'test') {
         startMaintenanceScheduler();
       }
+
+      // Expired refresh tokens are never read again; drop them a minute after
+      // start and then every 6 hours, so the table cannot grow without bound.
+      const purgeRefreshTokens = (): void => {
+        void purgeExpiredRefreshTokens().catch(err => logger.error('[AUTH] refresh-token purge failed', err));
+      };
+      setTimeout(purgeRefreshTokens, 60_000).unref();
+      setInterval(purgeRefreshTokens, 6 * 60 * 60 * 1000).unref();
 
       // Continue any dataset build that was interrupted by a restart. Only
       // chunks that still have no embedding are processed; finished work is

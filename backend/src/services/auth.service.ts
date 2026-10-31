@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
+import type { PoolClient } from 'pg';
 import pool, { query } from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { hashPassword, comparePassword, hashToken } from '../utils/password';
@@ -100,40 +101,123 @@ export const loginUser = async (email: string, password: string): Promise<LoginR
 };
 
 // ── REFRESH TOKEN ─────────────────────────────────────
+// Rotation with reuse detection. Every login starts a token FAMILY; each refresh
+// marks the presented token rotated (kept, not deleted) and issues a successor in
+// the same family. Presenting an already-rotated token means two parties hold
+// the family — the user and whoever copied the token — so the whole family is
+// revoked and both must log in again.
+//
+// A browser with two tabs can legitimately present the same token twice in a
+// moment (both refresh at once); a replay inside ROTATION_GRACE_MS is refused
+// without revoking anything.
+const ROTATION_GRACE_MS = 10_000;
+
 export const refreshAccessToken = async (refreshToken: string) => {
   logger.info('[AUTH] refreshAccessToken: verifying refresh token');
-  const payload = verifyRefreshToken(refreshToken);
-  const tokenHash = hashToken(refreshToken);
-
-  const { rows } = await query(
-    `SELECT * FROM refresh_tokens
-     WHERE user_id = $1 AND token_hash = $2 AND expires_at > NOW()`,
-    [payload.userId, tokenHash]
-  );
-  if (!rows[0]) {
-    logger.warn(`[AUTH] refreshAccessToken: invalid or expired token for user ${payload.userId}`);
+  let payload: ReturnType<typeof verifyRefreshToken>;
+  try {
+    payload = verifyRefreshToken(refreshToken);
+  } catch {
     throw new AppError('Invalid or expired refresh token', 401);
   }
+  const tokenHash = hashToken(refreshToken);
 
-  const newAccessToken  = generateAccessToken(payload.userId, payload.role ?? 'STUDENT');
-  const newRefreshToken = generateRefreshToken(payload.userId, payload.role ?? 'STUDENT');
+  // One transaction with the row locked: concurrent refreshes of the same token
+  // are serialized, so only one of them can rotate it.
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query<{ id: string; user_id: string; family_id: string; rotated_at: Date | null; expires_at: Date }>(
+      `SELECT id, user_id, family_id, rotated_at, expires_at FROM refresh_tokens
+       WHERE token_hash = $1 FOR UPDATE`,
+      [tokenHash]
+    );
+    const row = rows[0];
+    if (!row || row.user_id !== payload.userId || new Date(row.expires_at) <= new Date()) {
+      await client.query('COMMIT');
+      logger.warn(`[AUTH] refreshAccessToken: invalid or expired token for user ${payload.userId}`);
+      throw new AppError('Invalid or expired refresh token', 401);
+    }
 
-  await query('DELETE FROM refresh_tokens WHERE token_hash = $1', [tokenHash]);
-  await storeRefreshToken(payload.userId, newRefreshToken);
+    if (row.rotated_at) {
+      if (Date.now() - new Date(row.rotated_at).getTime() > ROTATION_GRACE_MS) {
+        const revoked = await client.query('DELETE FROM refresh_tokens WHERE family_id = $1', [row.family_id]);
+        await client.query('COMMIT');
+        logger.warn(`[AUTH] refreshAccessToken: REUSE of a rotated refresh token for user ${row.user_id} — family ${row.family_id} revoked (${revoked.rowCount} rows)`);
+      } else {
+        await client.query('COMMIT');
+        logger.warn(`[AUTH] refreshAccessToken: concurrent refresh of the same token for user ${row.user_id} — refused, not revoked`);
+      }
+      throw new AppError('Invalid or expired refresh token', 401);
+    }
 
-  logger.info(`[AUTH] ✅ Access token refreshed for user ${payload.userId} (role=${payload.role})`);
-  return { accessToken: newAccessToken, refreshToken: newRefreshToken };
+    // The role comes from the database, never from the old token: a demotion or
+    // promotion since that token was minted must take effect now.
+    const { rows: userRows } = await client.query<{ role: User['role'] }>('SELECT role FROM users WHERE id = $1', [row.user_id]);
+    if (!userRows[0]) {
+      await client.query('DELETE FROM refresh_tokens WHERE user_id = $1', [row.user_id]);
+      await client.query('COMMIT');
+      throw new AppError('Invalid or expired refresh token', 401);
+    }
+    const role = userRows[0].role;
+
+    const newAccessToken  = generateAccessToken(row.user_id, role);
+    const newRefreshToken = generateRefreshToken(row.user_id, role);
+
+    await client.query('UPDATE refresh_tokens SET rotated_at = NOW() WHERE id = $1', [row.id]);
+    await insertRefreshToken(client, row.user_id, newRefreshToken, row.family_id);
+    await client.query('COMMIT');
+
+    logger.info(`[AUTH] ✅ Access token refreshed for user ${row.user_id} (role=${role})`);
+    return { accessToken: newAccessToken, refreshToken: newRefreshToken };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
 };
 
 // ── LOGOUT ────────────────────────────────────────────
-export const logoutUser = async (userId: string, refreshToken: string) => {
-  logger.info(`[AUTH] logoutUser: revoking refresh token for user ${userId}`);
-  const tokenHash = hashToken(refreshToken);
-  await query(
-    'DELETE FROM refresh_tokens WHERE user_id = $1 AND token_hash = $2',
-    [userId, tokenHash]
+// Authenticated by the refresh cookie itself, not the access token: an expired
+// access token must not stop the server-side session from being ended. The
+// whole family goes (its rotated rows too). Returns the owner's id, or null if
+// the token matched nothing.
+export const logoutUser = async (refreshToken: string): Promise<string | null> => {
+  const { rows } = await query<{ user_id: string }>(
+    `DELETE FROM refresh_tokens
+     WHERE family_id IN (SELECT family_id FROM refresh_tokens WHERE token_hash = $1)
+     RETURNING user_id`,
+    [hashToken(refreshToken)]
   );
-  logger.info(`[AUTH] ✅ Refresh token revoked for user ${userId}`);
+  const userId = rows[0]?.user_id ?? null;
+  logger.info(`[AUTH] ✅ logoutUser: ${userId ? `session revoked for user ${userId} (${rows.length} rows)` : 'token matched no session'}`);
+  return userId;
+};
+
+// "Log out everywhere": every session of the user who owns this refresh token.
+export const logoutAllSessions = async (refreshToken: string): Promise<string | null> => {
+  const { rows } = await query<{ user_id: string }>(
+    'SELECT user_id FROM refresh_tokens WHERE token_hash = $1',
+    [hashToken(refreshToken)]
+  );
+  const userId = rows[0]?.user_id;
+  if (!userId) return null;
+  await revokeAllSessions(userId);
+  return userId;
+};
+
+export const revokeAllSessions = async (userId: string): Promise<number> => {
+  const { rowCount } = await query('DELETE FROM refresh_tokens WHERE user_id = $1', [userId]);
+  logger.info(`[AUTH] ✅ All sessions revoked for user ${userId} (${rowCount ?? 0} rows)`);
+  return rowCount ?? 0;
+};
+
+// Expired rows (live or rotated) are useless; called on a timer from server.ts.
+export const purgeExpiredRefreshTokens = async (): Promise<number> => {
+  const { rowCount } = await query('DELETE FROM refresh_tokens WHERE expires_at <= NOW()');
+  if (rowCount) logger.info(`[AUTH] purged ${rowCount} expired refresh tokens`);
+  return rowCount ?? 0;
 };
 
 // ── OTP: GUESS LIMIT ──────────────────────────────────
@@ -642,12 +726,32 @@ export const googleOAuthUser = async (profile: {
 };
 
 // ── HELPER ────────────────────────────────────────────
+// At most this many concurrent sessions (families) per user; the oldest go first.
+const MAX_SESSIONS_PER_USER = 10;
+const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+type Queryable = Pick<PoolClient, 'query'>;
+
+const insertRefreshToken = async (db: Queryable, userId: string, token: string, familyId: string) => {
+  await db.query(
+    'INSERT INTO refresh_tokens (user_id, token_hash, family_id, expires_at) VALUES ($1, $2, $3, $4)',
+    [userId, hashToken(token), familyId, new Date(Date.now() + REFRESH_TOKEN_TTL_MS)]
+  );
+};
+
+// A new login: a new family, then housekeeping for this user — drop expired rows
+// and evict the oldest sessions beyond the cap.
 const storeRefreshToken = async (userId: string, token: string) => {
-  const tokenHash = hashToken(token);
-  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+  await insertRefreshToken(pool, userId, token, crypto.randomUUID());
+  await query('DELETE FROM refresh_tokens WHERE user_id = $1 AND expires_at <= NOW()', [userId]);
   await query(
-    'INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)',
-    [userId, tokenHash, expiresAt]
+    `DELETE FROM refresh_tokens
+     WHERE user_id = $1 AND family_id IN (
+       SELECT family_id FROM refresh_tokens
+       WHERE user_id = $1 AND rotated_at IS NULL
+       ORDER BY created_at DESC
+       OFFSET $2)`,
+    [userId, MAX_SESSIONS_PER_USER]
   );
 };
 

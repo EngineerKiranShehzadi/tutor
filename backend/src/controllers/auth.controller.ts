@@ -57,6 +57,8 @@ const COOKIE_OPTS = {
   sameSite: 'strict' as const,
   maxAge:   7 * 24 * 60 * 60 * 1000,
 };
+// clearCookie only matches a cookie set with the same attributes (minus maxAge).
+const { maxAge: _maxAge, ...CLEAR_COOKIE_OPTS } = COOKIE_OPTS;
 
 // ── Validators ────────────────────────────────────────
 // normalizeEmail() is deliberately NOT used on any of these.
@@ -108,13 +110,23 @@ export const refreshToken = asyncHandler(async (req: Request, res: Response) => 
   sendSuccess(res, 'Token refreshed', { accessToken: tokens.accessToken });
 });
 
-export const logout = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+// No `protect`: the refresh cookie is the credential here, so logout still ends
+// the server-side session when the 15-minute access token has already expired.
+export const logout = asyncHandler(async (req: Request, res: Response) => {
   const token = req.cookies?.refreshToken;
-  logger.info(`[AUTH] Logout: "${req.user?.email ?? 'unknown'}"`);
-  if (req.user && token) await AuthService.logoutUser(req.user.id, token);
-  res.clearCookie('refreshToken');
-  logger.info(`[AUTH] ✅ Logged out: "${req.user?.email ?? 'unknown'}"`);
+  const userId = token ? await AuthService.logoutUser(token) : null;
+  res.clearCookie('refreshToken', CLEAR_COOKIE_OPTS);
+  logger.info(`[AUTH] ✅ Logged out${userId ? `: user ${userId}` : ' (no live session)'}`);
   sendSuccess(res, 'Logged out successfully');
+});
+
+// Ends every session of the cookie's owner, on every device.
+export const logoutAll = asyncHandler(async (req: Request, res: Response) => {
+  const token = req.cookies?.refreshToken;
+  const userId = token ? await AuthService.logoutAllSessions(token) : null;
+  res.clearCookie('refreshToken', CLEAR_COOKIE_OPTS);
+  logger.info(`[AUTH] ✅ Logged out everywhere${userId ? `: user ${userId}` : ' (no live session)'}`);
+  sendSuccess(res, 'Logged out of all devices');
 });
 
 export const getMe = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
