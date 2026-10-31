@@ -299,14 +299,21 @@ export const askLectureAgent = async (
     // below.
   });
   // Tracks which stage is in flight so an unexpected thrown error can be
-  // mapped to a safe not-found/failure reason code in the outer catch.
-  let currentStage = 'unknown';
+  // mapped to a safe not-found/failure reason code in the outer catch. Every
+  // stage below sets it before it starts, so no failure reports 'unknown'.
+  let currentStage = 'load-lecture';
   // Set when a stage reports a retrieval failure itself instead of throwing
   // from a DIRECT-path stage (see the decomposed zero-result branch). Wins
   // over the currentStage mapping in the outer catch.
   let retrievalFailureReason: NotFoundReason | undefined;
 
+  // Idempotent: the first call records the request (one rag_request_log row,
+  // one Phoenix trace); later calls are no-ops. The outer catch relies on this
+  // to record any failure that escaped without a trace, exactly once.
+  let traceFinished = false;
   const finishTrace = (status: 'SUCCESS' | 'ERROR', extra: SafeMetadata): void => {
+    if (traceFinished) return;
+    traceFinished = true;
     const finished = trace.end(status, extra);
     // try/catch AND .catch(): onTraceComplete may throw synchronously
     // (before ever returning a promise) or reject asynchronously — either
@@ -333,6 +340,7 @@ export const askLectureAgent = async (
   async function runAskLectureAgent(): Promise<{ answer: string; sources: QnaChunk[] }> {
   try {
     // 1. Confirm lecture is READY
+    currentStage = 'load-lecture';
     const lecture = await getLectureById(lectureId);
     if (lecture.status !== 'READY') {
       logger.warn(`[CHAT] ⚠️  Lecture #${lectureId} not READY (status=${lecture.status})`);
@@ -343,6 +351,7 @@ export const askLectureAgent = async (
     // 1-bis. Dataset readiness: an active version whose every chunk is embedded
     // with the current model. A lecture that is READY by status but fails this
     // would only ever answer "not found", so reject it as not ready instead.
+    currentStage = 'check-dataset-readiness';
     const readiness = await (deps.getLectureReadiness ?? getLectureReadiness)(lectureId);
     if (!readiness.ready) {
       logger.warn(`[CHAT] ⚠️  Lecture #${lectureId} dataset not ready: ${readiness.reason}`);
@@ -458,6 +467,7 @@ export const askLectureAgent = async (
     });
 
     // 2. Persist question for admin analytics before AI call
+    currentStage = 'record-student-question';
     await query(
       'INSERT INTO student_questions (student_id, lecture_id, question) VALUES ($1, $2, $3)',
       [studentId, lectureId, question]
@@ -465,6 +475,7 @@ export const askLectureAgent = async (
 
     // 3. Lazy imports — skipped for any dependency the caller already
     // injected (tests only; production always falls through to these).
+    currentStage = 'resolve-dataset-version';
     const generateEmbedding     = deps.generateEmbedding     ?? (await import('./embedding.service')).generateEmbedding;
     // Pin this request to ONE dataset version: every retrieval call below (the
     // direct search, each decomposed sub-query, adaptive retrieval, the summary
@@ -513,6 +524,7 @@ export const askLectureAgent = async (
         () => generateGreeting(question, lecture.title, historyTurns),
         a => ({ answerLength: a.length })
       );
+      currentStage = 'save-chat-entry';
       await trace.span('save-chat-entry', async () => {
         await saveChatEntry({ studentId, lectureId, question, answer, sourceChunkIds: [], sessionId, traceId: trace.traceId });
         await touchSession(studentId, sessionId, question);
@@ -551,6 +563,7 @@ export const askLectureAgent = async (
       if (!summary) {
         const reason: NotFoundReason = allChunks.length === 0 ? 'EMPTY_LECTURE' : 'SUMMARY_CONTENT_EMPTY';
         logger.warn(`[CHAT] ⚠️  No summary available for lecture #${lectureId} (${allChunks.length} chunk(s) found)`);
+        currentStage = 'save-chat-entry';
         await trace.span('save-chat-entry', async () => {
           await saveChatEntry({ studentId, lectureId, question, answer: summaryUnavailable, sourceChunkIds: [], sessionId, traceId: trace.traceId });
           await touchSession(studentId, sessionId, question);
@@ -560,6 +573,7 @@ export const askLectureAgent = async (
       }
 
       const chunkIds = allChunks.map(c => c.id);
+      currentStage = 'save-chat-entry';
       await trace.span('save-chat-entry', async () => {
         await saveChatEntry({ studentId, lectureId, question, answer: summary, sourceChunkIds: chunkIds, sessionId, traceId: trace.traceId });
         await touchSession(studentId, sessionId, question);
@@ -624,12 +638,14 @@ export const askLectureAgent = async (
       memoryResultAttr = memoryResult.lookupFailed ? 'LOOKUP_FAILED' : memoryResult.hit ? (memoryResult.hit.matchType === 'EXACT' ? 'EXACT_HIT' : 'SEMANTIC_HIT') : 'MISS';
 
       if (memoryResult.hit) {
+        currentStage = 'record-memory-hit';
         const recordMemoryHit = deps.recordMemoryHit ?? (await import('./rag-answer-memory.service')).recordMemoryHit;
         await trace.span(
           'record-memory-hit',
           () => recordMemoryHit(memoryResult.hit!.memoryId),
           () => ({ memoryId: memoryResult.hit!.memoryId })
         );
+        currentStage = 'save-chat-entry';
         await trace.span('save-chat-entry', async () => {
           await saveChatEntry({
             studentId, lectureId, question,
@@ -735,6 +751,7 @@ export const askLectureAgent = async (
           throw new Error(`Decomposed retrieval failed (${empty.reason}); no subquery produced evidence`);
         }
         logger.warn(`[CHAT] ⚠️  No subquery produced qualifying evidence — returning not-found message`);
+        currentStage = 'save-chat-entry';
         await trace.span('save-chat-entry', async () => {
           await saveChatEntry({ studentId, lectureId, question, answer: LECTURE_NOT_FOUND_MESSAGE, sourceChunkIds: [], sessionId, traceId: trace.traceId });
           await touchSession(studentId, sessionId, question);
@@ -836,6 +853,7 @@ export const askLectureAgent = async (
       finalCandidateCount = candidates.length;
       if (candidates.length === 0) {
         logger.warn(`[CHAT] ⚠️  No relevant chunks found — returning not-found message`);
+        currentStage = 'save-chat-entry';
         await trace.span('save-chat-entry', async () => {
           await saveChatEntry({ studentId, lectureId, question, answer: LECTURE_NOT_FOUND_MESSAGE, sourceChunkIds: [], sessionId, traceId: trace.traceId });
           await touchSession(studentId, sessionId, question);
@@ -891,6 +909,7 @@ export const askLectureAgent = async (
       // calling Gemini with an empty context.
       if (chunks.length === 0) {
         logger.warn(`[CHAT] ⚠️  All candidates fell below the relevance floor — returning not-found message`);
+        currentStage = 'save-chat-entry';
         await trace.span('save-chat-entry', async () => {
           await saveChatEntry({ studentId, lectureId, question, answer: LECTURE_NOT_FOUND_MESSAGE, sourceChunkIds: [], sessionId, traceId: trace.traceId });
           await touchSession(studentId, sessionId, question);
@@ -1015,6 +1034,7 @@ export const askLectureAgent = async (
     // response already returned below. An answer that says a part "couldn't
     // be retrieved right now" is transient by definition, so it is never cached.
     if (route === 'FACT_QUESTION' && guardrailOutcome.verified && unavailableAspects.length === 0) {
+      currentStage = 'write-answer-memory';
       try {
         const memoryService = await import('./rag-answer-memory.service');
         const writeAnswerMemory = deps.writeAnswerMemory ?? memoryService.writeAnswerMemory;
@@ -1066,7 +1086,13 @@ export const askLectureAgent = async (
     });
     return { answer, sources: chunks };
   } catch (err) {
-    if (err instanceof AppError) throw err; // already recorded above (lecture-not-ready path)
+    if (err instanceof AppError) {
+      // Most AppErrors are thrown right after their own finishTrace call; the
+      // rest (LLM "AI model failed…", missing provider key, unknown provider,
+      // lecture 404, …) are recorded here so they still count as errors.
+      if (!traceFinished) finishTrace('ERROR', { responseStatus: 'ERROR', failedStage: currentStage });
+      throw err;
+    }
     const notFoundReason: NotFoundReason | undefined =
       retrievalFailureReason ? retrievalFailureReason
       : currentStage === 'generate-query-embedding' ? 'EMBEDDING_FAILURE'

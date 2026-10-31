@@ -424,8 +424,8 @@ function orchestratorDeps(over: Partial<AskLectureAgentDeps> = {}): { deps: AskL
   return { deps, spies };
 }
 
-const askOrchestrator = (deps: AskLectureAgentDeps, question = 'What is a prompt?') =>
-  askLectureAgent({ studentId: '1e8039ae-e9b0-448f-b563-10351fab051c', lectureId: LECTURE_ID, question, sessionId: 77 }, deps);
+const askOrchestrator = (deps: AskLectureAgentDeps, question = 'What is a prompt?', lectureId = LECTURE_ID) =>
+  askLectureAgent({ studentId: '1e8039ae-e9b0-448f-b563-10351fab051c', lectureId, question, sessionId: 77 }, deps);
 
 // Runs the REAL output guardrail with the verifier/revision LLM scripted.
 async function guardrailWith(script: Step[]): Promise<OutputGuardrailResult> {
@@ -503,6 +503,46 @@ cases.push({
     } finally {
       av.ENABLED = saved.enabled; av.FAIL_OPEN_ON_VERIFIER_ERROR = saved.failOpen;
     }
+  },
+});
+
+// ── S2: every failure that escapes the orchestrator is traced exactly once ──
+cases.push({
+  label: 'S2a. generateAnswer throws AppError(500) → the same error reaches the caller, exactly one trace: ERROR at generate-grounded-answer',
+  run: async () => {
+    const boom = new AppError('AI model failed after 3 attempts', 500);
+    const { deps, spies } = orchestratorDeps({ generateAnswer: async () => { throw boom; } });
+    const { value: err, db } = await withFakeDb(() => askOrchestrator(deps));
+    const t = spies.traces[0];
+    const pass = err === boom && spies.traces.length === 1 && t.status === 'ERROR'
+      && t.attributes.responseStatus === 'ERROR' && t.attributes.failedStage === 'generate-grounded-answer' && db.history.length === 0;
+    return { pass, detail: `traces=${spies.traces.length}, status=${t?.status}, stage=${t?.attributes.failedStage}` };
+  },
+});
+
+cases.push({
+  label: 'S2b. Unknown lecture (getLectureById 404) → one ERROR trace at load-lecture; a guardrail REJECT is still traced once (no second ERROR trace)',
+  run: async () => {
+    const a = orchestratorDeps();
+    const { value: e404 } = await withFakeDb(() => askOrchestrator(a.deps, 'What is a prompt?', 999));
+    const b = orchestratorDeps({ runInputGuardrails: async () => ({ action: 'REJECT', reason: 'PROMPT_INJECTION' }) });
+    const { value: eReject } = await withFakeDb(() => askOrchestrator(b.deps));
+    const t = a.spies.traces[0];
+    const pass = e404 instanceof AppError && e404.statusCode === 404 && a.spies.traces.length === 1
+      && t.status === 'ERROR' && t.attributes.failedStage === 'load-lecture'
+      && eReject instanceof AppError && b.spies.traces.length === 1 && b.spies.traces[0].attributes.responseStatus === 'GUARDRAIL_REJECTED';
+    return { pass, detail: `404 traces=${a.spies.traces.length}/${t?.attributes.failedStage}, reject traces=${b.spies.traces.length}/${b.spies.traces[0]?.attributes.responseStatus}` };
+  },
+});
+
+cases.push({
+  label: 'S2c. No orchestrator stage is left unnamed: currentStage never stays "unknown"',
+  run: async () => {
+    const src = readSrc('services/chat.service.ts');
+    const saves = (src.match(/await trace\.span\('save-chat-entry'/g) ?? []).length;
+    const named = (src.match(/currentStage = 'save-chat-entry';\n\s*(?:const savedEntryId = )?await trace\.span\('save-chat-entry'/g) ?? []).length;
+    const pass = !/currentStage = 'unknown'/.test(src) && /currentStage = 'load-lecture';\n\s*const lecture = await getLectureById/.test(src) && saves === named && saves > 0;
+    return { pass, detail: `save spans=${saves}, named=${named}` };
   },
 });
 
