@@ -164,17 +164,24 @@ const ROUTES_WITHOUT_RETRIEVAL = new Set(['GREETING', 'LECTURE_SUMMARY']);
 
 export type RetrievalCoverageClass = 'ATTEMPTED' | 'NOT_APPLICABLE' | 'INCOMPLETE';
 
+// An answer-memory hit (response MEMORY_HIT_ANSWERED) is served before any
+// retrieval, on a FACT_QUESTION trace, and so never carries candidateCount.
+const MEMORY_HIT_RESULTS = new Set(['EXACT_HIT', 'SEMANTIC_HIT']);
+
 // A real candidateCount is always trusted on its own — its mere presence
 // proves vector-search ran, regardless of what `route` says (route is a
 // second, independent signal, not a prerequisite). Only when candidateCount
-// is absent do we need `route` at all: a known skip-route means retrieval
-// was genuinely never attempted (NOT_APPLICABLE); anything else (a
-// retrieval-requiring route with no telemetry, or route itself unknown/
-// missing — true legacy) means we cannot tell whether retrieval ran, so the
-// trace is INCOMPLETE, not a non-attempt.
-export function classifyRetrievalCoverage(route: string | null, retrievalCount: number | null): RetrievalCoverageClass {
+// is absent do we need `route` at all: a known skip-route, or an answer
+// served from memory, means retrieval was genuinely never attempted
+// (NOT_APPLICABLE); anything else (a retrieval-requiring route with no
+// telemetry, or route itself unknown/missing — true legacy) means we cannot
+// tell whether retrieval ran, so the trace is INCOMPLETE, not a non-attempt.
+export function classifyRetrievalCoverage(
+  route: string | null, retrievalCount: number | null, memoryResult: string | null = null
+): RetrievalCoverageClass {
   if (retrievalCount !== null) return 'ATTEMPTED';
   if (route !== null && ROUTES_WITHOUT_RETRIEVAL.has(route)) return 'NOT_APPLICABLE';
+  if (memoryResult !== null && MEMORY_HIT_RESULTS.has(memoryResult)) return 'NOT_APPLICABLE';
   return 'INCOMPLETE';
 }
 
@@ -184,7 +191,7 @@ const NO_COMPATIBLE_RETRIEVAL_TELEMETRY =
 export function computeZeroRetrievalMetric(summaries: TraceSummary[], sampled: boolean, sampleSize: number): ZeroRetrievalMetric {
   let attempted = 0, zero = 0, incomplete = 0;
   for (const s of summaries) {
-    const cls = classifyRetrievalCoverage(s.route, s.retrievalCount);
+    const cls = classifyRetrievalCoverage(s.route, s.retrievalCount, s.memoryResult);
     if (cls === 'ATTEMPTED') {
       attempted++;
       if (s.retrievalCount === 0) zero++;

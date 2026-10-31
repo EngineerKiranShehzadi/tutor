@@ -364,6 +364,22 @@ cases.push({
 });
 
 cases.push({
+  label: 'ST6. classifyRetrievalCoverage: an answer-memory hit (EXACT_HIT/SEMANTIC_HIT, no candidateCount) is NOT_APPLICABLE; a window of only hits and greetings stays available',
+  run: () => {
+    const cls = [classifyRetrievalCoverage('FACT_QUESTION', null, 'EXACT_HIT'), classifyRetrievalCoverage('FACT_QUESTION', null, 'SEMANTIC_HIT'),
+      classifyRetrievalCoverage('FACT_QUESTION', null, 'MISS')];
+    const r = computeZeroRetrievalMetric([
+      summary({ route: 'FACT_QUESTION', retrievalCount: null, memoryResult: 'EXACT_HIT' }),
+      summary({ route: 'GREETING', retrievalCount: null, memoryResult: 'NOT_ATTEMPTED' }),
+    ], false, 2);
+    return {
+      pass: cls.join() === 'NOT_APPLICABLE,NOT_APPLICABLE,INCOMPLETE' && r.available === true && r.incompleteSampleSize === 0 && r.attemptedCount === 0,
+      detail: `${cls.join()} ${JSON.stringify(r)}`,
+    };
+  },
+});
+
+cases.push({
   label: 'classifyRetrievalCoverage: FACT_QUESTION and CONTEXTUAL_FOLLOW_UP with no candidateCount are INCOMPLETE, never a non-attempt',
   run: () => ({ pass: classifyRetrievalCoverage('FACT_QUESTION', null) === 'INCOMPLETE' && classifyRetrievalCoverage('CONTEXTUAL_FOLLOW_UP', null) === 'INCOMPLETE' }),
 });

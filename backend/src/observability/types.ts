@@ -30,7 +30,10 @@ export type GeminiOperationType =
 //     never silently omitted).
 //   - `candidateCount` is set on every trace whose route is FACT_QUESTION or
 //     CONTEXTUAL_FOLLOW_UP (the only routes that ever call vector-search);
-//     GREETING/LECTURE_SUMMARY never set it, by design.
+//     GREETING/LECTURE_SUMMARY never set it, by design. The one exception on
+//     those routes: an answer served from answer memory (memoryResult
+//     EXACT_HIT/SEMANTIC_HIT, responseStatus MEMORY_HIT_ANSWERED) returns
+//     before vector-search and does not set it — it is not a zero.
 //   - `notFoundReason` is set whenever a trace resolves to a hardcoded
 //     not-found answer (empty lecture/summary, zero vector candidates, all
 //     candidates below the rerank floor) or fails at the embedding/
