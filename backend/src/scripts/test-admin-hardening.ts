@@ -1090,13 +1090,15 @@ const run = async () => {
       `${JSON.stringify(st)} repaired⊇stuck,legacy=${repaired.includes(stuck) && repaired.includes(legacy)}`);
   }
 
-  // ── AD-N4: the upload response reports the real version status ──
+  // ── AD-N4/AD-N5: upload reports the real version status; a server fault is a 500 ──
   {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const s3 = require('../services/s3-storage.service') as { isS3Configured: () => boolean; uploadRawDataset: (...a: unknown[]) => Promise<{ bucket: string; key: string }> };
     const realS3 = { cfg: s3.isS3Configured, up: s3.uploadRawDataset };
+    const RAW = 'getaddrinfo ENOTFOUND askai-raw.s3.internal while archiving';
+    let s3Fails = false;
     s3.isS3Configured = () => true;
-    s3.uploadRawDataset = async () => ({ bucket: 'test-bucket', key: 'raw/adn4.xlsx' });
+    s3.uploadRawDataset = async () => { if (s3Fails) throw new Error(RAW); return { bucket: 'test-bucket', key: 'raw/adn4.xlsx' }; };
     const admin = (await query<{ id: string }>(`INSERT INTO users (name, email, password_hash, is_verified, role) VALUES ('ADN4 Admin', $1, 'x', TRUE, 'ADMIN') RETURNING id`, [`adn4-${Date.now()}@example.test`])).rows[0].id;
     const mkLecture = async () => (await query<{ id: number }>(`INSERT INTO lectures (title, youtube_url, youtube_video_id) VALUES ('[adn4] upload', 'https://youtu.be/xxxxxxxxxxx', 'xxxxxxxxxxx') RETURNING id`)).rows[0].id;
     const app = express(); app.use(express.json()); app.use('/datasets', datasetRoutes); app.use(errorHandler);
@@ -1109,15 +1111,25 @@ const run = async () => {
       const r = await fetch(`${base}/datasets/upload/${lec}`, { method: 'POST', headers: { Authorization: `Bearer ${generateAccessToken(admin, 'ADMIN')}` }, body: fd });
       return { status: r.status, body: await r.json().catch(() => ({})) as { message?: string; data?: Record<string, unknown> } };
     };
+    const errorLines: string[] = [];
+    const realError = logger.error.bind(logger);
+    (logger as { error: unknown }).error = (msg: unknown, ...rest: unknown[]) => { errorLines.push(String(msg)); return realError(msg as string, ...rest as []); };
     try {
       const okLec = await mkLecture();
       const ok = await post(okLec);
       // Stop the background build of the accepted upload (no embedding server here).
       await query(`UPDATE dataset_versions SET status = 'FAILED', last_error = 'test' WHERE lecture_id = $1 AND status = 'BUILDING'`, [okLec]);
+      s3Fails = true;
+      const broken = await post(await mkLecture());
       check('AD-N4-1. An accepted upload reports versionStatus BUILDING, not the "PROCESSING" lecture status nothing writes any more',
         ok.status === 200 && ok.body.data?.versionStatus === 'BUILDING' && !('status' in (ok.body.data ?? {})),
         `status=${ok.status} data=${JSON.stringify(ok.body.data ? { versionStatus: ok.body.data.versionStatus, status: ok.body.data.status } : null)}`);
+      check('AD-N5-1. A server fault during upload (S3 archive error) → 500 "Internal server error" via the shared handler, not a 400 carrying the raw driver text',
+        broken.status === 500 && broken.body.message === 'Internal server error' && !String(broken.body.message).includes('ENOTFOUND')
+          && !errorLines.some(l => l.startsWith('[UPLOAD]') && l.includes('ENOTFOUND')) && errorLines.some(l => l.startsWith('[ERROR] 500 POST')),
+        `status=${broken.status} message=${JSON.stringify(broken.body.message)} logged=${JSON.stringify(errorLines.filter(l => /UPLOAD|ERROR\] 500/.test(l)).map(l => l.slice(0, 60)))}`);
     } finally {
+      (logger as { error: unknown }).error = realError;
       srv.close();
       s3.isS3Configured = realS3.cfg; s3.uploadRawDataset = realS3.up;
     }

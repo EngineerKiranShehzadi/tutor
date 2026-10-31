@@ -116,10 +116,15 @@ export const uploadDataset = async (
       res.status(409).json({ success: false, message: err.message, data: { lectureId, preview: err.preview } });
       return;
     }
-    const msg = err instanceof Error ? err.message : 'Upload failed';
-    logger.error(`[UPLOAD] ❌ ${msg}`);
-    const status = err instanceof AppError ? err.statusCode : 400;
-    sendError(res, msg, status);
+    if (err instanceof AppError) {
+      logger.error(`[UPLOAD] ❌ ${err.message}`);
+      sendError(res, err.message, err.statusCode);
+      return;
+    }
+    // Every problem with the file itself is an AppError (400/409/413). Anything
+    // else — the database, S3, a bug — is the server failing, not a bad file:
+    // the shared handler answers 500 and logs it content-safely (A18).
+    next(err);
   }
 };
 
