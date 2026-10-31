@@ -103,6 +103,14 @@ const parseLlmPricing = (raw: string): Record<string, LlmPrice> => {
   return out;
 };
 
+// The answer model's retry fallback (used once an answer call has failed twice)
+// must be a model of the SAME provider. Unset: Gemini keeps its
+// gemini-2.5-flash -> gemini-flash-latest chain; any other provider retries
+// its own RAG_ANSWER_MODEL (e.g. gpt-5.6-luna), never a Gemini model name.
+const RAG_PROVIDER = optional('RAG_LLM_PROVIDER', 'gemini');
+const RAG_MODEL = optional('RAG_ANSWER_MODEL', 'gemini-2.5-flash');
+const RAG_FALLBACK_MODEL = nonBlank('RAG_ANSWER_FALLBACK_MODEL', '') || (RAG_PROVIDER === 'gemini' ? 'gemini-flash-latest' : RAG_MODEL);
+
 export const env = {
   NODE_ENV:      optional('NODE_ENV', 'development'),
   PORT:          positiveInt('PORT', 5000),
@@ -337,13 +345,12 @@ export const env = {
       BASE_URL: nonBlank('OPENAI_BASE_URL', 'https://api.openai.com/v1'),
     },
     RAG_ANSWER: {
-      PROVIDER:        optional('RAG_LLM_PROVIDER', 'gemini'),
-      MODEL:           optional('RAG_ANSWER_MODEL', 'gemini-2.5-flash'),
+      PROVIDER:        RAG_PROVIDER,
+      MODEL:           RAG_MODEL,
       THINKING: thinking('RAG_ANSWER_THINKING', 'low'),
       // Used once retry attempts exceed llm-gemini.service.ts's own
-      // attempt<=2 threshold — preserves today's exact gemini-2.5-flash ->
-      // gemini-flash-latest fallback chain by default.
-      FALLBACK_MODEL:  optional('RAG_ANSWER_FALLBACK_MODEL', 'gemini-flash-latest'),
+      // attempt<=2 threshold. Same provider only — see RAG_FALLBACK_MODEL.
+      FALLBACK_MODEL:  RAG_FALLBACK_MODEL,
       // Deadline for one grounded-answer call (streaming or not). The largest
       // LLM budget in the pipeline — thinking plus up to 8192 output tokens —
       // but never unbounded: a stuck call would otherwise hold the request
