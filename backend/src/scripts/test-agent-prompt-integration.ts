@@ -300,12 +300,12 @@ cases.push({
 });
 
 cases.push({
-  label: '15. Version/scope: ANSWER_PROMPT_VERSION is v2 (bumped with the SYSTEM_PROMPT change); the service never loads profiles or touches the database',
+  label: '15. Version/scope: ANSWER_PROMPT_VERSION is v3 (bumped with the SYSTEM_PROMPT change, S12); the service never loads profiles or touches the database',
   run: async () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'services', 'llm-gemini.service.ts'), 'utf8');
     const importLines = src.split('\n').filter(l => /^\s*import\b/.test(l)).join('\n');
     const loadsProfiles = /lecture-agent-profile\.service|config\/database|getAgentProfileByLectureId/.test(importLines + src.replace(/\/\/.*$/gm, ''));
-    const pass = ANSWER_PROMPT_VERSION === 'v2' && !loadsProfiles;
+    const pass = ANSWER_PROMPT_VERSION === 'v3' && !loadsProfiles;
     return { pass, detail: `ANSWER_PROMPT_VERSION=${ANSWER_PROMPT_VERSION}, loadsProfiles=${loadsProfiles}` };
   },
 });
