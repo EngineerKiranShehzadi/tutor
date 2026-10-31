@@ -82,7 +82,7 @@ export default function SystemHealthPage() {
             <HealthCard name="Backend" icon="fa-server" health={{ status: 'healthy', latencyMs: 0 }} critical />
             <HealthCard name="PostgreSQL" icon="fa-database" health={readiness?.components.database} critical />
             <HealthCard name="Embedding service" icon="fa-vector-square" health={readiness?.components.embeddingServer} critical />
-            <HealthCard name="Reranker service" icon="fa-sort" health={readiness?.components.reranker} critical={false} />
+            <HealthCard name="Reranker service" icon="fa-sort" health={readiness?.components.reranker} critical />
             <HealthCard name="Answer LLM" icon="fa-brain" health={readiness?.components.answerLlm} critical />
           </div>
 
