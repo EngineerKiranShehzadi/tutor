@@ -7,6 +7,26 @@ Newest entry at the top.
 
 ---
 
+## 2026-11-01 — Final stack: gpt-6-luna on every LLM task
+
+**Changed by:** Kiran
+**Files:** `config/env.ts`, `llm/providers/openai-llm.provider.ts` (comments), `.env.example`,
+`docs/OPENAI_SWITCH.md`; tests `test-openai-llm-provider.ts`, `test-request-log.ts`, `test-admin-hardening.ts`
+
+**Final stack:** embedding OpenAI `text-embedding-3-small` at 1024 dimensions, rerank Voyage `rerank-3`, all ten
+LLM tasks OpenAI `gpt-6-luna`.
+
+**Deploy note:** no migration. Set every `*_LLM_MODEL`, `RAG_ANSWER_MODEL` and `RAG_ANSWER_FALLBACK_MODEL` to
+`gpt-6-luna` (as in `.env.example`), and drop any `LLM_PRICING_JSON` entry for the old model.
+
+- **The model identifier was wrong everywhere.** The repo named an older, different model. That broke three
+  things: `est_cost_usd` was NULL for every request (one unpriced call nulls the whole row), the readiness probe
+  asked OpenAI for a model the service never uses, and `smoke:providers` skipped its $0.01 spend cap (the cap is
+  only enforced for a priced model). `gpt-6-luna` is now the only built-in price: $0.10 input / $0.50 output per
+  1M tokens ($0.01 cached input; priced as uncached, so the estimate errs high).
+
+---
+
 ## 2026-11-01 — OpenAI switch: LLM adapter, readiness probe, pricing (C1–C4)
 
 **Changed by:** Kiran
@@ -17,7 +37,8 @@ Newest entry at the top.
 `backend/src/scripts/` (new `test-openai-llm-provider.ts`, part of `npm test`)
 
 **Production stack:** embedding OpenAI `text-embedding-3-small` (1024), rerank Voyage `rerank-3`, all ten LLM
-tasks OpenAI `gpt-5.6-luna`. One `OPENAI_API_KEY` covers embedding and the LLM tasks. The earlier Voyage
+tasks on OpenAI (the model identifier used here was wrong; corrected to `gpt-6-luna` in the entry above). One
+`OPENAI_API_KEY` covers embedding and the LLM tasks. The earlier Voyage
 embedding work came from a superseded plan; its adapter stays registered, unused.
 
 **Deploy note:** no new migration (018 is from the entry below). Set the env as in `.env.example` and follow
@@ -34,11 +55,11 @@ production start too.
 - **C2 — readiness never verified a non-Gemini answer LLM.** OpenAI is probed with `GET /models/{model}` (no
   tokens). `checkAnswerLlm` is the pure probe; the real-call signal is applied after the cache (R5), so a
   recovery shows on the next readiness call and a failed probe is re-checked after 5 s.
-- **C3 — cost would read NULL.** gpt-5.6-luna ($0.20 / $1.20 per 1M) and gpt-5.6-terra ($2.00 / $12.00) are
-  priced by default; `LLM_PRICING_JSON` overrides them.
+- **C3 — cost would read NULL.** The production model is priced by default; `LLM_PRICING_JSON` overrides it.
+  (It priced the wrong model identifier; corrected in the entry above.)
 - **C4 — the general-knowledge fallback is gone.** `generateAnswerFromLLM` answered without lecture evidence and
   hardcoded Gemini models; nothing called it. The answer's retry fallback model now stays on the same provider
-  (gpt-5.6-luna on OpenAI).
+  (`RAG_ANSWER_MODEL` on OpenAI).
 - **Corrections** — the switch runbook, `.env.example` and START_HERE describe OpenAI embeddings with Voyage
   rerank only. Re-embedding the 2,828 pieces costs well under one cent.
 

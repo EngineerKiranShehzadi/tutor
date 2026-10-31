@@ -50,7 +50,7 @@ const sleeps: number[] = [];
 const mk = (url: string, key = KEY) => createOpenAiLlmProvider({
   apiKey: () => key, baseUrl: () => url, retry: { baseDelayMs: 1, sleep: async ms => { sleeps.push(ms); } },
 });
-const completion = (content: string, finish = 'stop', model = 'gpt-5.6-luna-2026-03-05') =>
+const completion = (content: string, finish = 'stop', model = 'gpt-6-luna-2026-03-05') =>
   ({ json: { id: 'c1', object: 'chat.completion', model, choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: finish }], usage: { prompt_tokens: 120, completion_tokens: 30, total_tokens: 150 } } });
 const apiError = (status: number, message: string, code: string | null, type = 'invalid_request_error') => ({ status, json: { error: { message, type, code, param: null } } });
 const rejects = async (p: Promise<unknown>): Promise<Error> => p.then(() => new Error('did not reject'), e => e as Error);
@@ -76,8 +76,8 @@ const rejects = async (p: Promise<unknown>): Promise<Error> => p.then(() => new 
     const m = await startMock(() => completion('{"route":"FACT_QUESTION"}'));
     const p = mk(m.url);
     const schema: LlmSchema = { type: 'OBJECT', properties: { route: { type: 'STRING', enum: ['A', 'B'] } }, required: ['route'] };
-    await p.generate({ model: 'gpt-5.6-luna', systemPrompt: 'You route.', userPrompt: 'Hi', temperature: 0, maxOutputTokens: 64, thinking: 'minimal', responseSchema: schema, timeoutMs: 4000 });
-    await p.generate({ model: 'gpt-5.6-luna', userPrompt: 'Answer', thinking: 'low', maxOutputTokens: 8192 });
+    await p.generate({ model: 'gpt-6-luna', systemPrompt: 'You route.', userPrompt: 'Hi', temperature: 0, maxOutputTokens: 64, thinking: 'minimal', responseSchema: schema, timeoutMs: 4000 });
+    await p.generate({ model: 'gpt-6-luna', userPrompt: 'Answer', thinking: 'low', maxOutputTokens: 8192 });
     const [a, b] = m.seen;
     check('3. Request: POST /chat/completions, Bearer key; system + user messages (system omitted when unset); max_completion_tokens (never max_tokens); reasoning_effort sent; temperature passed; strict json_schema response_format',
       a.method === 'POST' && a.path === '/v1/chat/completions' && a.auth === `Bearer ${KEY}`
@@ -111,10 +111,10 @@ const rejects = async (p: Promise<unknown>): Promise<Error> => p.then(() => new 
   {
     const m = await startMock((_r, n) => n === 1 ? completion('Hello there', 'stop') : completion('Cut', 'length'));
     const p = mk(m.url);
-    const r1 = await p.generate({ model: 'gpt-5.6-luna', userPrompt: 'x' });
-    const r2 = await p.generate({ model: 'gpt-5.6-luna', userPrompt: 'x' });
+    const r1 = await p.generate({ model: 'gpt-6-luna', userPrompt: 'x' });
+    const r2 = await p.generate({ model: 'gpt-6-luna', userPrompt: 'x' });
     check('5. Response: raw = message.content, provider openai, model from the response, finish stop→STOP / length→MAX_TOKENS, usage mapped',
-      r1.raw === 'Hello there' && r1.provider === 'openai' && r1.model === 'gpt-5.6-luna-2026-03-05' && r1.finishReason === 'STOP'
+      r1.raw === 'Hello there' && r1.provider === 'openai' && r1.model === 'gpt-6-luna-2026-03-05' && r1.finishReason === 'STOP'
         && r1.usage?.inputTokens === 120 && r1.usage?.outputTokens === 30 && r1.usage?.totalTokens === 150 && r2.finishReason === 'MAX_TOKENS',
       `r1=${JSON.stringify(r1)} r2.finish=${r2.finishReason}`);
     m.close();
@@ -122,18 +122,18 @@ const rejects = async (p: Promise<unknown>): Promise<Error> => p.then(() => new 
 
   // 6. streaming
   {
-    const chunk = (content: string | null, finish: string | null = null) => JSON.stringify({ model: 'gpt-5.6-luna-2026-03-05', choices: [{ index: 0, delta: content === null ? {} : { content }, finish_reason: finish }] });
+    const chunk = (content: string | null, finish: string | null = null) => JSON.stringify({ model: 'gpt-6-luna-2026-03-05', choices: [{ index: 0, delta: content === null ? {} : { content }, finish_reason: finish }] });
     const m = await startMock(() => ({ sse: [
       chunk(''), chunk('Prompts '), chunk('are '), chunk('instructions.'), chunk(null, 'stop'),
-      JSON.stringify({ model: 'gpt-5.6-luna-2026-03-05', choices: [], usage: { prompt_tokens: 50, completion_tokens: 9, total_tokens: 59 } }),
+      JSON.stringify({ model: 'gpt-6-luna-2026-03-05', choices: [], usage: { prompt_tokens: 50, completion_tokens: 9, total_tokens: 59 } }),
       '[DONE]',
     ] }));
     const pieces: string[] = [];
-    const r = await mk(m.url).generateStream!({ model: 'gpt-5.6-luna', userPrompt: 'x', thinking: 'low' }, t => pieces.push(t));
+    const r = await mk(m.url).generateStream!({ model: 'gpt-6-luna', userPrompt: 'x', thinking: 'low' }, t => pieces.push(t));
     const b = m.seen[0].body;
     check('6. Streaming: stream + stream_options.include_usage sent; deltas forwarded in order; usage taken from the final empty-choices chunk (else est_cost_usd stays null); finish STOP',
       b.stream === true && b.stream_options?.include_usage === true && pieces.join('|') === 'Prompts |are |instructions.'
-        && r.raw === 'Prompts are instructions.' && r.usage?.inputTokens === 50 && r.usage?.outputTokens === 9 && r.finishReason === 'STOP' && r.model === 'gpt-5.6-luna-2026-03-05',
+        && r.raw === 'Prompts are instructions.' && r.usage?.inputTokens === 50 && r.usage?.outputTokens === 9 && r.finishReason === 'STOP' && r.model === 'gpt-6-luna-2026-03-05',
       `pieces=${JSON.stringify(pieces)} usage=${JSON.stringify(r.usage)}`);
     m.close();
   }
@@ -141,25 +141,25 @@ const rejects = async (p: Promise<unknown>): Promise<Error> => p.then(() => new 
   // 7. errors
   {
     const m401 = await startMock(() => apiError(401, `Incorrect API key provided: ${KEY}. You can find your API key at https://platform.openai.com.`, 'invalid_api_key'));
-    const e401 = await rejects(mk(m401.url).generate({ model: 'gpt-5.6-luna', userPrompt: 'x' }));
+    const e401 = await rejects(mk(m401.url).generate({ model: 'gpt-6-luna', userPrompt: 'x' }));
     const n401 = m401.seen.length; m401.close();
     sleeps.length = 0;
     const mRate = await startMock((_r, n) => n < 3 ? apiError(429, 'Rate limit reached for requests', 'rate_limit_exceeded', 'requests') : completion('ok'));
-    const ok = await mk(mRate.url).generate({ model: 'gpt-5.6-luna', userPrompt: 'x' });
+    const ok = await mk(mRate.url).generate({ model: 'gpt-6-luna', userPrompt: 'x' });
     const nRate = mRate.seen.length; mRate.close();
     const mRate2 = await startMock(() => apiError(429, 'Rate limit reached for requests', 'rate_limit_exceeded', 'requests'));
-    const eRate = await rejects(mk(mRate2.url).generate({ model: 'gpt-5.6-luna', userPrompt: 'x' }));
+    const eRate = await rejects(mk(mRate2.url).generate({ model: 'gpt-6-luna', userPrompt: 'x' }));
     mRate2.close();
     const mQuota = await startMock(() => apiError(429, 'You exceeded your current quota, please check your plan and billing details.', 'insufficient_quota', 'insufficient_quota'));
-    const eQuota = await rejects(mk(mQuota.url).generate({ model: 'gpt-5.6-luna', userPrompt: 'x' }));
+    const eQuota = await rejects(mk(mQuota.url).generate({ model: 'gpt-6-luna', userPrompt: 'x' }));
     mQuota.close();
     const m503 = await startMock(() => ({ status: 503, json: { error: { message: 'The server is overloaded', type: 'service_unavailable_error', code: 'server_is_overloaded' } } }));
-    const e503 = await rejects(mk(m503.url).generate({ model: 'gpt-5.6-luna', userPrompt: 'x' }));
+    const e503 = await rejects(mk(m503.url).generate({ model: 'gpt-6-luna', userPrompt: 'x' }));
     const n503 = m503.seen.length; m503.close();
     const m400 = await startMock(() => apiError(400, "Invalid schema for response_format 'response'", 'invalid_json_schema'));
-    const e400 = await rejects(mk(m400.url).generate({ model: 'gpt-5.6-luna', userPrompt: 'x' }));
+    const e400 = await rejects(mk(m400.url).generate({ model: 'gpt-6-luna', userPrompt: 'x' }));
     const n400 = m400.seen.length; m400.close();
-    const eNet = await rejects(mk('http://127.0.0.1:9/v1').generate({ model: 'gpt-5.6-luna', userPrompt: 'x' }));
+    const eNet = await rejects(mk('http://127.0.0.1:9/v1').generate({ model: 'gpt-6-luna', userPrompt: 'x' }));
     check('7a. 401 says check OPENAI_API_KEY and never echoes the key (sk-… redacted); not retried',
       /check OPENAI_API_KEY/.test(e401.message) && !e401.message.includes('TESTKEY') && /sk-\*\*\*/.test(e401.message) && n401 === 1, e401.message);
     check('7b. 429 rate limit is retried and recovers; one that persists is a rate limit (RATE_LIMITED), labelled apart from a quota / billing 429 ("retrying will not help")',
@@ -177,7 +177,7 @@ const rejects = async (p: Promise<unknown>): Promise<Error> => p.then(() => new 
   {
     const m = await startMock(() => ({ ...completion('late'), delayMs: 600 }));
     const t0 = Date.now();
-    const e = await rejects(mk(m.url).generate({ model: 'gpt-5.6-luna', userPrompt: 'x', timeoutMs: 150 }));
+    const e = await rejects(mk(m.url).generate({ model: 'gpt-6-luna', userPrompt: 'x', timeoutMs: 150 }));
     const ms = Date.now() - t0;
     check('8. A request that hits timeoutMs fails once as TIMEOUT — never retried (a 4 s router deadline must not become 12 s)',
       m.seen.length === 1 && classifyErrorCode(e) === 'TIMEOUT' && /timeout after 150ms/.test(e.message) && ms < 550,
@@ -191,9 +191,9 @@ const rejects = async (p: Promise<unknown>): Promise<Error> => p.then(() => new 
       ? apiError(400, "Unsupported parameter: 'temperature' is not supported with this model's reasoning setting.", 'unsupported_parameter')
       : completion('fine'));
     const p = mk(m.url);
-    const a = await p.generate({ model: 'gpt-5.6-luna', userPrompt: 'x', temperature: 0.3, thinking: 'low' });
+    const a = await p.generate({ model: 'gpt-6-luna', userPrompt: 'x', temperature: 0.3, thinking: 'low' });
     const afterFirst = m.seen.length;
-    await p.generate({ model: 'gpt-5.6-luna', userPrompt: 'y', temperature: 0.3, thinking: 'low' });
+    await p.generate({ model: 'gpt-6-luna', userPrompt: 'y', temperature: 0.3, thinking: 'low' });
     const m2 = await startMock(r => r.body.reasoning_effort === 'none'
       ? apiError(400, "Unsupported value: 'reasoning_effort' does not support 'none' with this model.", 'unsupported_value')
       : completion('fine'));
@@ -209,17 +209,17 @@ const rejects = async (p: Promise<unknown>): Promise<Error> => p.then(() => new 
 
   // 10. readiness probe
   {
-    const m = await startMock(r => r.path === '/v1/models/gpt-5.6-luna' ? { json: { id: 'gpt-5.6-luna', object: 'model', owned_by: 'openai' } } : apiError(404, 'The model `gpt-9` does not exist', 'model_not_found'));
+    const m = await startMock(r => r.path === '/v1/models/gpt-6-luna' ? { json: { id: 'gpt-6-luna', object: 'model', owned_by: 'openai' } } : apiError(404, 'The model `gpt-9` does not exist', 'model_not_found'));
     const p = mk(m.url);
-    const okProbe = await p.probe!('gpt-5.6-luna').then(() => 'ok', e => (e as Error).message);
+    const okProbe = await p.probe!('gpt-6-luna').then(() => 'ok', e => (e as Error).message);
     const missing = await rejects(p.probe!('gpt-9'));
     const calls = m.seen.map(s => `${s.method} ${s.path} ${s.auth === `Bearer ${KEY}`}`);
     m.close();
     const m401 = await startMock(() => apiError(401, 'Incorrect API key provided', 'invalid_api_key'));
-    const bad = await rejects(mk(m401.url).probe!('gpt-5.6-luna'));
+    const bad = await rejects(mk(m401.url).probe!('gpt-6-luna'));
     m401.close();
     check('10. probe(model) is ONE GET /models/{model} with the key (no tokens); an unknown model and a rejected key fail clearly',
-      okProbe === 'ok' && calls[0] === 'GET /v1/models/gpt-5.6-luna true' && calls.length === 2
+      okProbe === 'ok' && calls[0] === 'GET /v1/models/gpt-6-luna true' && calls.length === 2
         && /model "gpt-9" is not available/.test(missing.message) && /OPENAI_API_KEY/.test(bad.message),
       `calls=${JSON.stringify(calls)} missing="${missing.message.slice(0, 60)}"`);
   }
@@ -229,7 +229,7 @@ const rejects = async (p: Promise<unknown>): Promise<Error> => p.then(() => new 
     const noKey = mk('http://127.0.0.1:9/v1', '');
     let threw = '';
     try { noKey.assertConfigured!(); } catch (e) { threw = (e as Error).message; }
-    const sentNothing = await rejects(noKey.generate({ model: 'gpt-5.6-luna', userPrompt: 'x' }));
+    const sentNothing = await rejects(noKey.generate({ model: 'gpt-6-luna', userPrompt: 'x' }));
     const llm = { OPENAI: { API_KEY: '' }, RAG_ANSWER: { PROVIDER: 'openai' }, QUERY_ROUTER: { PROVIDER: 'openai' }, GREETING: { PROVIDER: 'gemini' } };
     const groups = [...selectedLlmProviders(llm).entries()].map(([k, v]) => `${k}:${v.join('+')}`).join(' ');
     const { env } = await import('../config/env');

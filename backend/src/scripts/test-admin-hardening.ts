@@ -1424,12 +1424,12 @@ const run = async () => {
       const u = String(url);
       if (u.startsWith('https://api.openai.test/v1/models/')) {
         probes++; seenUrls.push(`${u} ${init?.headers?.Authorization === 'Bearer sk-health-test'}`);
-        return new Response(JSON.stringify(probeStatus === 200 ? { id: 'gpt-5.6-luna', object: 'model' } : { error: { message: 'Incorrect API key provided', code: 'invalid_api_key' } }), { status: probeStatus });
+        return new Response(JSON.stringify(probeStatus === 200 ? { id: 'gpt-6-luna', object: 'model' } : { error: { message: 'Incorrect API key provided', code: 'invalid_api_key' } }), { status: probeStatus });
       }
       throw new TypeError('fetch failed');   // the local embedding/rerank servers are not running here
     }) as typeof fetch;
     Date.now = () => clock;
-    rag.PROVIDER = 'openai'; rag.MODEL = 'gpt-5.6-luna';
+    rag.PROVIDER = 'openai'; rag.MODEL = 'gpt-6-luna';
     health.CACHE_TTL_MS = 60_000;
     oa.API_KEY = 'sk-health-test'; oa.BASE_URL = 'https://api.openai.test/v1';
     resetProviderSignals();
@@ -1445,8 +1445,8 @@ const run = async () => {
       clock += 1_000;
       const recovered = (await checkReadiness()).components.answerLlm;
       const probesAfterSignal = probes;
-      check('C2-1. RAG_LLM_PROVIDER=openai: readiness probes GET /models/gpt-5.6-luna with the key (was "degraded UNVERIFIED_PROVIDER" for every non-Gemini provider); cached for the TTL; two failed real calls → unhealthy at once, one success → healthy at once (same cached probe, no 60 s wait); checkAnswerLlm itself is the pure probe',
-        first.status === 'healthy' && seenUrls[0] === 'https://api.openai.test/v1/models/gpt-5.6-luna true'
+      check('C2-1. RAG_LLM_PROVIDER=openai: readiness probes GET /models/gpt-6-luna with the key (was "degraded UNVERIFIED_PROVIDER" for every non-Gemini provider); cached for the TTL; two failed real calls → unhealthy at once, one success → healthy at once (same cached probe, no 60 s wait); checkAnswerLlm itself is the pure probe',
+        first.status === 'healthy' && seenUrls[0] === 'https://api.openai.test/v1/models/gpt-6-luna true'
           && down.status === 'unhealthy' && down.errorCode === 'TIMEOUT' && pureWhileDown.status === 'healthy'
           && recovered.status === 'healthy' && probesAfterSignal === 2,
         `first=${JSON.stringify(first)} down=${JSON.stringify(down)} recovered=${JSON.stringify(recovered)} probes=${probesAfterSignal} (1 readiness probe + 1 direct)`);

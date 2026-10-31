@@ -14,9 +14,9 @@ import type { LlmRequest, LlmResponse, LlmThinking } from '../llm.types';
 // stream_options.include_usage) one chunk with empty choices and the usage, then "data: [DONE]".
 //
 // Cost controls, both of which matter on a small budget:
-//  - reasoning_effort is ALWAYS sent. The GPT-5.6 models default to "medium", so leaving
-//    it out would bill reasoning tokens (at the output rate) on every call, including the
-//    small structured calls that need none.
+//  - reasoning_effort is ALWAYS sent. Left out, the model applies its own default effort,
+//    which bills reasoning tokens (at the output rate) on every call, including the small
+//    structured calls that need none.
 //  - max_completion_tokens (never max_tokens) caps visible AND reasoning tokens together.
 // The API key is read from OPENAI_API_KEY and never logged or put in an error message.
 
@@ -31,8 +31,8 @@ const PROBE_TIMEOUT_MS = 3_000;
 
 // The provider-neutral thinking level → reasoning_effort. "minimal" is "no reasoning",
 // as on the previous default model (gemini-2.5-flash: minimal = a thinking budget of 0)
-// and as llm.types.ts asks of small structured calls; GPT-5.6 has no "minimal" level.
-// Unset also means none: the model's own default (medium) is never relied on.
+// and as llm.types.ts asks of small structured calls; reasoning_effort is sent as "none",
+// not "minimal". Unset also means none: the model's own default is never relied on.
 const EFFORT: Record<LlmThinking, string> = { off: 'none', minimal: 'none', low: 'low', medium: 'medium', high: 'high' };
 export const toOpenAiReasoningEffort = (thinking: LlmThinking | undefined): string => EFFORT[thinking ?? 'off'];
 

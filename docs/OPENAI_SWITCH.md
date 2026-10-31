@@ -4,7 +4,7 @@ The production stack is:
 
 - **Embedding:** OpenAI `text-embedding-3-small` at 1024 dimensions.
 - **Rerank:** Voyage `rerank-3`.
-- **LLM:** OpenAI `gpt-5.6-luna` for all ten tasks.
+- **LLM:** OpenAI `gpt-6-luna` for all ten tasks.
 
 One `OPENAI_API_KEY` covers embedding and every LLM task. `VOYAGE_API_KEY` covers rerank only.
 
@@ -47,8 +47,8 @@ EMBEDDING_DIMENSIONS=1024
 RERANK_PROVIDER=voyage
 RERANK_MODEL=rerank-3
 VOYAGE_API_KEY=pa-...
-# every *_LLM_PROVIDER=openai and *_MODEL=gpt-5.6-luna, as in .env.example
-RAG_ANSWER_FALLBACK_MODEL=gpt-5.6-luna
+# every *_LLM_PROVIDER=openai and *_MODEL=gpt-6-luna, as in .env.example
+RAG_ANSWER_FALLBACK_MODEL=gpt-6-luna
 ```
 
 Then, from `backend/`:
@@ -71,8 +71,9 @@ Then, from `backend/`:
      (up to 15) before the LLM calls.
    - A question split into sub-questions makes that pair once per sub-question
      (`QUERY_DECOMPOSITION_MAX_SUBQUERIES`, default 3).
-   - `rag_request_log.est_cost_usd` prices every gpt-5.6-luna call ($0.20 / $1.20 per 1M
-     input / output tokens; reasoning tokens bill as output).
+   - `rag_request_log.est_cost_usd` prices every gpt-6-luna call ($0.10 / $0.50 per 1M
+     input / output tokens; cached input is $0.01 but is priced as uncached, so the
+     estimate errs high; reasoning tokens bill as output).
 
 ## 3. Production (Neon)
 

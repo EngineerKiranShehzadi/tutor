@@ -70,15 +70,15 @@ const thinking = (key: string, fallback: LlmThinking): LlmThinking => {
 
 export interface LlmPrice { inputPer1M: number; outputPer1M: number }
 
-// Built-in prices for the production models (USD per 1M tokens, standard tier,
-// from OpenAI's pricing page, 2026-11-01), so rag_request_log.est_cost_usd is
-// never NULL for them even when LLM_PRICING_JSON is unset. Input is priced as
-// uncached (cached input is 10x cheaper), so the estimate errs high. Entries in
-// LLM_PRICING_JSON override or add to these.
+// Built-in price for the production model (USD per 1M tokens, standard tier),
+// so rag_request_log.est_cost_usd is never NULL for it even when
+// LLM_PRICING_JSON is unset. A model with no price here or in LLM_PRICING_JSON
+// makes the whole request's cost NULL and leaves smoke:providers' spend cap
+// unenforced. gpt-6-luna: $0.10 input, $0.01 cached input, $0.50 output. Input
+// is priced as uncached, so the estimate errs high. Entries in
+// LLM_PRICING_JSON override or add to this.
 export const DEFAULT_LLM_PRICING: Record<string, LlmPrice> = {
-  'gpt-5.6-luna':  { inputPer1M: 0.20, outputPer1M: 1.20 },
-  // Upgrade path for the answer model.
-  'gpt-5.6-terra': { inputPer1M: 2.00, outputPer1M: 12.00 },
+  'gpt-6-luna': { inputPer1M: 0.10, outputPer1M: 0.50 },
 };
 
 // LLM_PRICING_JSON: {"<model>":{"inputPer1M":<usd>,"outputPer1M":<usd>}}.
@@ -106,7 +106,7 @@ const parseLlmPricing = (raw: string): Record<string, LlmPrice> => {
 // The answer model's retry fallback (used once an answer call has failed twice)
 // must be a model of the SAME provider. Unset: Gemini keeps its
 // gemini-2.5-flash -> gemini-flash-latest chain; any other provider retries
-// its own RAG_ANSWER_MODEL (e.g. gpt-5.6-luna), never a Gemini model name.
+// its own RAG_ANSWER_MODEL (e.g. gpt-6-luna), never a Gemini model name.
 const RAG_PROVIDER = optional('RAG_LLM_PROVIDER', 'gemini');
 const RAG_MODEL = optional('RAG_ANSWER_MODEL', 'gemini-2.5-flash');
 const RAG_FALLBACK_MODEL = nonBlank('RAG_ANSWER_FALLBACK_MODEL', '') || (RAG_PROVIDER === 'gemini' ? 'gemini-flash-latest' : RAG_MODEL);

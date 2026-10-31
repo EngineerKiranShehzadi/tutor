@@ -67,13 +67,15 @@ cases.push({
 });
 
 cases.push({
-  label: 'C3: gpt-5.6-luna / gpt-5.6-terra are priced by default (est_cost_usd is not NULL without LLM_PRICING_JSON): luna 1000 in + 500 out = $0.0008',
+  label: 'C3: gpt-6-luna is the one model priced by default (est_cost_usd is not NULL without LLM_PRICING_JSON): 1000 in + 500 out = $0.00035 at $0.10 / $0.50 per 1M',
   run: () => {
     const { env, DEFAULT_LLM_PRICING } = require('../config/env') as typeof import('../config/env');
-    const row = buildRequestLogRow(trace([llm('gpt-5.6-luna', 1000, 500)]), false, DEFAULT_LLM_PRICING);
-    const viaEnv = buildRequestLogRow(trace([llm('gpt-5.6-terra', 1000, 500)]), false);
-    return row.estCostUsd === 0.0008 && viaEnv.estCostUsd === 0.008
-      && env.OBSERVABILITY.LLM_PRICING['gpt-5.6-luna']?.outputPer1M === 1.2;
+    const row = buildRequestLogRow(trace([llm('gpt-6-luna', 1000, 500)]), false, DEFAULT_LLM_PRICING);
+    const viaEnv = buildRequestLogRow(trace([llm('gpt-6-luna', 1000, 500)]), false);
+    return JSON.stringify(Object.keys(DEFAULT_LLM_PRICING)) === '["gpt-6-luna"]'
+      && row.estCostUsd === 0.00035 && viaEnv.estCostUsd === 0.00035
+      && env.OBSERVABILITY.LLM_PRICING['gpt-6-luna']?.inputPer1M === 0.1
+      && env.OBSERVABILITY.LLM_PRICING['gpt-6-luna']?.outputPer1M === 0.5;
   },
 });
 
