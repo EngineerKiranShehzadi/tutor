@@ -954,11 +954,13 @@ export async function cancelDatasetBuild(lectureId: number): Promise<{ versionId
 // error shown), and first uploads stuck in a processing status (below). Safe
 // to run any time; returns the ids it changed.
 export async function reconcileLectureStatuses(): Promise<number[]> {
+  // ORDER BY id: rows are locked in id order, like every other statement that
+  // locks several lectures, so two of them can never wait on each other.
   const { rows } = await query<{ id: number; status: string }>(
     `UPDATE lectures l SET status = 'READY', updated_at = NOW()
      FROM (SELECT id, status FROM lectures
            WHERE active_version_id IS NOT NULL AND status IN ('DATASET_UPLOADED','PROCESSING','EMBEDDING','FAILED')
-           FOR UPDATE) old
+           ORDER BY id FOR UPDATE) old
      WHERE l.id = old.id
      RETURNING l.id, old.status`
   );
@@ -1005,7 +1007,26 @@ const failStuckFirstUploads = async (): Promise<number[]> => {
   }
 };
 
+// server.ts runs this at startup and then every 60 s. A run can take longer
+// than that (a mass re-embed after an embedding-model switch), so a call made
+// while one is still going returns [] at once instead of starting a second,
+// overlapping run — the same guard maintenance.scheduler.ts uses.
+let resumeRunning = false;
+
 export async function resumePendingVersions(deps: FinishDeps = {}): Promise<number[]> {
+  if (resumeRunning) {
+    logger.debug('[DATASET] resume already running — skipping this tick');
+    return [];
+  }
+  resumeRunning = true;
+  try {
+    return await resumePendingVersionsOnce(deps);
+  } finally {
+    resumeRunning = false;
+  }
+}
+
+async function resumePendingVersionsOnce(deps: FinishDeps): Promise<number[]> {
   await reconcileLectureStatuses().catch(err => logger.warn(`[DATASET] status reconcile failed: ${(err as Error).message}`));
   const { rows } = await query<{ id: number; lecture_id: number }>(
     `SELECT id, lecture_id FROM dataset_versions WHERE status IN ('BUILDING','READY_TO_ACTIVATE') ORDER BY id`

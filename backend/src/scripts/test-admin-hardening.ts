@@ -52,7 +52,7 @@ import { rateLimitStore } from '../graphql/resolvers/auth.resolver';
 import { ExpiringMap } from '../utils/expiring-map';
 import { globalLimiter, userLimiter } from '../middleware/rateLimiter';
 import { startMaintenanceScheduler, stopMaintenanceScheduler, maintenanceSchedulerState, runRetention } from '../observability/maintenance.scheduler';
-import { finishDatasetVersion, rollbackDataset, failDatasetVersion, reconcileLectureStatuses } from '../services/dataset-version.service';
+import { finishDatasetVersion, rollbackDataset, failDatasetVersion, reconcileLectureStatuses, resumePendingVersions } from '../services/dataset-version.service';
 import { EMBEDDING_MODEL_VERSION } from '../services/embedding.service';
 import observabilityRoutes from '../routes/observability.routes';
 import { resolveLlmProvider } from '../llm/llm-provider.resolver';
@@ -1097,6 +1097,77 @@ const run = async () => {
       st.stuck === 'FAILED' && st.legacy === 'FAILED' && st.running === 'EMBEDDING' && st.racing === 'EMBEDDING'
         && repaired.includes(stuck) && repaired.includes(legacy) && !repaired.includes(running) && !repaired.includes(racing),
       `${JSON.stringify(st)} repaired⊇stuck,legacy=${repaired.includes(stuck) && repaired.includes(legacy)}`);
+  }
+
+  // ── R7: reconcile locks lectures in id order; resume never overlaps itself ──
+  {
+    const mk = async () => {
+      const lec = (await query<{ id: number }>(
+        `INSERT INTO lectures (title, youtube_url, youtube_video_id, status) VALUES ('[r7] stale', 'https://youtu.be/xxxxxxxxxxx', 'xxxxxxxxxxx', 'PROCESSING') RETURNING id`)).rows[0].id;
+      const v = (await query<{ id: number }>(
+        `INSERT INTO dataset_versions (lecture_id, version_no, status, mode, embedding_model_version, chunking_config_version, stats)
+         VALUES ($1, 1, 'ACTIVE', 'MERGE', 'm', 'c', '{}'::jsonb) RETURNING id`, [lec])).rows[0].id;
+      await query('UPDATE lectures SET active_version_id = $2 WHERE id = $1', [lec, v]);
+      return lec;
+    };
+    const low = await mk();
+    const high = await mk();
+    // Move the lower id's row to the end of the heap, so a scan without ORDER BY
+    // meets (and locks) the higher id first.
+    await query('UPDATE lectures SET updated_at = NOW() WHERE id = $1', [low]);
+    const waitForLockWait = async (c: { query: typeof query }) => {
+      for (let i = 0; i < 100; i++) {
+        const { rows } = await c.query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND pid <> pg_backend_pid()`);
+        if (rows[0].n > 0) return;
+        await new Promise(r => setTimeout(r, 20));
+      }
+    };
+    // Another transaction takes both lectures in id order, as failStuckFirstUploads
+    // does: the lower one first, then — once reconcile is waiting — the higher one.
+    const other = await pool.connect();
+    let otherError: string | null = null;
+    let repaired: number[] | Error = [];
+    try {
+      await other.query('BEGIN');
+      await other.query('SELECT id FROM lectures WHERE id = $1 FOR UPDATE', [low]);
+      const pending = reconcileLectureStatuses().catch(e => e as Error);
+      await waitForLockWait(other as unknown as { query: typeof query });
+      await other.query("SET LOCAL lock_timeout = '3s'");
+      await other.query('SELECT id FROM lectures WHERE id = $1 FOR UPDATE', [high]).catch(e => { otherError = (e as { code?: string }).code ?? (e as Error).message; });
+      await other.query(otherError ? 'ROLLBACK' : 'COMMIT');
+      repaired = await pending;
+    } finally {
+      other.release();
+    }
+    const ok = !(repaired instanceof Error) && repaired.includes(low) && repaired.includes(high);
+    check('R7-1. reconcileLectureStatuses locks lectures in id order: with another transaction locking them in id order too, no deadlock (40P01) and both lectures repaired',
+      otherError === null && ok,
+      `otherTxn=${otherError ?? 'ok'} reconcile=${repaired instanceof Error ? `${(repaired as { code?: string }).code}: ${repaired.message}` : `repaired ${repaired.filter(id => id === low || id === high).length}/2`}`);
+
+    // A tick that fires while a run is still going returns at once.
+    await query(`UPDATE lectures SET status = 'PROCESSING' WHERE id = $1`, [low]);
+    const holder = await pool.connect();
+    let second: number[] = [-1];
+    let secondMs = -1;
+    let first: number[] | Error = [];
+    try {
+      await holder.query('BEGIN');
+      await holder.query('SELECT id FROM lectures WHERE id = $1 FOR UPDATE', [low]);
+      const running = resumePendingVersions().catch(e => e as Error);
+      await waitForLockWait(holder as unknown as { query: typeof query });
+      const t0 = Date.now();
+      second = await resumePendingVersions();
+      secondMs = Date.now() - t0;
+      await holder.query('COMMIT');
+      first = await running;
+    } finally {
+      holder.release();
+    }
+    const status = (await query<{ status: string }>('SELECT status FROM lectures WHERE id = $1', [low])).rows[0].status;
+    check('R7-2. resumePendingVersions called while a run is blocked returns [] at once (no second, overlapping run); the first run still finishes and repairs the lecture',
+      second.length === 0 && secondMs >= 0 && secondMs < 500 && !(first instanceof Error) && status === 'READY',
+      `second=${JSON.stringify(second)} in ${secondMs}ms, first=${first instanceof Error ? first.message : 'ok'}, status=${status}`);
   }
 
   // ── AD-N4/AD-N5: upload reports the real version status; a server fault is a 500 ──
