@@ -30,6 +30,7 @@ import { matchRows, FileRow, ActiveQa, QaFields } from '../services/dataset-plan
 import {
   prepareDatasetVersion, finishDatasetVersion, resumePendingVersions, rollbackDataset, exportActiveDataset,
   listDatasetVersions, RemovalConfirmationRequired, getLectureReadiness, validateVersion, retryMissingEmbeddings,
+  cleanupOldVersions, failDatasetVersion, FinishResult as FinishResultT,
 } from '../services/dataset-version.service';
 import { searchChunks } from '../services/vector-search.service';
 import { lookupAnswerMemory, writeAnswerMemory } from '../services/rag-answer-memory.service';
@@ -135,6 +136,31 @@ const createStudent = async (): Promise<string> =>
 
 const TSNODE = join(__dirname, '../../node_modules/.bin/ts-node');
 
+// Another process's activation of a version, done by hand (same statements as activateVersion).
+const activateManually = async (lectureId: number, versionId: number): Promise<void> => {
+  await query(`UPDATE dataset_versions SET status = 'SUPERSEDED' WHERE lecture_id = $1 AND status = 'ACTIVE'`, [lectureId]);
+  await query(`UPDATE dataset_versions SET status = 'ACTIVE', activated_at = NOW() WHERE id = $1`, [versionId]);
+  await query(`UPDATE lectures SET active_version_id = $1, status = 'READY' WHERE id = $2`, [versionId, lectureId]);
+};
+
+// Embeds a BUILDING version's pending chunks directly and marks it READY_TO_ACTIVATE
+// (the state left by a crash between validation and the switch).
+const embedPendingManually = async (versionId: number): Promise<void> => {
+  const { rows } = await query<{ id: number; chunk_text: string }>(
+    `SELECT c.id, c.chunk_text FROM dataset_version_chunks d JOIN lecture_qna_chunks c ON c.id = d.chunk_id
+     WHERE d.version_id = $1 AND c.local_embedding IS NULL`, [versionId]);
+  for (const r of rows) {
+    await query(`UPDATE lecture_qna_chunks SET local_embedding = $1::vector, embedding_model_version = $2 WHERE id = $3`,
+      [`[${vecFor(r.chunk_text).join(',')}]`, EMBEDDING_MODEL_VERSION, r.id]);
+  }
+  await query(`UPDATE dataset_versions SET status = 'READY_TO_ACTIVATE' WHERE id = $1`, [versionId]);
+};
+
+const runWorker = (args: string[]): Promise<string> => new Promise(resolve => {
+  const c = spawn(TSNODE, ['--transpile-only', __filename, '--worker', ...args], { env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let o = ''; c.stdout.on('data', d => { o += d.toString(); }); c.on('exit', () => resolve(o));
+});
+
 // ── worker mode (used by the restart-resume scenario) ───────────────────
 
 const workerMain = async () => {
@@ -172,6 +198,9 @@ const workerMain = async () => {
     console.log('WORKER switched ' + JSON.stringify({
       version: EMBEDDING_MODEL_VERSION, readyBefore, chat, prepKind: prep.kind, embedCalls: emb.calls.length, readyAfter, models,
     }));
+  } else if (mode === 'finish') {
+    const r = await finishDatasetVersion(Number(process.argv[5]), { embed: emb.embed, ...FAST });
+    console.log('WORKER finished ' + JSON.stringify(r));
   } else if (mode === 'resume') {
     const ids = await resumePendingVersions({ embed: emb.embed, ...FAST });
     console.log('WORKER resumed ' + JSON.stringify({ versionIds: ids, embedCalls: emb.calls.length, texts: emb.calls }));
@@ -1130,6 +1159,110 @@ const run = async () => {
       !!o && o.readyAfter.ready && /^OK: /.test(o.readyAfter.reason) && o.readyAfter.reason.includes(NEW)
         && !parentAfter.ready && /^STALE_EMBEDDING_MODEL: /.test(parentAfter.reason),
       `after=${JSON.stringify(o?.readyAfter)} parentNow=${parentAfter.reason}`);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 23. A raced / in-doubt activation can never fail or purge the live version (A1)
+  // ─────────────────────────────────────────────────────────────────────
+  {
+    const L = await newLecture('23 activation race');
+    embedder.reset();
+    const p1 = await prepareDatasetVersion(L, makeXlsx(baseRows(4)));
+    if (p1.kind === 'CREATED') await fin(p1.versionId);
+    const p2 = await prepareDatasetVersion(L, makeXlsx(baseRows(5)));
+    const v2 = p2.kind === 'CREATED' ? p2.versionId : -1;
+    // Another process switches the lecture to v2 between our read and our switch.
+    const raced = await fin(v2, { beforeActivate: () => activateManually(L, v2) });
+    const st = await lectureState(L);
+    const chunks = await activeChunks(L);
+    const vs = await versionRows(L);
+    const ready = await getLectureReadiness(L);
+    check('23a. Losing an activation race → SKIPPED; the version stays ACTIVE with all its chunks, lecture READY and ready (nothing failed or purged)',
+      raced.outcome === 'SKIPPED' && st.active_version_id === v2 && st.status === 'READY'
+        && vs.find(v => v.id === v2)?.status === 'ACTIVE' && chunks.length > 0 && chunks.every(c => c.has_vec) && ready.ready,
+      `outcome=${raced.outcome} active=${st.active_version_id} (v2=${v2}) status=${st.status} v2Status=${vs.find(v => v.id === v2)?.status} chunks=${chunks.length} ready=${ready.reason}`);
+
+    const before = chunks.length;
+    const f = await failDatasetVersion(v2, 'simulated in-doubt COMMIT');
+    const vsF = await versionRows(L);
+    check('23b. Failing the live version (stale row / in-doubt COMMIT) is a no-op: still ACTIVE, still READY, chunks intact',
+      f.outcome === 'SKIPPED' && vsF.find(v => v.id === v2)?.status === 'ACTIVE' && (await lectureState(L)).status === 'READY'
+        && (await activeChunks(L)).length === before,
+      `outcome=${f.outcome} v2Status=${vsF.find(v => v.id === v2)?.status} chunks=${(await activeChunks(L)).length}/${before}`);
+
+    // State the old bug left behind: the live version's row says FAILED.
+    await query(`UPDATE dataset_versions SET status = 'FAILED' WHERE id = $1`, [v2]);
+    const cl = await cleanupOldVersions(L);
+    const afterCl = (await activeChunks(L)).length;
+    await query(`UPDATE dataset_versions SET status = 'ACTIVE' WHERE id = $1`, [v2]);
+    check('23c. Cleanup never purges the version the lecture points at, even if its row says FAILED',
+      before > 0 && !cl.purged.includes(v2) && afterCl === before, `purged=${JSON.stringify(cl.purged)} chunks=${afterCl}/${before}`);
+
+    // Two separate OS processes finish the same READY_TO_ACTIVATE version at once
+    // (multi-instance deploy, or seed:retry next to the API).
+    const p3 = await prepareDatasetVersion(L, makeXlsx(baseRows(6)));
+    const v3 = p3.kind === 'CREATED' ? p3.versionId : -1;
+    await embedPendingManually(v3);
+    const outs = await Promise.all([runWorker(['finish', '0', String(v3)]), runWorker(['finish', '0', String(v3)])]);
+    const outcomes = outs.map(o => (JSON.parse(o.split('\n').find(l => l.startsWith('WORKER finished '))?.slice('WORKER finished '.length) ?? '{}') as FinishResultT).outcome).sort();
+    const st3 = await lectureState(L);
+    const c3 = await activeChunks(L);
+    const vs3 = await versionRows(L);
+    check('23d. Two processes finishing one version at once → exactly one ACTIVATED, the other SKIPPED; version ACTIVE with all chunks',
+      outcomes.join() === 'ACTIVATED,SKIPPED' && st3.active_version_id === v3 && st3.status === 'READY'
+        && vs3.find(v => v.id === v3)?.status === 'ACTIVE' && c3.length > 0 && c3.every(c => c.has_vec)
+        && (await getLectureReadiness(L)).ready,
+      `outcomes=${outcomes.join()} active=${st3.active_version_id} (v3=${v3}) v3Status=${vs3.find(v => v.id === v3)?.status} chunks=${c3.length}`);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 24. No version built under an older embedding model can go live (A3)
+  // ─────────────────────────────────────────────────────────────────────
+  {
+    const OLD = 'old-model:768';
+    // (a)+(b) v1 entirely from an old model (chunks AND version stamp agree), v2 re-embedded.
+    const L = await newLecture('24 stale model rollback');
+    embedder.reset();
+    const p1 = await prepareDatasetVersion(L, makeXlsx(baseRows(4)));
+    if (p1.kind === 'CREATED') await fin(p1.versionId);
+    const v1 = p1.kind === 'CREATED' ? p1.versionId : -1;
+    await query(`UPDATE lecture_qna_chunks SET embedding_model_version = $2 WHERE id IN (SELECT chunk_id FROM dataset_version_chunks WHERE version_id = $1)`, [v1, OLD]);
+    await query(`UPDATE dataset_versions SET embedding_model_version = $2 WHERE id = $1`, [v1, OLD]);
+    const probs = await validateVersion(v1);
+    check('24a. validateVersion rejects a version whose chunks match its OWN old stamp but not the live model',
+      probs.some(x => /different model than the live one/.test(x)), `problems=${JSON.stringify(probs)}`);
+
+    const p2 = await prepareDatasetVersion(L, makeXlsx(baseRows(4)));
+    if (p2.kind === 'CREATED') await fin(p2.versionId);
+    const v2 = p2.kind === 'CREATED' ? p2.versionId : -1;
+    const rb = await expectReject(rollbackDataset(L));
+    const st = await lectureState(L);
+    check('24b. Rollback to an old-model version is refused (409); the current-model version stays live and ready',
+      p2.kind === 'CREATED' && rb.rejected && (rb.err as { statusCode?: number }).statusCode === 409
+        && st.active_version_id === v2 && (await getLectureReadiness(L)).ready,
+      `rejected=${rb.rejected} msg="${rb.message.slice(0, 100)}" active=${st.active_version_id} (v2=${v2})`);
+
+    // (c) resume of a READY_TO_ACTIVATE version holding an old-model chunk
+    const Lc = await newLecture('24c stale model resume');
+    embedder.reset();
+    const q1 = await prepareDatasetVersion(Lc, makeXlsx(baseRows(4)));
+    if (q1.kind === 'CREATED') await fin(q1.versionId);
+    const live = (await lectureState(Lc)).active_version_id;
+    const liveChunks = (await activeChunks(Lc)).length;
+    const edited = baseRows(4); edited[0] = { ...edited[0], answer: 'Concept 1 was edited for the 24c test.' };
+    const q2 = await prepareDatasetVersion(Lc, makeXlsx(edited));
+    const w2 = q2.kind === 'CREATED' ? q2.versionId : -1;
+    await embedPendingManually(w2);
+    await query(
+      `UPDATE lecture_qna_chunks SET embedding_model_version = $3 WHERE id IN (
+         SELECT chunk_id FROM dataset_version_chunks WHERE version_id = $1
+         EXCEPT SELECT chunk_id FROM dataset_version_chunks WHERE version_id = $2)`, [w2, live, OLD]);
+    const r = await fin(w2);
+    const stc = await lectureState(Lc);
+    check('24c. Resuming a READY_TO_ACTIVATE version with an old-model chunk → FAILED, never activated; the previous version stays live and ready',
+      r.outcome === 'FAILED' && /different model/.test(r.error ?? '') && stc.active_version_id === live && stc.status === 'READY'
+        && (await activeChunks(Lc)).length === liveChunks && (await getLectureReadiness(Lc)).ready,
+      `outcome=${r.outcome} error="${(r.error ?? '').slice(0, 100)}" active=${stc.active_version_id} (expected ${live})`);
   }
 
   // ─────────────────────────────────────────────────────────────────────

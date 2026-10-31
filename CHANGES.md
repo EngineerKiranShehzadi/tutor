@@ -7,6 +7,50 @@ Newest entry at the top.
 
 ---
 
+## 2026-10-31 — Admin/dataset fixes, batch 1: the live dataset can't be destroyed or replaced by a stale-model one (A1, A3)
+
+**Changed by:** Kiran
+**Files:** `backend/src/services/dataset-version.service.ts`,
+`backend/src/scripts/retry-missing-embeddings.ts`,
+`backend/src/scripts/test-dataset-pipeline.ts`
+
+- **A1 — a failed or raced activation could wipe the live dataset.** If a
+  version's activation reported an error after the switch had actually happened
+  (another API instance or `seed:retry` got there first, or the COMMIT reply was
+  lost), the version now being served was marked FAILED and then emptied by
+  cleanup. The lecture still said READY, but every question got
+  EMPTY_ACTIVE_VERSION. Now:
+  - Marking a version FAILED locks it and the lecture and only applies to a
+    version that is still being built (BUILDING / READY_TO_ACTIVATE) and is not
+    the lecture's active one. Otherwise it does nothing and returns SKIPPED.
+  - Activation that finds the version no longer READY_TO_ACTIVATE returns
+    SKIPPED instead of throwing into the failure path.
+  - Cleanup chooses and purges old versions in one transaction under the
+    lecture lock, never picks the lecture's active version, and the purge SQL
+    also refuses any version that a lecture points at.
+  - `seed:retry` exits 0 when the version it tried to finish is live, even if
+    another process published it.
+  - `failDatasetVersion(id, message)` is exported for the admin cancel action
+    (batch 2).
+- **A3 — a version made with an old embedding model could go live.**
+  Validation compared each chunk's model with the version's own stamp. Chat
+  compares it with the live model. A version built entirely under a previous
+  model passed validation, went ACTIVE, and every question was then refused as
+  STALE_EMBEDDING_MODEL. Validation now checks against the live
+  `EMBEDDING_MODEL_VERSION`. This covers new builds and rollback. A version
+  resumed at READY_TO_ACTIVATE is now validated again before the switch, where
+  it used to skip validation. The activation transaction itself repeats the
+  model/vector check under the lock.
+- **Tests (test-dataset-pipeline, 73/73 on a fresh PG17 DB):** 23a losing an
+  activation race leaves the version ACTIVE and intact; 23b failing the live
+  version is a no-op; 23c cleanup never purges the active version even if its
+  row says FAILED; 23d two OS processes finish one version at once (one
+  ACTIVATED, one SKIPPED); 24a–c an old-model version is rejected by
+  validation, rollback and resume. Against the previous code 23a/23b reproduce
+  the reported data loss and 24a–c fail.
+
+---
+
 ## 2026-10-31 — Compound question with one part down: answer the rest, say that part couldn't be retrieved
 
 **Changed by:** Kiran

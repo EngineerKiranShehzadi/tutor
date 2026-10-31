@@ -20,8 +20,16 @@ async function main() {
   if (inflight[0]) {
     const { finishDatasetVersion } = await import('../services/dataset-version.service');
     const result = await finishDatasetVersion(inflight[0].id);
-    logger.info(`[RETRY] Version id=${inflight[0].id}: ${result.outcome}${result.error ? ' — ' + result.error : ''}`);
-    process.exit(result.outcome === 'ACTIVATED' ? 0 : 1);
+    // SKIPPED: another process (e.g. the running API) is finishing or has
+    // finished this version. Report where it ended up rather than guessing.
+    const { rows: now } = await query<{ status: string; is_active: boolean }>(
+      `SELECT v.status, (l.active_version_id = v.id) AS is_active
+       FROM dataset_versions v JOIN lectures l ON l.id = v.lecture_id WHERE v.id = $1`,
+      [inflight[0].id]
+    );
+    const live = now[0]?.is_active === true;
+    logger.info(`[RETRY] Version id=${inflight[0].id}: ${result.outcome}${result.error ? ' — ' + result.error : ''} (now ${now[0]?.status ?? '?'}${live ? ', live' : ''})`);
+    process.exit(result.outcome === 'ACTIVATED' || live ? 0 : 1);
   }
 
   // Legacy path (no in-flight version): repair only the ACTIVE version's missing vectors.

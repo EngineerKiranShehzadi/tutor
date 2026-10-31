@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'crypto';
 import * as XLSX from 'xlsx';
 import pool, { query } from '../config/database';
+import type { PoolClient } from 'pg';
 import { AppError } from '../middleware/errorHandler';
 import { logger } from '../utils/logger';
 import { generateEmbedding, generateEmbeddingsBatch, EMBEDDING_MODEL_VERSION, EmbeddingUnavailableError } from './embedding.service';
@@ -106,6 +107,9 @@ export interface FinishDeps {
   chunkRetries?: number;
   chunkBackoffMs?: number;
   consecutiveFailureLimit?: number;
+  // Test hook: runs right before the activation transaction (used to simulate
+  // another process activating the same version first).
+  beforeActivate?: () => Promise<void>;
 }
 
 export interface FinishResult {
@@ -475,18 +479,54 @@ const pendingChunks = async (versionId: number) => {
   return rows;
 };
 
+// Marks an IN-FLIGHT version (BUILDING / READY_TO_ACTIVATE) as FAILED. It never
+// touches a version that is, or has meanwhile become, live: `v` may be a stale
+// read (another process activated it, or our own COMMIT succeeded but reported
+// an error), and failing — then purging — the dataset students are reading
+// would leave the lecture pointing at an empty version.
 const failVersion = async (v: VersionRow, message: string): Promise<FinishResult> => {
-  await query(
-    `UPDATE dataset_versions SET status = 'FAILED', last_error = $2, updated_at = NOW() WHERE id = $1`,
-    [v.id, message]
-  );
-  // A lecture with no active version has nothing to fall back on; one that has
-  // one is untouched and keeps answering from it.
-  const { rows } = await query<{ active_version_id: number | null }>(
-    'SELECT active_version_id FROM lectures WHERE id = $1', [v.lecture_id]
-  );
-  if (rows[0] && rows[0].active_version_id === null) {
-    await updateLectureStatus(v.lecture_id, 'FAILED', message);
+  const client = await pool.connect();
+  let failed = false;
+  let lectureFailed = false;
+  let currentStatus = v.status;
+  try {
+    await client.query('BEGIN');
+    // Same lock order as activateVersion: the version row, then the lecture.
+    const { rows: vr } = await client.query<{ status: string }>(
+      'SELECT status FROM dataset_versions WHERE id = $1 FOR UPDATE', [v.id]
+    );
+    const { rows: lec } = await client.query<{ active_version_id: number | null }>(
+      'SELECT active_version_id FROM lectures WHERE id = $1 FOR UPDATE', [v.lecture_id]
+    );
+    currentStatus = vr[0]?.status ?? 'MISSING';
+    const isLive = lec[0]?.active_version_id === v.id;
+    if (!isLive && (currentStatus === 'BUILDING' || currentStatus === 'READY_TO_ACTIVATE')) {
+      await client.query(
+        `UPDATE dataset_versions SET status = 'FAILED', last_error = $2, updated_at = NOW() WHERE id = $1`,
+        [v.id, message]
+      );
+      failed = true;
+      // A lecture with no active version has nothing to fall back on; one that
+      // has one is untouched and keeps answering from it.
+      if (lec[0] && lec[0].active_version_id === null) {
+        await client.query(`UPDATE lectures SET status = 'FAILED', updated_at = NOW() WHERE id = $1`, [v.lecture_id]);
+        lectureFailed = true;
+      }
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  if (!failed) {
+    logger.warn(`[DATASET] Lecture #${v.lecture_id}: version id=${v.id} not marked FAILED — it is ${currentStatus}, no longer in flight (${message})`);
+    return { outcome: 'SKIPPED', error: message };
+  }
+  if (lectureFailed) {
+    logger.error(`[LECTURE] ❌ Lecture #${v.lecture_id} status → FAILED: ${message}`);
   } else {
     logger.error(`[DATASET] ❌ Lecture #${v.lecture_id}: update (version id=${v.id}) failed — ${message}. The previous dataset stays live.`);
   }
@@ -494,25 +534,36 @@ const failVersion = async (v: VersionRow, message: string): Promise<FinishResult
   return { outcome: 'FAILED', error: message };
 };
 
+/** Fails an in-flight version by id (no-op for a live or finished one). */
+export async function failDatasetVersion(versionId: number, message: string): Promise<FinishResult> {
+  const { rows } = await query<VersionRow>(
+    'SELECT id, lecture_id, version_no, status, attempts, stats FROM dataset_versions WHERE id = $1', [versionId]
+  );
+  if (!rows[0]) throw new AppError(`Dataset version ${versionId} not found`, 404);
+  return failVersion(rows[0], message);
+}
+
 // Checks that must all pass before a version may go live.
 export const validateVersion = async (versionId: number): Promise<string[]> => {
   const problems: string[] = [];
 
+  // The model check uses the LIVE model (the one chat and readiness check
+  // against), not the version's own stamp: a version built under a previous
+  // model is internally consistent but would be refused by every question.
   const { rows: cnt } = await query<{ members: string; no_vec: string; bad_dims: string; bad_vec: string; wrong_model: string }>(
     `SELECT COUNT(*) AS members,
-            COUNT(*) FILTER (WHERE c.embedding_model_version IS DISTINCT FROM v.embedding_model_version) AS wrong_model,
+            COUNT(*) FILTER (WHERE c.embedding_model_version IS DISTINCT FROM $2) AS wrong_model,
             COUNT(*) FILTER (WHERE c.local_embedding IS NULL) AS no_vec,
             COUNT(*) FILTER (WHERE c.local_embedding IS NOT NULL AND vector_dims(c.local_embedding) <> ${EXPECTED_DIMS}) AS bad_dims,
             COUNT(*) FILTER (WHERE c.local_embedding IS NOT NULL AND NOT ((c.local_embedding <#> c.local_embedding) < 0)) AS bad_vec
      FROM dataset_version_chunks d JOIN lecture_qna_chunks c ON c.id = d.chunk_id
-     JOIN dataset_versions v ON v.id = d.version_id
      WHERE d.version_id = $1`,
-    [versionId]
+    [versionId, EMBEDDING_MODEL_VERSION]
   );
   const c = cnt[0];
   if (Number(c.members) === 0) problems.push('version contains no chunks');
   if (Number(c.no_vec) > 0) problems.push(`${c.no_vec} chunk(s) have no embedding`);
-  if (Number(c.wrong_model) > 0) problems.push(`${c.wrong_model} chunk(s) were embedded with a different model than the version's`);
+  if (Number(c.wrong_model) > 0) problems.push(`${c.wrong_model} chunk(s) were embedded with a different model than the live one (${EMBEDDING_MODEL_VERSION})`);
   if (Number(c.bad_dims) > 0) problems.push(`${c.bad_dims} chunk(s) have a vector of the wrong dimension`);
   if (Number(c.bad_vec) > 0) problems.push(`${c.bad_vec} chunk(s) have an empty/invalid vector`);
 
@@ -550,7 +601,10 @@ export const validateVersion = async (versionId: number): Promise<string[]> => {
   return problems;
 };
 
-const activateVersion = async (versionId: number): Promise<void> => {
+// Switches the lecture to this version. Returns false (and changes nothing)
+// when the version is no longer READY_TO_ACTIVATE — e.g. another process got
+// there first — so the caller does not treat it as a failure.
+const activateVersion = async (versionId: number): Promise<{ activated: boolean; status: string }> => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -559,7 +613,26 @@ const activateVersion = async (versionId: number): Promise<void> => {
     );
     if (!v[0]) throw new AppError(`Dataset version ${versionId} not found`, 404);
     await client.query('SELECT id FROM lectures WHERE id = $1 FOR UPDATE', [v[0].lecture_id]);
-    if (v[0].status !== 'READY_TO_ACTIVATE') throw new AppError(`Version ${versionId} is ${v[0].status}, not ready to activate`, 409);
+    if (v[0].status !== 'READY_TO_ACTIVATE') {
+      await client.query('ROLLBACK');
+      return { activated: false, status: v[0].status };
+    }
+
+    // Last gate, under the lock, with the same model definition chat uses:
+    // every chunk has a vector made by the live embedding model.
+    const { rows: g } = await client.query<{ members: string; no_vec: string; wrong_model: string }>(
+      `SELECT COUNT(*) AS members,
+              COUNT(*) FILTER (WHERE c.local_embedding IS NULL) AS no_vec,
+              COUNT(*) FILTER (WHERE c.embedding_model_version IS DISTINCT FROM $2) AS wrong_model
+       FROM dataset_version_chunks d JOIN lecture_qna_chunks c ON c.id = d.chunk_id
+       WHERE d.version_id = $1`,
+      [versionId, EMBEDDING_MODEL_VERSION]
+    );
+    if (Number(g[0].members) === 0 || Number(g[0].no_vec) > 0 || Number(g[0].wrong_model) > 0) {
+      throw new AppError(
+        `version is not servable under ${EMBEDDING_MODEL_VERSION}: ${g[0].members} chunk(s), ${g[0].no_vec} without a vector, ${g[0].wrong_model} from a different model`, 409
+      );
+    }
 
     await client.query(
       `UPDATE dataset_versions SET status = 'SUPERSEDED', updated_at = NOW()
@@ -574,6 +647,7 @@ const activateVersion = async (versionId: number): Promise<void> => {
       [versionId, v[0].lecture_id]
     );
     await client.query('COMMIT');
+    return { activated: true, status: 'ACTIVE' };
   } catch (err) {
     await client.query('ROLLBACK').catch(() => undefined);
     throw err;
@@ -726,14 +800,26 @@ export async function finishDatasetVersion(versionId: number, deps: FinishDeps =
 
       const problems = await validateVersion(versionId);
       if (problems.length > 0) return failVersion(v, `Validation failed: ${problems.join('; ')}`);
-      await query(`UPDATE dataset_versions SET status = 'READY_TO_ACTIVATE', updated_at = NOW() WHERE id = $1`, [versionId]);
+      await query(
+        `UPDATE dataset_versions SET status = 'READY_TO_ACTIVATE', updated_at = NOW() WHERE id = $1 AND status = 'BUILDING'`, [versionId]
+      );
+    } else {
+      // Resumed at READY_TO_ACTIVATE (a crash between validation and the switch,
+      // or a restart after a model change): re-validate against the live model.
+      const problems = await validateVersion(versionId);
+      if (problems.length > 0) return failVersion(v, `Validation failed: ${problems.join('; ')}`);
     }
 
-    // READY_TO_ACTIVATE (also reached after a crash between validation and the switch).
+    await deps.beforeActivate?.();
+    let activation: { activated: boolean; status: string };
     try {
-      await activateVersion(versionId);
+      activation = await activateVersion(versionId);
     } catch (err) {
       return failVersion(v, `Activation failed: ${(err as Error).message}`);
+    }
+    if (!activation.activated) {
+      logger.info(`[DATASET] Lecture #${v.lecture_id}: version #${v.version_no} is ${activation.status}; nothing to activate (finished elsewhere)`);
+      return { outcome: 'SKIPPED' };
     }
     logger.info(`[DATASET] 🎉 Lecture #${v.lecture_id}: version #${v.version_no} is now ACTIVE`);
     await cleanupOldVersions(v.lecture_id).catch(err => logger.warn(`[DATASET] cleanup after activation: ${(err as Error).message}`));
@@ -765,34 +851,77 @@ export async function resumePendingVersions(deps: FinishDeps = {}): Promise<numb
 // still referenced by chat history or cached answers, which keep their text
 // (so existing chats still show their sources) and only lose their vector.
 
-const purgeVersions = async (versionIds: number[]): Promise<void> => {
+// Runs inside the caller's transaction. The SQL itself also refuses to touch
+// any lecture's active version, whatever ids it is handed.
+const purgeVersions = async (client: PoolClient, versionIds: number[]): Promise<void> => {
   if (versionIds.length === 0) return;
+  const { rows: safe } = await client.query<{ id: number }>(
+    `SELECT id FROM dataset_versions
+     WHERE id = ANY($1::int[]) AND status IN ('SUPERSEDED','FAILED')
+       AND NOT EXISTS (SELECT 1 FROM lectures l WHERE l.active_version_id = dataset_versions.id)`,
+    [versionIds]
+  );
+  const ids = safe.map(r => r.id);
+  if (ids.length === 0) return;
+  const { rows: cand } = await client.query<{ chunk_id: number }>(
+    'SELECT DISTINCT chunk_id FROM dataset_version_chunks WHERE version_id = ANY($1::int[])', [ids]
+  );
+  const chunkIds = cand.map(c => c.chunk_id);
+  await client.query('DELETE FROM rag_answer_memory WHERE dataset_version_id = ANY($1::int[])', [ids]);
+  await client.query('DELETE FROM dataset_version_chunks WHERE version_id = ANY($1::int[])', [ids]);
+  if (chunkIds.length > 0) {
+    await client.query(
+      `DELETE FROM lecture_qna_chunks c
+       WHERE c.id = ANY($1::int[])
+         AND NOT EXISTS (SELECT 1 FROM dataset_version_chunks d WHERE d.chunk_id = c.id)
+         AND NOT EXISTS (SELECT 1 FROM chat_history h WHERE c.id = ANY(h.source_chunk_ids))
+         AND NOT EXISTS (SELECT 1 FROM rag_answer_memory m WHERE c.id = ANY(m.source_chunk_ids))`,
+      [chunkIds]
+    );
+    await client.query(
+      `UPDATE lecture_qna_chunks c SET local_embedding = NULL
+       WHERE c.id = ANY($1::int[]) AND c.local_embedding IS NOT NULL
+         AND NOT EXISTS (SELECT 1 FROM dataset_version_chunks d WHERE d.chunk_id = c.id)`,
+      [chunkIds]
+    );
+  }
+  await client.query("UPDATE dataset_versions SET status = CASE WHEN status = 'SUPERSEDED' THEN 'ARCHIVED' ELSE status END, updated_at = NOW() WHERE id = ANY($1::int[])", [ids]);
+};
+
+// Decides and purges in ONE transaction under the lecture lock (the lock
+// activation and rollback take), so the active version can never be chosen —
+// even if its row was wrongly left FAILED — and a concurrent switch cannot
+// change which version is "the previous one" halfway through.
+export async function cleanupOldVersions(lectureId: number): Promise<{ purged: number[] }> {
   const client = await pool.connect();
+  let toPurge: number[] = [];
   try {
     await client.query('BEGIN');
-    const { rows: cand } = await client.query<{ chunk_id: number }>(
-      'SELECT DISTINCT chunk_id FROM dataset_version_chunks WHERE version_id = ANY($1::int[])', [versionIds]
+    const { rows: lec } = await client.query<{ active_version_id: number | null }>(
+      'SELECT active_version_id FROM lectures WHERE id = $1 FOR UPDATE', [lectureId]
     );
-    const ids = cand.map(c => c.chunk_id);
-    await client.query('DELETE FROM rag_answer_memory WHERE dataset_version_id = ANY($1::int[])', [versionIds]);
-    await client.query('DELETE FROM dataset_version_chunks WHERE version_id = ANY($1::int[])', [versionIds]);
-    if (ids.length > 0) {
-      await client.query(
-        `DELETE FROM lecture_qna_chunks c
-         WHERE c.id = ANY($1::int[])
-           AND NOT EXISTS (SELECT 1 FROM dataset_version_chunks d WHERE d.chunk_id = c.id)
-           AND NOT EXISTS (SELECT 1 FROM chat_history h WHERE c.id = ANY(h.source_chunk_ids))
-           AND NOT EXISTS (SELECT 1 FROM rag_answer_memory m WHERE c.id = ANY(m.source_chunk_ids))`,
-        [ids]
-      );
-      await client.query(
-        `UPDATE lecture_qna_chunks c SET local_embedding = NULL
-         WHERE c.id = ANY($1::int[]) AND c.local_embedding IS NOT NULL
-           AND NOT EXISTS (SELECT 1 FROM dataset_version_chunks d WHERE d.chunk_id = c.id)`,
-        [ids]
-      );
+    const activeId = lec[0]?.active_version_id ?? null;
+    const { rows } = await client.query<{ id: number; status: string }>(
+      `SELECT id, status FROM dataset_versions
+       WHERE lecture_id = $1 AND status IN ('SUPERSEDED','FAILED') AND id IS DISTINCT FROM $2
+       ORDER BY updated_at DESC, id DESC
+       FOR UPDATE`,
+      [lectureId, activeId]
+    );
+    let keptOne = false;
+    const purge: number[] = [];
+    for (const r of rows) {
+      if (r.status === 'SUPERSEDED' && !keptOne) { keptOne = true; continue; }
+      purge.push(r.id);
     }
-    await client.query("UPDATE dataset_versions SET status = CASE WHEN status = 'SUPERSEDED' THEN 'ARCHIVED' ELSE status END, updated_at = NOW() WHERE id = ANY($1::int[])", [versionIds]);
+    // A FAILED version that is already empty needs no further work.
+    const { rows: nonEmpty } = purge.length
+      ? await client.query<{ version_id: number }>('SELECT DISTINCT version_id FROM dataset_version_chunks WHERE version_id = ANY($1::int[])', [purge])
+      : { rows: [] as { version_id: number }[] };
+    const stillFull = new Set(nonEmpty.map(r => r.version_id));
+    const supersededToArchive = rows.filter(r => purge.includes(r.id) && r.status === 'SUPERSEDED').map(r => r.id);
+    toPurge = purge.filter(id => stillFull.has(id) || supersededToArchive.includes(id));
+    await purgeVersions(client, toPurge);
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK').catch(() => undefined);
@@ -800,29 +929,6 @@ const purgeVersions = async (versionIds: number[]): Promise<void> => {
   } finally {
     client.release();
   }
-};
-
-export async function cleanupOldVersions(lectureId: number): Promise<{ purged: number[] }> {
-  const { rows } = await query<{ id: number; status: string }>(
-    `SELECT id, status FROM dataset_versions
-     WHERE lecture_id = $1 AND status IN ('SUPERSEDED','FAILED')
-     ORDER BY updated_at DESC, id DESC`,
-    [lectureId]
-  );
-  let keptOne = false;
-  const purge: number[] = [];
-  for (const r of rows) {
-    if (r.status === 'SUPERSEDED' && !keptOne) { keptOne = true; continue; }
-    purge.push(r.id);
-  }
-  // A FAILED version that is already empty needs no further work.
-  const { rows: nonEmpty } = purge.length
-    ? await query<{ version_id: number }>('SELECT DISTINCT version_id FROM dataset_version_chunks WHERE version_id = ANY($1::int[])', [purge])
-    : { rows: [] as { version_id: number }[] };
-  const stillFull = new Set(nonEmpty.map(r => r.version_id));
-  const supersededToArchive = rows.filter(r => purge.includes(r.id) && r.status === 'SUPERSEDED').map(r => r.id);
-  const toPurge = purge.filter(id => stillFull.has(id) || supersededToArchive.includes(id));
-  await purgeVersions(toPurge);
   if (toPurge.length > 0) logger.info(`[DATASET] 🧹 Lecture #${lectureId}: purged old dataset version(s) ${toPurge.join(', ')}`);
   return { purged: toPurge };
 }
