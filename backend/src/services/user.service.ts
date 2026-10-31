@@ -1,6 +1,7 @@
 import { query } from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { comparePassword, hashPassword } from '../utils/password';
+import { validatePassword } from '../utils/password-policy';
 import { logger } from '../utils/logger';
 
 export const getAllUsers = async () => {
@@ -58,6 +59,7 @@ export const updateAdminProfile = async (
 
   if (newPassword) {
     if (!currentPassword) throw new AppError('Current password required to set a new password', 400);
+    validatePassword(newPassword, 'New password');
     const valid = await comparePassword(currentPassword, admin.password_hash);
     if (!valid) throw new AppError('Current password is incorrect', 401);
     const hash = await hashPassword(newPassword);

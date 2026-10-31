@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import pool, { query } from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { hashPassword, comparePassword, hashToken } from '../utils/password';
+import { validatePassword } from '../utils/password-policy';
 import { generateAccessToken, generateRefreshToken, verifyRefreshToken } from '../utils/jwt';
 import { sendPasswordResetOtp, sendSignupVerificationOtp } from './email.service';
 import { env } from '../config/env';
@@ -239,6 +240,7 @@ export const resetPasswordWithOtp = async (
     logger.warn(`[AUTH] resetPasswordWithOtp: passwords do not match for "${email}"`);
     throw new AppError('Passwords do not match', 400);
   }
+  validatePassword(newPassword);
 
   const { rows: userRows } = await query<User>(
     'SELECT * FROM users WHERE email = $1',
@@ -315,23 +317,17 @@ const issueEmailVerificationOtp = async (userId: string): Promise<string> => {
 };
 
 // ── SIGNUP: INPUT VALIDATION ───────────────────────────
-// The signup form validates in the browser, and auth.controller.ts defines
-// express-validator rules — but those are bound to the REST /register route,
-// which the frontend does not use. Signup reaches the server through GraphQL,
-// so without these checks a request sent straight to /graphql (bypassing the
-// form entirely) could create an account with any password at all.
+// Signup reaches the server through GraphQL only, so these checks are the
+// only server-side gate: a request sent straight to /graphql (bypassing the
+// form) could otherwise create an account with any password at all.
 //
 // These rules deliberately mirror the browser rules in
 // frontend/src/app/(auth)/signup/page.tsx, so a normal user sees no change.
 // The length caps also match the users table (name VARCHAR(100),
 // email VARCHAR(255)), turning what would be a raw database error into a
-// clear message.
+// clear message. The password rules live in utils/password-policy.ts and are
+// shared with every other path that sets a password.
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-// bcrypt only considers the first 72 BYTES of a password and silently ignores
-// everything after that, so a longer password is not fully protected and the
-// user is never told. Reject it rather than accept it misleadingly.
-const MAX_PASSWORD_BYTES = 72;
 
 const validateSignupInput = (name: string, email: string, password: string): void => {
   const trimmedName = (name ?? '').trim();
@@ -342,13 +338,7 @@ const validateSignupInput = (name: string, email: string, password: string): voi
   if (!EMAIL_PATTERN.test(trimmedEmail)) throw new AppError('Enter a valid email address', 400);
   if (trimmedEmail.length > 255)         throw new AppError('Email must be 255 characters or fewer', 400);
 
-  const pw = password ?? '';
-  if (pw.length < 8)             throw new AppError('Password must be at least 8 characters', 400);
-  if (!/[A-Z]/.test(pw))         throw new AppError('Password must contain an uppercase letter', 400);
-  if (!/[0-9]/.test(pw))         throw new AppError('Password must contain a number', 400);
-  if (Buffer.byteLength(pw, 'utf8') > MAX_PASSWORD_BYTES) {
-    throw new AppError(`Password must be ${MAX_PASSWORD_BYTES} characters or fewer`, 400);
-  }
+  validatePassword(password);
 };
 
 // ── SIGNUP: INITIATE ───────────────────────────────────
@@ -585,7 +575,7 @@ export const updateProfile = async (
     if (!user.password_hash) throw new AppError('This account uses Google sign-in and has no password to change.', 400);
     const valid = await comparePassword(currentPassword, user.password_hash);
     if (!valid) throw new AppError('Current password is incorrect.', 401);
-    if (newPassword.length < 8) throw new AppError('New password must be at least 8 characters.', 400);
+    validatePassword(newPassword, 'New password');
   }
 
   const newHash = newPassword ? await hashPassword(newPassword) : null;
