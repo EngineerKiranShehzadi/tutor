@@ -54,9 +54,6 @@ export const authApi = {
   resendLoginOtp:   (email: string) => api.post('/auth/resend-login-otp', { email }),
   logout:           () => api.post('/auth/logout'),
   logoutAll:        () => api.post('/auth/logout-all'),
-  forgotPassword:   (email: string) => api.post('/auth/forgot-password', { email }),
-  resetPassword:    (token: string, password: string) =>
-                      api.post(`/auth/reset-password/${token}`, { password }),
   getMe:            () => api.get('/auth/me'),
   updateProfile:    (data: { name?: string; currentPassword?: string; newPassword?: string; avatarUrl?: string }) =>
                       api.patch('/auth/me', data),
