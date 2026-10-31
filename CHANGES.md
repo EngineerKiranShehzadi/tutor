@@ -7,7 +7,7 @@ Newest entry at the top.
 
 ---
 
-## 2026-10-29 — Decisions that override two earlier entries below
+## 2026-10-31 — Laiba's two changes are accepted (supersedes the 2026-10-29 reversals)
 
 **Changed by:** Kiran
 **Files:** `backend/src/services/auth.service.ts`,
@@ -15,22 +15,22 @@ Newest entry at the top.
 `frontend/src/app/(auth)/signup/page.tsx`,
 `frontend/src/components/auth/ForgotPasswordFlow.tsx`
 
-Two decisions were made on review that replace what the entries below say.
-Everything else in this file stands.
+After the full auth-hardening review, **all changes from Laiba's side are accepted.**
+The two reversals recorded on 2026-10-29 are themselves reverted — both of Laiba's
+original decisions are restored and now stand.
 
-### OTP expiry stays at 60 seconds
+### OTP expiry: 5 minutes — accepted
 
-The 6-digit length is kept. The expiry change to 5 minutes in the
-"Verification code (OTP): length and expiry" entry is **reverted**: codes expire
-after 60 seconds again, in both signup and password reset. The email text and
-the Forgot Password screen say 60 seconds to match.
+Laiba's change is kept: codes expire after 5 minutes (NIST SP 800-63B allows up to
+10), in both signup and password reset, with the 6-digit length. The resend
+cooldown stays 60 seconds. The email text and the Forgot Password screen say
+5 minutes to match.
 
-### After signup, the user logs in
+### After signup, the user is logged in — accepted
 
-The "Signing up sent you to the login form" entry made verification sign the
-user straight in and go to `/courses`. That is **reverted by choice**: after the
-code is verified the user is sent to `/login` and signs in with the account they
-just created. The signup page no longer stores the token or calls `setUser`.
+Laiba's change is kept: after the code is verified the user is signed straight in
+and sent to `/courses` (or `/admin/dashboard` for an admin). The signup page stores
+the access token in memory and calls `setUser` — no second trip through `/login`.
 
 ---
 
