@@ -462,6 +462,13 @@ export const askLectureAgent = async (
     // "[PHONE]" would search for the placeholder, not the number. Never
     // stored, logged, traced or sent to an LLM; those all use `question`.
     const unmaskedQuestion = guardrailResult.retrievalInput ?? question;
+    // Answer memory is skipped for a question that had PII masked. The
+    // masked text can't tell "What is 4294967296?" from "What is 2147483647?"
+    // (both become "what is [phone]"), for the exact key and for the
+    // embedding the semantic lookup compares, so one student's cached answer
+    // would be replayed for a different question. Keying on the unmasked
+    // text instead would store the raw value in rag_answer_memory.
+    const piiMasked = unmaskedQuestion !== question;
     trace.setAttributes({
       ...(isContentCaptureEnabled() ? { [ATTR.INPUT_VALUE]: truncateContent(question, 500).value } : {}),
     });
@@ -640,7 +647,10 @@ export const askLectureAgent = async (
     let memoryDatasetVersionId: number | null = null;
     let memoryResultAttr = 'NOT_ATTEMPTED';
 
-    if (route === 'FACT_QUESTION') {
+    if (route === 'FACT_QUESTION' && piiMasked) {
+      logger.info('[CHAT] 🛡️  Answer memory skipped: the question had PII masked');
+    }
+    if (route === 'FACT_QUESTION' && !piiMasked) {
       currentStage = 'exact-memory-lookup';
       const lookupAnswerMemory = deps.lookupAnswerMemory ?? (await import('./rag-answer-memory.service')).lookupAnswerMemory;
       const memoryResult = await trace.span(
@@ -1062,7 +1072,8 @@ export const askLectureAgent = async (
     // actually answer. Best-effort: any failure here must never change the
     // response already returned below. An answer that says a part "couldn't
     // be retrieved right now" is transient by definition, so it is never cached.
-    if (route === 'FACT_QUESTION' && guardrailOutcome.verified && unavailableAspects.length === 0) {
+    // Nor is the answer to a question that had PII masked (see piiMasked).
+    if (route === 'FACT_QUESTION' && !piiMasked && guardrailOutcome.verified && unavailableAspects.length === 0) {
       currentStage = 'write-answer-memory';
       try {
         const memoryService = await import('./rag-answer-memory.service');
