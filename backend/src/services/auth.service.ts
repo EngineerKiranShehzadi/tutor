@@ -498,9 +498,16 @@ const ticketMatchesLatestCode = async (userId: string, ticket: string | undefine
   return !!rows[0]?.ticket_hash && rows[0].ticket_hash === hashToken(ticket);
 };
 
-const issueEmailVerificationOtp = async (userId: string, ticket: string): Promise<string> => {
+// A fresh 6-digit code and its bcrypt hash (cost 12, ~0.3 s). Split out so
+// signupUser can pay for it before it knows whether the address is taken.
+interface EmailOtp { otp: string; codeHash: string }
+const newEmailOtp = async (): Promise<EmailOtp> => {
   const otp = crypto.randomInt(100000, 1000000).toString();
-  const codeHash = await bcrypt.hash(otp, 12);
+  return { otp, codeHash: await bcrypt.hash(otp, 12) };
+};
+
+const issueEmailVerificationOtp = async (userId: string, ticket: string, precomputed?: EmailOtp): Promise<string> => {
+  const { otp, codeHash } = precomputed ?? await newEmailOtp();
   const expiresAt = new Date(Date.now() + 5 * 60_000); // 5 minutes (NIST SP 800-63B: max 10 min)
 
   // Invalidate old unused tokens
@@ -556,9 +563,12 @@ export const signupUser = async (
   validateSignupInput(name, email, password);
   const normalizedEmail = email.trim().toLowerCase();
 
-  // Hash first, whether or not the address is taken, so both paths take about
-  // as long.
+  // Hash first — the password AND the verification code — whether or not the
+  // address is taken, so both paths do the same slow work. Before, only a fresh
+  // signup hashed the code (bcrypt cost 12), and that ~0.3 s gap told anyone
+  // which addresses are registered.
   const password_hash = await hashPassword(password);
+  const code = await newEmailOtp();
 
   const existing = await query<User>('SELECT * FROM users WHERE email = $1', [normalizedEmail]);
   const existingUser = existing.rows[0];
@@ -592,7 +602,7 @@ export const signupUser = async (
   const user = rows[0];
 
   const verificationTicket = newVerificationTicket();
-  const otp = await issueEmailVerificationOtp(user.id, verificationTicket);
+  const otp = await issueEmailVerificationOtp(user.id, verificationTicket, code);
 
   if (env.NODE_ENV !== 'production') {
     logger.info(`[DEV] Signup OTP for ${user.email}: ${otp}`);

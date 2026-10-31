@@ -676,6 +676,23 @@ test('AU3 REST PATCH /auth/me with a new password: the calling browser keeps ref
   return { pass: patch.status === 200 && ra.status === 200 && rb.status === 401, detail: `patch=${patch.status} A=${ra.status} B=${rb.status}` };
 });
 
+// ── AU4: signup takes as long for a taken address as for a fresh one ─────
+// Timing-based: medians over 10 runs each must be within 50 ms. On a slow or
+// noisy machine set AUTH_TIMING_TESTS=skip to skip it (it then reports PASS
+// with "skipped" in the detail).
+test('AU4 signup: a taken address is not measurably faster than a fresh one (median gap < 50 ms over 10 runs)', async () => {
+  if (process.env.AUTH_TIMING_TESTS === 'skip') return { pass: true, detail: 'skipped (AUTH_TIMING_TESTS=skip)' };
+  const taken = addr('signup-taken');
+  await insertUser(taken);
+  const time = async (email: string) => { const t = process.hrtime.bigint(); await Auth.signupUser('Timing User', email, PW); return Number(process.hrtime.bigint() - t) / 1e6; };
+  await time(addr('signup-warmup'));
+  const fresh: number[] = [], existing: number[] = [];
+  for (let i = 0; i < 10; i++) { fresh.push(await time(addr('signup-fresh'))); existing.push(await time(taken)); }
+  const med = (a: number[]) => { const x = [...a].sort((p, q) => p - q); return (x[4] + x[5]) / 2; };
+  const gap = Math.abs(med(fresh) - med(existing));
+  return { pass: gap < 50, detail: `fresh≈${med(fresh).toFixed(0)}ms taken≈${med(existing).toFixed(0)}ms gap=${gap.toFixed(0)}ms` };
+});
+
 // ── runner ───────────────────────────────────────────────────────────────
 async function cleanup(): Promise<void> {
   await query(`DELETE FROM users WHERE email LIKE $1`, [`%${DOMAIN}`]);
