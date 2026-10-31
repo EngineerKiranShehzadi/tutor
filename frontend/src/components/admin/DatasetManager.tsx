@@ -35,6 +35,21 @@ const previewFromError = (err: unknown): DatasetPreview | null =>
 
 const fmt = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '—');
 
+// Build-status polling: every 5 s while a version is building; after a failed
+// poll the interval doubles up to 30 s, and a 429 waits as long as the
+// server's Retry-After says.
+const POLL_MS = 5000;
+const MAX_POLL_MS = 30000;
+const POLL_ERROR = 'Could not refresh build status — retrying…';
+
+// How long the server asked us to wait (Retry-After, seconds), if it did.
+const retryAfterMs = (err: unknown): number | null => {
+  const r = (err as { response?: { status?: number; headers?: Record<string, unknown> } })?.response;
+  if (r?.status !== 429) return null;
+  const secs = Number(r.headers?.['retry-after']);
+  return Number.isFinite(secs) && secs > 0 ? secs * 1000 : null;
+};
+
 function Tile({ label, value, tone, testId }: { label: string; value: number; tone: string; testId: string }) {
   return (
     <div className={`rounded-xl border px-4 py-3 ${tone}`} data-testid={testId}>
@@ -63,16 +78,21 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
   const [exporting, setExporting] = useState(false);
   const lastSeenInFlight = useRef<number | null>(null);
 
-  const loadVersions = useCallback(async () => {
+  // Resolves to whether the refresh worked and, after a 429, how long to wait.
+  // A failure is shown (never swallowed) and cleared by the next success; it
+  // never replaces a different error that is already on screen.
+  const loadVersions = useCallback(async (): Promise<{ ok: boolean; waitMs: number | null }> => {
     try {
       const res = await datasetApi.versions(lectureId);
       const list: DatasetVersionInfo[] = res.data?.data?.versions ?? [];
       setVersions(list);
       setVersionsLoaded(true);
-      return list;
-    } catch {
+      setError(e => (e === POLL_ERROR ? '' : e));
+      return { ok: true, waitMs: null };
+    } catch (err) {
       setVersionsLoaded(true);
-      return null;
+      setError(e => (e && e !== POLL_ERROR ? e : POLL_ERROR));
+      return { ok: false, waitMs: retryAfterMs(err) };
     }
   }, [lectureId]);
 
@@ -80,12 +100,21 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
 
   const inFlight = versions.find(v => IN_FLIGHT.has(v.status)) ?? null;
 
-  // Poll while a build is in flight; announce how it ended.
+  // Poll while a build is in flight (backing off after failures); announce how it ended.
   useEffect(() => {
     if (!inFlight) return;
     lastSeenInFlight.current = inFlight.id;
-    const t = setInterval(() => { void loadVersions(); }, 2500);
-    return () => clearInterval(t);
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let delay = POLL_MS;
+    const tick = async () => {
+      const r = await loadVersions();
+      if (stopped) return;
+      delay = r.ok ? POLL_MS : r.waitMs ?? Math.min(delay * 2, MAX_POLL_MS);
+      timer = setTimeout(() => { void tick(); }, delay);
+    };
+    timer = setTimeout(() => { void tick(); }, delay);
+    return () => { stopped = true; if (timer) clearTimeout(timer); };
   }, [inFlight?.id, loadVersions]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {

@@ -47,6 +47,7 @@ import { logger } from '../utils/logger';
 import { computeEnrichedOverviewMetrics, overviewCache } from '../services/observability/aggregate.service';
 import { rateLimitStore } from '../graphql/resolvers/auth.resolver';
 import { ExpiringMap } from '../utils/expiring-map';
+import { globalLimiter, userLimiter } from '../middleware/rateLimiter';
 
 const results: { name: string; pass: boolean; detail: string }[] = [];
 const check = (name: string, pass: boolean, detail: string) => {
@@ -579,6 +580,40 @@ const run = async () => {
     rateLimitStore.clear(); overviewCache.clear();
     check('A20-1. ExpiringMap drops expired entries and evicts the oldest past its cap; the auth rate-limit store stays ≤ 10,000 and the overview cache ≤ 100',
       expired === undefined && evicted && sizes === '10000/100', `expiredGet=${expired} evictedOldest=${evicted} sizes(rateLimit/overview)=${sizes}`);
+  }
+
+  // ── AD1: authenticated REST traffic is limited per user, anonymous per IP ──
+  {
+    const app = express();
+    app.use('/api/v1', globalLimiter, userLimiter, (_req, res) => { res.json({ ok: true }); });
+    const server = app.listen(0, '127.0.0.1');
+    await new Promise<void>(r => server.once('listening', () => r()));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/v1/datasets/versions/1`;
+    const hit = async (auth?: string) => (await fetch(base, auth ? { headers: { Authorization: auth } } : {})).status;
+    try {
+      const admin = `Bearer ${generateAccessToken('00000000-0000-4000-8000-0000000000a1', 'ADMIN')}`;
+      const authed: number[] = [];
+      for (let i = 0; i < 200; i++) authed.push(await hit(admin));
+      check('AD1-1. 200 authenticated GETs in one window (build polling + monitor refresh) are not throttled',
+        authed.every(s => s === 200) && env.RATE_LIMIT.USER_MAX >= 200,
+        `statuses=${[...new Set(authed)].join(',')} USER_MAX=${env.RATE_LIMIT.USER_MAX}`);
+
+      // A garbage bearer is anonymous: it spends the per-IP bucket like no header at all.
+      const anon: number[] = [];
+      for (let i = 0; i < env.RATE_LIMIT.MAX; i++) anon.push(await hit(i % 2 ? 'Bearer not-a-real-token' : undefined));
+      const overGarbage = await hit('Bearer not-a-real-token');
+      const overNone = await hit();
+      const stillAuthed = await hit(admin);
+      check('AD1-2. Anonymous traffic is still throttled at RATE_LIMIT_MAX per IP; a garbage bearer token counts as anonymous',
+        anon.every(s => s === 200) && overGarbage === 429 && overNone === 429,
+        `first ${env.RATE_LIMIT.MAX} → ${[...new Set(anon)].join(',')}, then garbage=${overGarbage} none=${overNone}`);
+      check('AD1-3. With the IP bucket exhausted, a signed-in operator (e.g. Cancel) still gets through on their own bucket',
+        stillAuthed === 200, `authed after IP exhaustion=${stillAuthed}`);
+    } finally {
+      server.close();
+      await globalLimiter.resetKey('127.0.0.1'); await globalLimiter.resetKey('::ffff:127.0.0.1');
+      await userLimiter.resetKey('u:00000000-0000-4000-8000-0000000000a1');
+    }
   }
 
 };

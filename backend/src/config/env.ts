@@ -172,6 +172,8 @@ export const env = {
     WINDOW_MS:    parseInt(optional('RATE_LIMIT_WINDOW_MS', '900000'), 10),
     MAX:          parseInt(optional('RATE_LIMIT_MAX', '100'), 10),
     AUTH_MAX:     parseInt(optional('AUTH_RATE_LIMIT_MAX', '10'), 10),
+    // Per authenticated user per window (anonymous traffic uses MAX per IP).
+    USER_MAX:     positiveInt('RATE_LIMIT_USER_MAX', 1000),
   },
 
   BCRYPT_SALT_ROUNDS: parseInt(optional('BCRYPT_SALT_ROUNDS', '12'), 10),
