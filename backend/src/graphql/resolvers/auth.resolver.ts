@@ -72,7 +72,7 @@ export const resolvers = {
       checkRateLimit(ctx.req, 'rpr', 2, 60_000);
       await AuthService.requestPasswordReset(input.email).catch(toGQL);
       logger.info(`[GRAPHQL] ✅ requestPasswordReset: OTP issued for "${input.email}"`);
-      return { success: true, message: 'OTP sent to your email. Valid for 60 seconds.' };
+      return { success: true, message: 'OTP sent to your email. Valid for 5 minutes.' };
     },
 
     // 2 req/min

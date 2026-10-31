@@ -9,6 +9,10 @@ import { env } from '../config/env';
 import { logger } from '../utils/logger';
 import { User, PasswordResetToken, EmailVerificationToken } from '../types';
 
+// The OTP now lives 5 minutes, but the client uses the number we return as the
+// resend-button cooldown, so that stays 60 seconds.
+const RESEND_COOLDOWN_SECONDS = 60;
+
 // ── LOGIN ─────────────────────────────────────────────
 type LoginResult =
   | { status: 'AUTHENTICATED'; user: Omit<User, 'password_hash'>; accessToken: string; refreshToken: string }
@@ -53,7 +57,7 @@ export const loginUser = async (email: string, password: string): Promise<LoginR
       return {
         status: 'EMAIL_VERIFICATION_REQUIRED',
         email: user.email,
-        verificationExpiresInSeconds: Math.max(0, expiresInSeconds)
+        verificationExpiresInSeconds: Math.min(RESEND_COOLDOWN_SECONDS, Math.max(0, expiresInSeconds))
       };
     }
 
@@ -78,7 +82,7 @@ export const loginUser = async (email: string, password: string): Promise<LoginR
     return {
       status: 'EMAIL_VERIFICATION_REQUIRED',
       email: user.email,
-      verificationExpiresInSeconds: 60
+      verificationExpiresInSeconds: RESEND_COOLDOWN_SECONDS
     };
   }
 
@@ -141,7 +145,7 @@ const issuePasswordResetOtp = async (email: string): Promise<void> => {
   // 6-digit OTP via cryptographically secure random (NIST SP 800-63B: minimum 6 digits)
   const otp = crypto.randomInt(100000, 1000000).toString();
   const codeHash = await bcrypt.hash(otp, 12);
-  const expiresAt = new Date(Date.now() + 60 * 1000); // 60 seconds
+  const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes (NIST SP 800-63B: max 10 min)
 
   // Invalidate all previous unused tokens for this user
   await query(
@@ -293,7 +297,7 @@ export const resetPasswordWithOtp = async (
 const issueEmailVerificationOtp = async (userId: string): Promise<string> => {
   const otp = crypto.randomInt(100000, 1000000).toString();
   const codeHash = await bcrypt.hash(otp, 12);
-  const expiresAt = new Date(Date.now() + 60_000); // 60 seconds
+  const expiresAt = new Date(Date.now() + 5 * 60_000); // 5 minutes (NIST SP 800-63B: max 10 min)
 
   // Invalidate old unused tokens
   await query(
@@ -431,7 +435,7 @@ export const resendLoginOtp = async (email: string): Promise<number> => {
   if (existingToken && new Date(existingToken.expires_at) > new Date()) {
     // Valid OTP exists, return remaining time without sending new email
     const expiresInSeconds = Math.ceil((new Date(existingToken.expires_at).getTime() - Date.now()) / 1000);
-    return Math.max(0, expiresInSeconds);
+    return Math.min(RESEND_COOLDOWN_SECONDS, Math.max(0, expiresInSeconds));
   }
 
   // Issue fresh OTP
@@ -452,7 +456,7 @@ export const resendLoginOtp = async (email: string): Promise<number> => {
     }
   }
 
-  return 60;
+  return RESEND_COOLDOWN_SECONDS;
 };
 
 // ── SIGNUP: VERIFY OTP ────────────────────────────────

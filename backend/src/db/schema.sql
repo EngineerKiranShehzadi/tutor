@@ -37,8 +37,8 @@ CREATE INDEX IF NOT EXISTS idx_refresh_tokens_hash ON refresh_tokens(token_hash)
 CREATE TABLE IF NOT EXISTS password_reset_tokens (
   id         UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id    UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  code_hash  TEXT        NOT NULL,          -- bcrypt of 5-digit OTP (cost 12)
-  expires_at TIMESTAMPTZ NOT NULL,          -- now + 60 seconds
+  code_hash  TEXT        NOT NULL,          -- bcrypt of 6-digit OTP (cost 12)
+  expires_at TIMESTAMPTZ NOT NULL,          -- now + 5 minutes
   used       BOOLEAN     NOT NULL DEFAULT FALSE,
   verified   BOOLEAN     NOT NULL DEFAULT FALSE,  -- true after OTP verified
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -50,8 +50,8 @@ CREATE INDEX IF NOT EXISTS idx_prt_user_id ON password_reset_tokens(user_id);
 CREATE TABLE IF NOT EXISTS email_verification_tokens (
   id         UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id    UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  code_hash  TEXT        NOT NULL,          -- bcrypt of 5-digit OTP (cost 12)
-  expires_at TIMESTAMPTZ NOT NULL,          -- now + 60 seconds
+  code_hash  TEXT        NOT NULL,          -- bcrypt of 6-digit OTP (cost 12)
+  expires_at TIMESTAMPTZ NOT NULL,          -- now + 5 minutes
   used       BOOLEAN     NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
