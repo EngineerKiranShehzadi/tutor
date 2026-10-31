@@ -4,6 +4,7 @@ import { AuthenticatedRequest } from '../../types';
 import { AppError } from '../../middleware/errorHandler';
 import { getAllUsers, deleteUser, updateUserRole, updateAdminProfile } from '../../services/user.service';
 import { logger } from '../../utils/logger';
+import { REFRESH_COOKIE } from '../../utils/auth-cookies';
 
 function requireAdmin(ctx: GraphQLContext) {
   const user = (ctx.req as AuthenticatedRequest).user;
@@ -53,7 +54,8 @@ export const userResolvers = {
       wrap(async () => {
         const admin = requireAdmin(ctx);
         logger.info(`[GRAPHQL] updateAdminProfile: admin "${admin.email}"`);
-        return updateAdminProfile(admin.id, name, currentPassword, newPassword);
+        // A password change keeps this session (its refresh cookie) and ends the others.
+        return updateAdminProfile(admin.id, name, currentPassword, newPassword, ctx.req.cookies?.[REFRESH_COOKIE]);
       }),
   },
 };

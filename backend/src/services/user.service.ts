@@ -3,6 +3,7 @@ import { AppError } from '../middleware/errorHandler';
 import { comparePassword, hashPassword } from '../utils/password';
 import { validatePassword } from '../utils/password-policy';
 import { logger } from '../utils/logger';
+import { revokeOtherSessions } from './auth.service';
 
 export const getAllUsers = async () => {
   logger.info('[USER] getAllUsers: fetching all users');
@@ -54,7 +55,9 @@ export const updateAdminProfile = async (
   adminId: string,
   name?: string,
   currentPassword?: string,
-  newPassword?: string
+  newPassword?: string,
+  // The caller's refresh cookie: a password change ends every other session.
+  currentRefreshToken?: string
 ) => {
   const { rows } = await query<{ id: string; name: string; email: string; role: string; password_hash: string }>(
     `SELECT id, name, email, role, password_hash FROM users WHERE id = $1`,
@@ -70,7 +73,8 @@ export const updateAdminProfile = async (
     if (!valid) throw new AppError('Current password is incorrect', 401);
     const hash = await hashPassword(newPassword);
     await query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [hash, adminId]);
-    logger.info(`[USER] ✅ Password changed for admin id=${adminId}`);
+    await revokeOtherSessions(adminId, currentRefreshToken);
+    logger.info(`[USER] ✅ Password changed for admin id=${adminId}; other sessions ended`);
   }
 
   if (name && name.trim()) {

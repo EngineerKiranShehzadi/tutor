@@ -635,6 +635,47 @@ test('AU2 POST /login: the body has no refreshToken (anywhere), the httpOnly ref
   };
 });
 
+// ── AU3: a password change ends every other session, keeps the current one ──
+test('AU3 updateProfile / updateAdminProfile password change: session A stays refreshable, session B gets 401', async () => {
+  const run = async (change: (id: string, keep: string) => Promise<unknown>, role: string) => {
+    const email = addr(`pw-change-${role}`);
+    const id = await insertUser(email, { role });
+    const a = await login(email);
+    const b = await login(email);
+    await change(id, a.refreshToken);
+    const aRefresh = await errOf(Auth.refreshAccessToken(a.refreshToken));
+    const bRefresh = await errOf(Auth.refreshAccessToken(b.refreshToken));
+    return { ok: aRefresh === null && bRefresh instanceof AppError && bRefresh.statusCode === 401, detail: `${role}: A=${aRefresh?.message ?? 'ok'} B=${(bRefresh as AppError)?.statusCode}` };
+  };
+  const student = await run((id, keep) => Auth.updateProfile(id, { currentPassword: PW, newPassword: 'Changed123' }, keep), 'STUDENT');
+  const admin = await run((id, keep) => updateAdminProfile(id, undefined, PW, 'Changed123', keep), 'ADMIN');
+  // A name-only update ends nothing.
+  const email = addr('name-only');
+  const id = await insertUser(email);
+  const a = await login(email); const b = await login(email);
+  await Auth.updateProfile(id, { name: 'New Name' }, a.refreshToken);
+  const untouched = (await errOf(Auth.refreshAccessToken(b.refreshToken))) === null;
+  return { pass: student.ok && admin.ok && untouched, detail: `${student.detail} | ${admin.detail} | nameOnlyKeepsB=${untouched}` };
+});
+
+test('AU3 REST PATCH /auth/me with a new password: the calling browser keeps refreshing, the other browser is logged out', async (base) => {
+  const email = addr('rest-pw');
+  await insertUser(email);
+  const loginRest = async () => {
+    const r = await fetch(`${base}/api/v1/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password: PW }) });
+    const body = await r.json() as { data: { accessToken: string } };
+    return { access: body.data.accessToken, cookie: `refreshToken=${cookieValue(r, 'refreshToken')}` };
+  };
+  const a = await loginRest(); const b = await loginRest();
+  const patch = await fetch(`${base}/api/v1/auth/me`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${a.access}`, Cookie: a.cookie },
+    body: JSON.stringify({ currentPassword: PW, newPassword: 'RestChange9' }),
+  });
+  const refresh = (cookie: string) => fetch(`${base}/api/v1/auth/refresh-token`, { method: 'POST', headers: { Cookie: cookie } });
+  const ra = await refresh(a.cookie); const rb = await refresh(b.cookie);
+  return { pass: patch.status === 200 && ra.status === 200 && rb.status === 401, detail: `patch=${patch.status} A=${ra.status} B=${rb.status}` };
+});
+
 // ── runner ───────────────────────────────────────────────────────────────
 async function cleanup(): Promise<void> {
   await query(`DELETE FROM users WHERE email LIKE $1`, [`%${DOMAIN}`]);

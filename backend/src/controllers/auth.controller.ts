@@ -136,7 +136,9 @@ export const getMe = asyncHandler(async (req: AuthenticatedRequest, res: Respons
 export const updateMe = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   const { name, currentPassword, newPassword, avatarUrl } = req.body;
   logger.info(`[AUTH] UpdateMe: "${req.user?.email}"`);
-  const updated = await AuthService.updateProfile(req.user!.id, { name, currentPassword, newPassword, avatarUrl });
+  // The refresh cookie has no path, so it reaches /auth/me: a password change
+  // keeps this session and ends the others.
+  const updated = await AuthService.updateProfile(req.user!.id, { name, currentPassword, newPassword, avatarUrl }, req.cookies?.[REFRESH_COOKIE]);
   sendSuccess(res, 'Profile updated', updated);
 });
 

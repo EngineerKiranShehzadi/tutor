@@ -222,6 +222,24 @@ export const revokeAllSessions = async (userId: string): Promise<number> => {
   return rowCount ?? 0;
 };
 
+// A password change ends every OTHER session of the user: if the password was
+// changed because it leaked, a stolen refresh-token family must die too (each
+// rotation would otherwise renew it for 7 days, forever). The session that
+// presents keepRefreshToken — the one making the change — stays signed in.
+// Without it (or if it matches nothing) every session is revoked.
+export const revokeOtherSessions = async (userId: string, keepRefreshToken?: string): Promise<number> => {
+  if (!keepRefreshToken) return revokeAllSessions(userId);
+  const { rowCount } = await query(
+    `DELETE FROM refresh_tokens
+     WHERE user_id = $1
+       AND family_id IS DISTINCT FROM
+           (SELECT family_id FROM refresh_tokens WHERE token_hash = $2 AND user_id = $1)`,
+    [userId, hashToken(keepRefreshToken)]
+  );
+  logger.info(`[AUTH] ✅ Other sessions revoked for user ${userId} (${rowCount ?? 0} rows)`);
+  return rowCount ?? 0;
+};
+
 // Expired rows (live or rotated) are useless; called on a timer from server.ts.
 export const purgeExpiredRefreshTokens = async (): Promise<number> => {
   const { rowCount } = await query('DELETE FROM refresh_tokens WHERE expires_at <= NOW()');
@@ -855,7 +873,10 @@ const storeRefreshToken = async (userId: string, token: string) => {
 // ── UPDATE PROFILE ────────────────────────────────────
 export const updateProfile = async (
   userId: string,
-  params: { name?: string; currentPassword?: string; newPassword?: string; avatarUrl?: string }
+  params: { name?: string; currentPassword?: string; newPassword?: string; avatarUrl?: string },
+  // The caller's refresh cookie: after a password change, every session except
+  // this one is ended (revokeOtherSessions).
+  currentRefreshToken?: string
 ): Promise<Pick<User, 'id' | 'name' | 'email' | 'role' | 'avatar_url'>> => {
   const { name, currentPassword, newPassword, avatarUrl } = params;
 
@@ -882,6 +903,7 @@ export const updateProfile = async (
      RETURNING id, name, email, role, avatar_url`,
     [name?.trim() || null, newHash, avatarUrl ?? null, userId]
   );
+  if (newHash) await revokeOtherSessions(userId, currentRefreshToken);
 
   logger.info(`[AUTH] ✅ Profile updated for user ${userId}`);
   return updated[0];
