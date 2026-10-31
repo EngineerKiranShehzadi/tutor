@@ -693,6 +693,16 @@ test('AU4 signup: a taken address is not measurably faster than a fresh one (med
   return { pass: gap < 50, detail: `fresh≈${med(fresh).toFixed(0)}ms taken≈${med(existing).toFixed(0)}ms gap=${gap.toFixed(0)}ms` };
 });
 
+// ── AU5: a Google-only admin changing a password gets a clear 400 ──────
+test('AU5 updateAdminProfile on a Google-only admin (no password) → 400 with the Google sign-in message, not a 500', async () => {
+  const id = await insertUser(addr('g-admin'), { role: 'ADMIN', password: null, googleId: `g-${Date.now()}-adm` });
+  const e = await errOf(updateAdminProfile(id, undefined, 'Whatever1', 'NewPass123'));
+  return {
+    pass: e instanceof AppError && e.statusCode === 400 && e.message === 'This account uses Google sign-in and has no password to change.',
+    detail: `${(e as AppError)?.statusCode} ${e?.message}`,
+  };
+});
+
 // ── runner ───────────────────────────────────────────────────────────────
 async function cleanup(): Promise<void> {
   await query(`DELETE FROM users WHERE email LIKE $1`, [`%${DOMAIN}`]);

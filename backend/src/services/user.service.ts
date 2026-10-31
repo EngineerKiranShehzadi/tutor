@@ -94,7 +94,7 @@ export const updateAdminProfile = async (
   // The caller's refresh cookie: a password change ends every other session.
   currentRefreshToken?: string
 ) => {
-  const { rows } = await query<{ id: string; name: string; email: string; role: string; password_hash: string }>(
+  const { rows } = await query<{ id: string; name: string; email: string; role: string; password_hash: string | null }>(
     `SELECT id, name, email, role, password_hash FROM users WHERE id = $1`,
     [adminId]
   );
@@ -103,6 +103,9 @@ export const updateAdminProfile = async (
 
   if (newPassword) {
     if (!currentPassword) throw new AppError('Current password required to set a new password', 400);
+    // A Google-only account has no hash; comparing against NULL threw
+    // "Illegal arguments" and surfaced as a 500 (updateProfile already did this).
+    if (!admin.password_hash) throw new AppError('This account uses Google sign-in and has no password to change.', 400);
     validatePassword(newPassword, 'New password');
     const valid = await comparePassword(currentPassword, admin.password_hash);
     if (!valid) throw new AppError('Current password is incorrect', 401);
