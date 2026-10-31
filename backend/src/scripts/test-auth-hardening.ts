@@ -376,7 +376,7 @@ test('#11 a replay inside the grace window is refused but revokes nothing', asyn
   const { refreshToken: t2 } = await Auth.refreshAccessToken(t1);
   const replay = await errOf(Auth.refreshAccessToken(t1));
   const successor = await errOf(Auth.refreshAccessToken(t2));
-  return { pass: !!replay && successor === null };
+  return { pass: (replay as AppError | null)?.statusCode === 409 && successor === null, detail: replay?.message };
 });
 
 test('#21 10 concurrent refreshes of one token mint exactly one successor', async () => {

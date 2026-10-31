@@ -116,7 +116,7 @@ export const loginUser = async (email: string, password: string): Promise<LoginR
 //
 // A browser with two tabs can legitimately present the same token twice in a
 // moment (both refresh at once); a replay inside ROTATION_GRACE_MS is refused
-// without revoking anything.
+// without revoking anything (409, so the client retries with the new cookie).
 const ROTATION_GRACE_MS = 10_000;
 
 export const refreshAccessToken = async (refreshToken: string) => {
@@ -151,11 +151,13 @@ export const refreshAccessToken = async (refreshToken: string) => {
         const revoked = await client.query('DELETE FROM refresh_tokens WHERE family_id = $1', [row.family_id]);
         await client.query('COMMIT');
         logger.warn(`[AUTH] refreshAccessToken: REUSE of a rotated refresh token for user ${row.user_id} — family ${row.family_id} revoked (${revoked.rowCount} rows)`);
-      } else {
-        await client.query('COMMIT');
-        logger.warn(`[AUTH] refreshAccessToken: concurrent refresh of the same token for user ${row.user_id} — refused, not revoked`);
+        throw new AppError('Invalid or expired refresh token', 401);
       }
-      throw new AppError('Invalid or expired refresh token', 401);
+      await client.query('COMMIT');
+      logger.warn(`[AUTH] refreshAccessToken: concurrent refresh of the same token for user ${row.user_id} — refused, not revoked`);
+      // 409, not 401: the browser's cookie jar already holds the successor (set
+      // by the request that won), so the client should simply retry once.
+      throw new AppError('Refresh already in progress — retry', 409);
     }
 
     // The role comes from the database, never from the old token: a demotion or
