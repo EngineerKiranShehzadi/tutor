@@ -38,6 +38,7 @@ import { updateUserRole, updateAdminProfile } from '../services/user.service';
 import { generateAccessToken, generateRefreshToken, verifyAccessToken, verifyRefreshToken } from '../utils/jwt';
 import { hashToken } from '../utils/password';
 import { createApp } from '../app';
+import { readFileSync } from 'fs';
 
 const DOMAIN = '@auth-hardening.test';
 const PW = 'GoodPass1';
@@ -718,6 +719,23 @@ test('AU6 POST /auth/refresh-token: a revoked token → 401 and the refreshToken
   return {
     pass: revoked.status === 401 && !!clearing(revoked) && first.status === 200 && raced.status === 409 && !clearing(raced),
     detail: `revoked=${revoked.status} cleared=${!!clearing(revoked)} first=${first.status} raced=${raced.status} clearedOn409=${!!clearing(raced)}`,
+  };
+});
+
+// ── AU7: lookups match the case-insensitive unique index ───────────────
+test('AU7 a user stored as "Admin@…" logs in as "admin@…" (and " ADMIN@… "); migration 017 lowercases stored emails, twice safely', async () => {
+  const stamp = `${Date.now()}-${++seq}`;
+  const stored = `Admin-${stamp}@AUTH-HARDENING.test`;
+  await query(`INSERT INTO users (name, email, password_hash, is_verified, role) VALUES ('Mixed Case', $1, $2, TRUE, 'ADMIN')`,
+    [stored, await bcrypt.hash(PW, 4)]);
+  const lower = await Auth.loginUser(stored.toLowerCase(), PW);
+  const padded = await Auth.loginUser(`  ${stored.toUpperCase()}  `, PW);
+  const sql = readFileSync(path.join(__dirname, '../db/migrations/017_users_email_lowercase.sql'), 'utf8');
+  await pool.query(sql); await pool.query(sql);
+  const after = (await query<{ email: string }>('SELECT email FROM users WHERE lower(email) = $1', [stored.toLowerCase()])).rows;
+  return {
+    pass: lower.status === 'AUTHENTICATED' && padded.status === 'AUTHENTICATED' && after.length === 1 && after[0].email === stored.toLowerCase(),
+    detail: `lower=${lower.status} padded=${padded.status} stored-after=${after[0]?.email}`,
   };
 });
 

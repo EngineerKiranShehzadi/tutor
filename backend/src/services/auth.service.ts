@@ -19,6 +19,12 @@ const RESEND_COOLDOWN_SECONDS = 60;
 // against when there is no account, so that path costs the same as a real one.
 const DUMMY_PASSWORD_HASH = bcrypt.hashSync(crypto.randomBytes(16).toString('hex'), env.BCRYPT_SALT_ROUNDS);
 
+// Every incoming address is compared trimmed and lowercased against
+// lower(email) — the expression migration 012's unique index is on, so the
+// lookup can use it and a row stored with capitals (e.g. a hand-inserted
+// admin) still matches. Migration 017 lowercases stored addresses.
+const normEmail = (e: string): string => e.trim().toLowerCase();
+
 // ── LOGIN ─────────────────────────────────────────────
 type LoginResult =
   | { status: 'AUTHENTICATED'; user: Omit<User, 'password_hash'>; accessToken: string; refreshToken: string }
@@ -27,8 +33,8 @@ type LoginResult =
 export const loginUser = async (email: string, password: string): Promise<LoginResult> => {
   logger.info(`[AUTH] loginUser: attempt for "${email}"`);
   const { rows } = await query<User>(
-    'SELECT * FROM users WHERE email = $1',
-    [email.toLowerCase()]
+    'SELECT * FROM users WHERE lower(email) = $1',
+    [normEmail(email)]
   );
   const user = rows[0];
   // Missing accounts and Google-only accounts still run one bcrypt compare and
@@ -285,8 +291,8 @@ const rejectWrongOtp = async (table: OtpTable, tokenId: string, attemptNo: numbe
 // Shared by requestPasswordReset and resendPasswordResetOtp
 const issuePasswordResetOtp = async (email: string): Promise<void> => {
   const { rows } = await query<User>(
-    'SELECT * FROM users WHERE email = $1',
-    [email.toLowerCase()]
+    'SELECT * FROM users WHERE lower(email) = $1',
+    [normEmail(email)]
   );
   const user = rows[0];
   // 6-digit OTP via cryptographically secure random (NIST SP 800-63B: minimum 6 digits).
@@ -349,8 +355,8 @@ export const resendPasswordResetOtp = async (email: string): Promise<void> => {
 export const verifyOtp = async (email: string, code: string): Promise<string> => {
   logger.info(`[AUTH] verifyOtp: password reset OTP verification for "${email}"`);
   const { rows: userRows } = await query<User>(
-    'SELECT * FROM users WHERE email = $1',
-    [email.toLowerCase()]
+    'SELECT * FROM users WHERE lower(email) = $1',
+    [normEmail(email)]
   );
   const user = userRows[0];
   if (!user) {
@@ -417,8 +423,8 @@ export const resetPasswordWithOtp = async (
   validatePassword(newPassword);
 
   const { rows: userRows } = await query<User>(
-    'SELECT * FROM users WHERE email = $1',
-    [email.toLowerCase()]
+    'SELECT * FROM users WHERE lower(email) = $1',
+    [normEmail(email)]
   );
   const user = userRows[0];
   if (!user) throw new AppError(OTP_REJECTED, 400);
@@ -561,7 +567,7 @@ export const signupUser = async (
   // Validate before touching the database: cheaper, and it keeps invalid input
   // from reaching the users table at all.
   validateSignupInput(name, email, password);
-  const normalizedEmail = email.trim().toLowerCase();
+  const normalizedEmail = normEmail(email);
 
   // Hash first — the password AND the verification code — whether or not the
   // address is taken, so both paths do the same slow work. Before, only a fresh
@@ -570,7 +576,7 @@ export const signupUser = async (
   const password_hash = await hashPassword(password);
   const code = await newEmailOtp();
 
-  const existing = await query<User>('SELECT * FROM users WHERE email = $1', [normalizedEmail]);
+  const existing = await query<User>('SELECT * FROM users WHERE lower(email) = $1', [normalizedEmail]);
   const existingUser = existing.rows[0];
   if (existingUser) {
     // Answer exactly as for a fresh signup so this form cannot be used to find
@@ -623,7 +629,7 @@ export const signupUser = async (
 
 // ── SIGNUP: RESEND OTP ────────────────────────────────
 export const resendSignupOtp = async (email: string, ticket: string | undefined): Promise<void> => {
-  const { rows } = await query<User>('SELECT * FROM users WHERE email = $1', [email.toLowerCase()]);
+  const { rows } = await query<User>('SELECT * FROM users WHERE lower(email) = $1', [normEmail(email)]);
   const user = rows[0];
   // Unknown and already-verified addresses get the same silent success as a real
   // pending signup, so this endpoint cannot be used to probe accounts. The real
@@ -655,7 +661,7 @@ export const resendSignupOtp = async (email: string, ticket: string | undefined)
 
 // ── LOGIN: RESEND EMAIL VERIFICATION OTP ──────────────
 export const resendLoginOtp = async (email: string, ticket: string | undefined): Promise<number> => {
-  const { rows } = await query<User>('SELECT * FROM users WHERE email = $1', [email.toLowerCase()]);
+  const { rows } = await query<User>('SELECT * FROM users WHERE lower(email) = $1', [normEmail(email)]);
   const user = rows[0];
   if (!user || user.is_verified || !(await ticketMatchesLatestCode(user.id, ticket))) {
     logger.warn(`[AUTH] resendLoginOtp: nothing to resend for "${email}" (${!user ? 'unknown email' : user.is_verified ? 'already verified' : 'ticket does not match'})`);
@@ -706,7 +712,7 @@ export const verifySignupOtp = async (
   ticket: string | undefined
 ): Promise<{ user: Omit<User, 'password_hash'>; accessToken: string; refreshToken: string }> => {
   logger.info(`[AUTH] verifySignupOtp: verifying signup OTP for "${email}"`);
-  const { rows: userRows } = await query<User>('SELECT * FROM users WHERE email = $1', [email.toLowerCase()]);
+  const { rows: userRows } = await query<User>('SELECT * FROM users WHERE lower(email) = $1', [normEmail(email)]);
   const user = userRows[0];
   if (!user) {
     logger.warn(`[AUTH] verifySignupOtp: no user found for "${email}"`);
@@ -792,7 +798,7 @@ export const googleOAuthUser = async (profile: {
   avatarUrl?: string;
 }): Promise<GoogleOAuthResult> => {
   const { googleId, name, avatarUrl } = profile;
-  const email = profile.email.trim().toLowerCase();
+  const email = normEmail(profile.email);
   logger.info(`[AUTH] googleOAuthUser: email="${email}" googleId="${googleId}"`);
 
   let user: User | undefined = (await query<User>('SELECT * FROM users WHERE google_id = $1', [googleId])).rows[0];
@@ -800,7 +806,7 @@ export const googleOAuthUser = async (profile: {
   if (user) {
     logger.info(`[AUTH] googleOAuthUser: existing linked user "${email}" (id=${user.id})`);
   } else {
-    const byEmail = (await query<User>('SELECT * FROM users WHERE email = $1', [email])).rows[0];
+    const byEmail = (await query<User>('SELECT * FROM users WHERE lower(email) = $1', [email])).rows[0];
     if (byEmail && (byEmail.is_verified || byEmail.google_id)) {
       logger.warn(`[AUTH] googleOAuthUser: refused to auto-link Google account to existing ${byEmail.google_id ? 'Google-linked' : 'verified'} account "${email}" (id=${byEmail.id})`);
       return { status: 'ACCOUNT_EXISTS' };
