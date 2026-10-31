@@ -126,7 +126,13 @@ function withoutTableHeaders(text: string): string {
   }
   return out;
 }
+// Negations are shorter than 4 letters ("not", "no", "n't") or easy to lose,
+// and one more or one fewer reverses a claim, so they are counted on their own.
+const NEGATION = /\b(?:not|no|never|none|nor|neither|cannot|without)\b|n't\b/gi;
+const negations = (text: string): number => (text.match(NEGATION) ?? []).length;
+
 export function repairAddsContent(original: string, repaired: string): boolean {
+  if (negations(repaired) > negations(original)) return true;
   const known = new Set(contentWords(original));
   const words = contentWords(withoutTableHeaders(repaired));
   if (words.length === 0) return false;
@@ -136,17 +142,46 @@ export function repairAddsContent(original: string, repaired: string): boolean {
 
 // The other direction: nor may a repair drop part of the answer. Groundedness
 // was checked on the draft, so a repair that turns a verified five-item answer
-// into a two-item list would still be served as verified — and cached. More
-// than this share of the original's distinct content words missing from the
-// repaired text rejects it. Looser than the new-word limit, because a reflow
-// can legitimately drop a lead-in sentence ("There are three types of…").
+// into a two-item list would still be served as verified — and cached.
+//
+// Measured on the original's content words, leaving out the words a reflow
+// legitimately drops: the ones that frame an enumeration or join its items
+// ("There are three types of…", "the following", "then", "finally"), and the
+// student's own question words, which a lead-in repeats. Two limits, both
+// needed: the share of distinct words lost catches a dropped item with words
+// of its own; the share of mentions lost catches dropped items whose words
+// also occur in the items kept ("One-shot gives one example. Few-shot gives a
+// few examples."), which keep every distinct word. A lost negation rejects too.
 export const MAX_REPAIR_LOST_WORD_RATIO = 0.2;
-export function repairDropsContent(original: string, repaired: string): boolean {
-  const kept = new Set(contentWords(repaired));
-  const words = Array.from(new Set(contentWords(original)));
-  if (words.length === 0) return false;
-  const lost = words.filter(w => !kept.has(w)).length;
-  return lost / words.length > MAX_REPAIR_LOST_WORD_RATIO;
+export const MAX_REPAIR_LOST_MENTION_RATIO = 0.25;
+const FRAMING_WORDS = new Set([
+  'there', 'here', 'these', 'those', 'this', 'that', 'they', 'them', 'their', 'with', 'which', 'what', 'when', 'where',
+  'from', 'have', 'into', 'also', 'each', 'such', 'main', 'several', 'various', 'different', 'following', 'below',
+  'above', 'include', 'includes', 'including', 'type', 'types', 'kind', 'kinds', 'ways', 'form', 'forms',
+  'category', 'categories', 'list', 'listed', 'item', 'items', 'step', 'steps', 'three', 'four', 'five', 'seven',
+  'eight', 'nine', 'eleven', 'twelve', 'first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'then', 'next',
+  'finally', 'firstly', 'secondly', 'thirdly', 'lastly',
+]);
+const tally = (words: string[]): Map<string, number> => {
+  const m = new Map<string, number>();
+  for (const w of words) m.set(w, (m.get(w) ?? 0) + 1);
+  return m;
+};
+export function repairDropsContent(original: string, repaired: string, question = ''): boolean {
+  if (negations(original) > negations(repaired)) return true;
+  const asked = new Set(contentWords(question));
+  const before = tally(contentWords(original).filter(w => !FRAMING_WORDS.has(w) && !asked.has(w)));
+  if (before.size === 0) return false;
+  const after = tally(contentWords(repaired));
+  let lostWords = 0, lostMentions = 0, mentions = 0;
+  for (const [w, n] of before) {
+    const kept = after.get(w) ?? 0;
+    if (kept === 0) lostWords++;
+    lostMentions += Math.max(0, n - kept);
+    mentions += n;
+  }
+  return lostWords / before.size > MAX_REPAIR_LOST_WORD_RATIO
+    || lostMentions / mentions > MAX_REPAIR_LOST_MENTION_RATIO;
 }
 
 // Runs after the groundedness/revision stage above has already decided
@@ -212,7 +247,7 @@ async function applyFormatAndPiiGuards(
         if (structurallyValid && repairAddsContent(finalAnswer, repair.repairedAnswer!)) {
           formatRepairRejected = 'NEW_CONTENT';
           logger.warn('[OUTPUT-GUARDRAIL] ⚠️  Format repair added content not in the answer — keeping original grounded answer');
-        } else if (structurallyValid && repairDropsContent(finalAnswer, repair.repairedAnswer!)) {
+        } else if (structurallyValid && repairDropsContent(finalAnswer, repair.repairedAnswer!, effectiveQuery)) {
           formatRepairRejected = 'LOST_CONTENT';
           logger.warn('[OUTPUT-GUARDRAIL] ⚠️  Format repair dropped part of the answer — keeping original grounded answer');
         } else if (structurallyValid) {

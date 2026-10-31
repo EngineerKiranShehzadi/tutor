@@ -1047,6 +1047,48 @@ cases.push({
   },
 });
 
+// ── R4: the lost-content check tells a reflow from a cut ────────────────
+const SEQ = 'The five built-in sequence types in Python are lists, tuples, strings, ranges and bytes.';
+const SEQ_Q = 'List the sequence types in Python';
+const TRAIN = 'To train a model you first collect data, then clean it, then split it into training and test sets, then fit the model, and finally evaluate it on the test set.';
+const TRAIN_Q = 'List the steps to train a model';
+const SHOTS = 'Zero-shot prompting gives no examples. One-shot prompting gives one example. Few-shot prompting gives a few examples. Many-shot prompting gives many examples.';
+const REPAIR_PAIRS: { name: string; original: string; repaired: string; q: string; drops: boolean }[] = [
+  { name: 'sentence → bullets', original: PROSE, repaired: REFLOW, q: 'List the three types of prompting', drops: false },
+  { name: 'lead-in dropped', original: `There are three types of prompting. ${PROSE}`, repaired: REFLOW, q: 'List the three types of prompting', drops: false },
+  { name: '5-item sentence → 5 bare bullets', original: SEQ, repaired: '- Lists\n- Tuples\n- Strings\n- Ranges\n- Bytes', q: SEQ_Q, drops: false },
+  { name: 'steps → numbered list', original: TRAIN, repaired: '1. Collect data\n2. Clean it\n3. Split it into training and test sets\n4. Fit the model\n5. Evaluate it on the test set', q: TRAIN_Q, drops: false },
+  { name: 'table, "prompting" folded into a header', original: PROSE, repaired: '| Prompting | What it does |\n|---|---|\n| Zero-shot | Gives the model no examples |\n| Few-shot | Gives the model a few worked examples |\n| Chain-of-thought | Asks the model to reason step by step before answering |', q: 'Show the types of prompting in a table', drops: false },
+  { name: '3 items → 2', original: PROSE, repaired: '- Zero-shot prompting gives the model no examples.\n- Few-shot prompting gives the model a few worked examples.', q: 'List the three types of prompting', drops: true },
+  { name: '5 items → 3', original: SEQ, repaired: '- Lists\n- Tuples\n- Strings', q: SEQ_Q, drops: true },
+  { name: 'half the items, every distinct word kept', original: SHOTS, repaired: '- Zero-shot prompting gives no examples.\n- One-shot prompting gives one example.', q: 'List the three types of prompting', drops: true },
+  { name: 'one of 5 steps dropped', original: TRAIN, repaired: '1. Collect data\n2. Clean it\n3. Fit the model\n4. Evaluate it on the test set', q: TRAIN_Q, drops: true },
+  { name: 'a qualifying clause dropped', original: 'Supervised learning needs labelled data; its main algorithms are linear regression, decision trees and neural networks.', repaired: '- Linear regression\n- Decision trees\n- Neural networks', q: 'List the supervised learning algorithms', drops: true },
+  { name: 'a negation dropped', original: 'Zero-shot prompting does not give the model examples. Few-shot prompting gives a few worked examples.', repaired: '- Zero-shot prompting does give the model examples.\n- Few-shot prompting gives a few worked examples.', q: 'List the types of prompting', drops: true },
+];
+
+cases.push({
+  label: `R4. Lost-content check on ${REPAIR_PAIRS.length} repairs: reflows that drop only framing words or a lead-in are accepted, cut items / a dropped clause / a lost "not" are LOST_CONTENT`,
+  run: async () => {
+    const wrong = REPAIR_PAIRS.filter(p => repairDropsContent(p.original, p.repaired, p.q) !== p.drops).map(p => p.name);
+    // End to end: the bare-bullet repair that was rejected at 0.5 is now served.
+    const { value: bullets } = await formatGuardWith(SEQ, SEQ_Q, REPAIR_PAIRS[2].repaired);
+    const { value: cut } = await formatGuardWith(SHOTS, 'List the three types of prompting', REPAIR_PAIRS[7].repaired);
+    const pass = wrong.length === 0 && bullets.formatRepairSucceeded === true && bullets.finalAnswer === REPAIR_PAIRS[2].repaired
+      && cut.formatRepairRejected === 'LOST_CONTENT' && cut.finalAnswer === SHOTS;
+    return { pass, detail: `misjudged=[${wrong.join(' | ')}], bullets served=${bullets.formatRepairSucceeded}, half-cut → ${cut.formatRepairRejected}` };
+  },
+});
+
+cases.push({
+  label: 'R4b. A repair that adds a negation ("gives" → "does not give") is NEW_CONTENT even though "not" is too short to count as a word',
+  run: async () => {
+    const flipped = '- Zero-shot prompting does not give the model examples.\n- Few-shot prompting gives the model a few worked examples.\n- Chain-of-thought prompting asks the model to reason step by step before answering.';
+    const { value: r } = await formatGuardWith(PROSE, 'List the three types of prompting', flipped);
+    return { pass: r.formatRepairRejected === 'NEW_CONTENT' && r.finalAnswer === PROSE, detail: `rejected=${r.formatRepairRejected}` };
+  },
+});
+
 // ── ST5: the streamed draft ends up exactly the redacted answer ─────────
 cases.push({
   label: 'ST5. Streaming redaction: ["4111 1111 1111 111", "1 end"] shows "[CREDIT_CARD]end" (was "[CREDIT_CARD] nd"); 5,000 random splits: draft = final, always a prefix of it, no raw value sent, no reset needed',
