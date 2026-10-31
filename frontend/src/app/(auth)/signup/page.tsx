@@ -15,6 +15,7 @@ import { useSignup } from '@/hooks/useSignup';
 import { useResendSignupOtp } from '@/hooks/useResendSignupOtp';
 import { useVerifySignupOtp } from '@/hooks/useVerifySignupOtp';
 import { useAuth } from '@/hooks/useAuth';
+import { setAccessToken } from '@/lib/auth-token';
 
 type Step = 'form' | 'otp';
 
@@ -42,7 +43,7 @@ const extractMessage = (err: unknown): string => {
 
 export default function SignupPage() {
   const router = useRouter();
-  const { user, isLoading } = useAuth();
+  const { user, isLoading, setUser } = useAuth();
   const [step, setStep] = useState<Step>('form');
   const [pendingEmail, setPendingEmail] = useState('');
   const [signupMessage, setSignupMessage] = useState('');
@@ -121,8 +122,12 @@ export default function SignupPage() {
     const code = digits.join('');
     if (code.length !== 6) { setOtpError('Enter the complete 6-digit code'); return; }
     try {
-      await verifyOtp(pendingEmail, code);
-      router.push('/login');
+      // Verifying signs the user in (the server has set the refresh cookie);
+      // finish exactly as a successful login does.
+      const result = await verifyOtp(pendingEmail, code);
+      setAccessToken(result.accessToken);
+      setUser(result.user);
+      router.replace(result.user.role === 'ADMIN' ? '/admin/dashboard' : '/courses');
     } catch (err) {
       setOtpError(extractMessage(err));
       setDigits(['', '', '', '', '', '']);
