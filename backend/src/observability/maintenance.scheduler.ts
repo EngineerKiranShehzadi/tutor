@@ -21,6 +21,10 @@ let alertRunning = false;
 let retentionRunning = false;
 
 export async function runRetention(): Promise<number> {
+  // Defensive floor: a cutoff of now() would delete the whole log. env.ts
+  // already refuses 0 or a non-number at boot (positiveInt); this guards any
+  // other way the value could reach here.
+  const days = Math.max(1, env.OBSERVABILITY.RETENTION_DAYS);
   const client = await pool.connect();
   try {
     const got = await client.query('SELECT pg_try_advisory_lock($1) AS ok', [RETENTION_LOCK_KEY]);
@@ -33,12 +37,12 @@ export async function runRetention(): Promise<number> {
             WHERE id IN (SELECT id FROM rag_request_log
                           WHERE created_at < now() - make_interval(days => $1)
                           LIMIT $2)`,
-          [env.OBSERVABILITY.RETENTION_DAYS, DELETE_BATCH]
+          [days, DELETE_BATCH]
         );
         total += res.rowCount ?? 0;
         if ((res.rowCount ?? 0) < DELETE_BATCH) break;
       }
-      if (total > 0) logger.info(`[RETENTION] deleted ${total} rag_request_log rows older than ${env.OBSERVABILITY.RETENTION_DAYS} days`);
+      if (total > 0) logger.info(`[RETENTION] deleted ${total} rag_request_log rows older than ${days} days`);
       return total;
     } finally {
       await client.query('SELECT pg_advisory_unlock($1)', [RETENTION_LOCK_KEY]);

@@ -50,7 +50,7 @@ import { computeEnrichedOverviewMetrics, overviewCache } from '../services/obser
 import { rateLimitStore } from '../graphql/resolvers/auth.resolver';
 import { ExpiringMap } from '../utils/expiring-map';
 import { globalLimiter, userLimiter } from '../middleware/rateLimiter';
-import { startMaintenanceScheduler, stopMaintenanceScheduler, maintenanceSchedulerState } from '../observability/maintenance.scheduler';
+import { startMaintenanceScheduler, stopMaintenanceScheduler, maintenanceSchedulerState, runRetention } from '../observability/maintenance.scheduler';
 import { finishDatasetVersion } from '../services/dataset-version.service';
 
 const results: { name: string; pass: boolean; detail: string }[] = [];
@@ -873,6 +873,33 @@ const run = async () => {
       srv.close();
       s3.isS3Configured = realS3.cfg; s3.uploadRawDataset = realS3.up;
     }
+  }
+
+  // ── AD8: RETENTION_DAYS=0 can never wipe the request log ─────────────
+  {
+    const tsNode = join(__dirname, '..', '..', 'node_modules', '.bin', 'ts-node');
+    const boot = (v: string) => spawnSync(tsNode, ['--transpile-only', '-e', `require('./src/config/env'); console.log('ENV_OK')`],
+      { cwd: join(__dirname, '..', '..'), env: { ...process.env, OBSERVABILITY_RETENTION_DAYS: v }, encoding: 'utf8' });
+    const zero = boot('0');
+    const word = boot('ninety');
+    // Even if 0 reached runRetention some other way, the floor keeps today's rows.
+    const obs = env.OBSERVABILITY as { RETENTION_DAYS: number };
+    const saved = obs.RETENTION_DAYS;
+    const traceId = Date.now().toString(16).padStart(32, 'a');
+    await query(`INSERT INTO rag_request_log (trace_id, status, response_status, total_ms) VALUES ($1, 'SUCCESS', 'ANSWERED', 5)`, [traceId]);
+    let kept = -1;
+    try {
+      obs.RETENTION_DAYS = 0;
+      await runRetention();
+      kept = Number((await query<{ n: string }>(`SELECT COUNT(*) AS n FROM rag_request_log WHERE created_at > NOW() - INTERVAL '1 hour'`)).rows[0].n);
+    } finally {
+      obs.RETENTION_DAYS = saved;
+      await query('DELETE FROM rag_request_log WHERE trace_id = $1', [traceId]);
+    }
+    check('AD8-1. OBSERVABILITY_RETENTION_DAYS=0 (or a non-number) stops boot; with 0 forced in, retention still keeps recent rows (floor of 1 day)',
+      zero.status !== 0 && /OBSERVABILITY_RETENTION_DAYS must be a positive integer \(got "0"\)/.test(zero.stderr ?? '')
+        && word.status !== 0 && /got "ninety"/.test(word.stderr ?? '') && kept > 0,
+      `zero=${zero.status} word=${word.status} recentRowsKept=${kept}`);
   }
 
 };
