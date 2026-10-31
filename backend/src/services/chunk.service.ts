@@ -161,6 +161,8 @@ export function parseExcel(buffer: Buffer): RawRow[] {
   const lim = env.DATASET;
   assertSafeXlsx(buffer, { maxUncompressedBytes: lim.MAX_UNCOMPRESSED_BYTES, maxEntries: lim.MAX_ZIP_ENTRIES });
 
+  // Sheet names first (a few ms), so only the dataset sheet is parsed below:
+  // reading every sheet of an audit workbook costs about 4× as much.
   let names: string[];
   try {
     names = XLSX.read(buffer, { type: 'buffer', bookSheets: true }).SheetNames;

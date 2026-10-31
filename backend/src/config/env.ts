@@ -147,11 +147,15 @@ export const env = {
     // long without progress (0 = wait forever). Admins can also cancel it.
     // Upload limits, checked before the spreadsheet is parsed (A4). Real lecture
     // datasets: ≤ 545 rows, 10 columns, < 1 MB uncompressed, ≤ 17 zip entries.
+    // Parsing runs on the request thread that also serves student chat, and
+    // every dry run pays it, so the defaults sit a few times above real data,
+    // not 100×: at 5,000 rows × 100 columns one parse blocked ~2.8 s; at
+    // 1,000 × 20 it is ~0.1 s. Raise them per deployment if a lecture needs it.
     // Compressed .xlsx upload size (multer); bigger uploads get HTTP 413.
     MAX_UPLOAD_BYTES:       positiveInt('DATASET_MAX_UPLOAD_MB', 10) * 1024 * 1024,
-    MAX_ROWS:               positiveInt('DATASET_MAX_ROWS', 5000),
-    MAX_COLUMNS:            positiveInt('DATASET_MAX_COLUMNS', 100),
-    MAX_UNCOMPRESSED_BYTES: positiveInt('DATASET_MAX_UNCOMPRESSED_MB', 50) * 1024 * 1024,
+    MAX_ROWS:               positiveInt('DATASET_MAX_ROWS', 1000),
+    MAX_COLUMNS:            positiveInt('DATASET_MAX_COLUMNS', 20),
+    MAX_UNCOMPRESSED_BYTES: positiveInt('DATASET_MAX_UNCOMPRESSED_MB', 5) * 1024 * 1024,
     MAX_ZIP_ENTRIES:        positiveInt('DATASET_MAX_ZIP_ENTRIES', 500),
     OUTAGE_MAX_MS:          nonNegativeInt('DATASET_OUTAGE_MAX_MINUTES', 360) * 60_000,
   },

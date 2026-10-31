@@ -1033,6 +1033,24 @@ const run = async () => {
       `cancel=${outcome(cancel.result)} (other side: ${cancel.lockError ?? 'ok'}), activate=${outcome(activate.result)} (other side: ${activate.lockError ?? 'ok'}), status=${row.status}`);
   }
 
+  // ── AD-N2: upload caps sized to real data, so a parse can't stall chat for seconds ──
+  {
+    const lim = env.DATASET as { MAX_ROWS: number; MAX_COLUMNS: number; MAX_UNCOMPRESSED_BYTES: number };
+    const unset = ['DATASET_MAX_ROWS', 'DATASET_MAX_COLUMNS', 'DATASET_MAX_UNCOMPRESSED_MB'].every(k => process.env[k] === undefined);
+    const header = ['question', 'answer', 'topic', 'llm_name', 'start_time', ...Array.from({ length: lim.MAX_COLUMNS - 5 }, (_, i) => `extra_${i}`)];
+    const rows = Array.from({ length: lim.MAX_ROWS }, (_, r) => header.map(h => `${h} for row ${r}: a typical sentence of lecture text`));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([header, ...rows]), 'Final_Dataset');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx', compression: true }) as Buffer;
+    const t0 = Date.now();
+    const parsed = parseExcel(buf);
+    const ms = Date.now() - t0;
+    check('AD-N2-1. Default caps are 1,000 rows / 20 columns / 5 MB uncompressed (were 5,000 / 100 / 50); a workbook at those limits parses in well under 1 s',
+      (!unset || (lim.MAX_ROWS === 1000 && lim.MAX_COLUMNS === 20 && lim.MAX_UNCOMPRESSED_BYTES === 5 * 1024 * 1024))
+        && parsed.length === lim.MAX_ROWS && ms < 1000,
+      `envUnset=${unset} rows=${lim.MAX_ROWS} cols=${lim.MAX_COLUMNS} uncompressedMB=${lim.MAX_UNCOMPRESSED_BYTES / 1048576} file=${Math.round(buf.length / 1024)} KB parse=${ms} ms`);
+  }
+
   // ── X1/X2: trace-list query params reach the service as their real types ──
   {
     // Only the service the route calls is stubbed; the route, its validators and auth are real.
