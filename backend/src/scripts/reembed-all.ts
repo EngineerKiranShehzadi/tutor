@@ -53,7 +53,11 @@ async function main(): Promise<void> {
   }
   const toEmbed = results.reduce((s, r) => s + r.chunksToEmbed, 0);
   const bad = results.filter(r => r.outcome === 'FAILED' || r.outcome === 'PAUSED' || r.outcome === 'SKIPPED_IN_FLIGHT');
-  console.log(`\n${results.length} lecture(s), ${toEmbed} piece(s) ${apply ? 'embedded' : 'to embed'}${bad.length ? `, ${bad.length} not done — run again later` : ''}.`);
+  console.log(`\n${results.length} lecture(s), ${toEmbed} piece(s) ${apply ? 'embedded' : 'to embed'}.`);
+  if (bad.length > 0) {
+    console.log(`${bad.length} not done. A PAUSED or in-flight build is kept: a running backend finishes it within a minute,`
+      + ' or `npm run seed:retry -- <lectureId>` finishes it now. A FAILED one can simply be run again.');
+  }
   process.exitCode = bad.length > 0 ? 1 : 0;
 }
 

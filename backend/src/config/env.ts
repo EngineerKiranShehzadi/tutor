@@ -442,8 +442,11 @@ export const env = {
     EMBEDDING_MODEL:      nonBlank('EMBEDDING_MODEL', ''),
     // Must equal the database column (vector(1024)); anything else is rejected at startup.
     EMBEDDING_DIMENSIONS: positiveInt('EMBEDDING_DIMENSIONS', 1024),
+    // A Voyage model name (Voyage's current "highest accuracy" reranker); the
+    // local-http reranker ignores it.
     RERANK_MODEL:         nonBlank('RERANK_MODEL', 'rerank-3'),
     OPENAI_API_KEY:       nonBlank('OPENAI_API_KEY', ''),
+    // One key for both Voyage stages (embedding and rerank).
     VOYAGE_API_KEY:       nonBlank('VOYAGE_API_KEY', ''),
     // Minimum cosine similarity for a chunk to survive vector search.
     VECTOR_SIMILARITY_THRESHOLD: finiteFloat('VECTOR_SIMILARITY_THRESHOLD', 0.55),

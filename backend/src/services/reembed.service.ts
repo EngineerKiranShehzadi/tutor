@@ -16,9 +16,10 @@ export type ReembedOutcome =
   | 'UP_TO_DATE'         // every vector already comes from the current model
   | 'PLANNED'            // dry run: would re-embed chunksToEmbed pieces
   | 'ACTIVATED'          // rebuilt and live
-  | 'PAUSED'             // the provider is down or rate-limiting; the build resumes on its own (server.ts)
+  | 'PAUSED'             // the provider is down or rate-limiting; the build is kept, and a running
+                         // backend's resume loop or `seed:retry -- <lectureId>` finishes it
   | 'FAILED'             // the build did not activate (see error); the old version is still live
-  | 'SKIPPED_IN_FLIGHT'; // an update is already running for this lecture — resume finishes it
+  | 'SKIPPED_IN_FLIGHT'; // an update is already in flight for this lecture — finished the same way
 
 export interface ReembedResult {
   lectureId: number;

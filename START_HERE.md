@@ -56,7 +56,7 @@ The backend starts without them. Leave `EMBEDDING_PROVIDER=local-http` and `RERA
 
 `/api/v1/health/ready` will show the embedding server and reranker as down. That is expected on your machine.
 
-**Never change `EMBEDDING_PROVIDER`** to `openai` or any other value. The vectors in Neon were made with the local BGE model. Another provider makes every lecture read as "not ready".
+**Never change `EMBEDDING_PROVIDER`** to `openai` or any other value. The vectors in Neon were made with the local BGE model. Another provider makes every lecture read as "not ready". The move to Voyage is done once, by the project owner, following `docs/VOYAGE_SWITCH.md`.
 
 **Never upload a dataset from your machine.** Without the embedding server the build can't finish. It waits up to 6 hours and then fails.
 
