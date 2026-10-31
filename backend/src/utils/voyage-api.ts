@@ -1,7 +1,8 @@
 // What the two Voyage adapters (embedding/providers/voyage-embedding.provider.ts,
-// rerank/providers/voyage-rerank.provider.ts) share. Both read the one
-// VOYAGE_API_KEY, so a rejected or rate-limited key takes out embedding AND
-// reranking — every question needs both.
+// rerank/providers/voyage-rerank.provider.ts) share. Production uses Voyage for
+// reranking only (embedding is OpenAI); both adapters read VOYAGE_API_KEY, so
+// if EMBEDDING_PROVIDER=voyage too, one rejected or rate-limited key takes out
+// both stages.
 import { errorDetail } from './http-retry';
 
 export const VOYAGE_API_BASE = 'https://api.voyageai.com/v1';

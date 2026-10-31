@@ -33,7 +33,7 @@ Never commit `.env`. It is already in `.gitignore`, so just don't force-add it.
 
 ## 3. Do NOT run `npm run db:setup`
 
-The Neon database is already migrated (up to migration 017, on 31 Oct), and a branch made from `main` gets that schema too. You have nothing to set up.
+The Neon database is already migrated (up to migration 017, on 31 Oct), and a branch made from `main` gets that schema too. You have nothing to set up. Migration 018 (two monitor columns) reaches `main` with the next deploy. Until then the Monitor page's numbers and attention list fail to load on your branch. Everything else works.
 
 ## 4. Start the app
 
@@ -45,18 +45,25 @@ If the backend stops at boot with a message like `XYZ must be a positive integer
 
 ## 5. You don't run the embedding server or the reranker
 
-The backend starts without them. Leave `EMBEDDING_PROVIDER=local-http` and `RERANK_PROVIDER=local-http` exactly as they are in `.env.example`.
+The backend starts without them. `.env.example` now lists the production providers (OpenAI and Voyage), which need keys you don't have. After copying it, change these two lines in your `.env`:
+
+```bash
+EMBEDDING_PROVIDER=local-http
+RERANK_PROVIDER=local-http
+```
+
+The LLM tasks are set to `openai` too. Without `OPENAI_API_KEY` the backend still starts and only warns; greetings and summaries then fail. If you have a Gemini key, set the `*_LLM_PROVIDER` lines to `gemini`, the `*_MODEL` lines to `gemini-2.5-flash`, and add `GEMINI_API_KEY`.
 
 | Works normally | Will not work (needs the embedding server) |
 |---|---|
 | Login, signup, profile | Normal chat questions: you get an error message, which is expected |
 | Admin pages, analytics, lectures, videos | Dataset upload or rebuild: don't do it (see below) |
-| Greetings and "Summarize this lecture" (needs `GEMINI_API_KEY`) | Anything that creates new chunks and embeds them |
+| Greetings and "Summarize this lecture" (need an LLM key: `OPENAI_API_KEY`, or a Gemini key as above) | Anything that creates new chunks and embeds them |
 | Your own features that read `lecture_qna_chunks` directly: quizzes, flashcards, mastery, the unanswered-question queue | |
 
 `/api/v1/health/ready` will show the embedding server and reranker as down. That is expected on your machine.
 
-**Never change `EMBEDDING_PROVIDER`** to `openai` or any other value. The vectors in Neon were made with the local BGE model. Another provider makes every lecture read as "not ready". The move to Voyage is done once, by the project owner, following `docs/VOYAGE_SWITCH.md`.
+**Keep `EMBEDDING_PROVIDER=local-http`.** The vectors in Neon were made with the local BGE model, and another provider makes every lecture read as "not ready". The move to OpenAI embeddings is done once, by the project owner, following `docs/OPENAI_SWITCH.md`. This file will say when that has happened.
 
 **Never upload a dataset from your machine.** Without the embedding server the build can't finish. It waits up to 6 hours and then fails.
 

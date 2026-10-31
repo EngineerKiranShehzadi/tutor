@@ -472,7 +472,8 @@ export const env = {
     // local-http reranker ignores it.
     RERANK_MODEL:         nonBlank('RERANK_MODEL', 'rerank-3'),
     OPENAI_API_KEY:       nonBlank('OPENAI_API_KEY', ''),
-    // One key for both Voyage stages (embedding and rerank).
+    // The Voyage key: rerank in production; embedding too only if
+    // EMBEDDING_PROVIDER=voyage (registered, unused).
     VOYAGE_API_KEY:       nonBlank('VOYAGE_API_KEY', ''),
     // Minimum cosine similarity for a chunk to survive vector search.
     VECTOR_SIMILARITY_THRESHOLD: finiteFloat('VECTOR_SIMILARITY_THRESHOLD', 0.55),
