@@ -1142,7 +1142,7 @@ const run = async () => {
     }
   }
 
-  // ── AD-N6: Content Gaps reads each lecture's vocabulary fairly ──
+  // ── AD-N6/AD-N7: Content Gaps vocabulary per lecture; lectureChunks counts Q&A pairs ──
   {
     const stu = (await query<{ id: string }>(`INSERT INTO users (name, email, password_hash, is_verified, role) VALUES ('ADN6', $1, 'x', TRUE, 'STUDENT') RETURNING id`, [`adn6-${Date.now()}@example.test`])).rows[0].id;
     // pieces[i] = how many pieces Q&A i is stored as.
@@ -1169,10 +1169,14 @@ const run = async () => {
     try {
       const gaps = await getContentGaps({ maxChunksPerLecture: 5 });
       const g = (id: number) => gaps.find(x => x.lectureId === id);
+      const page = await getLectureChunks(small, { limit: 50 });
       check('AD-N6-1. Content Gaps: each lecture gets its own vocabulary share (chunksSampled only where the cap cut it), and a READY lecture with no published dataset is left out instead of scored 0%',
         g(big)?.chunksSampled === true && g(small)?.chunksSampled === false && g(small)?.coverageScore === 100 && g(small)?.chunkCount === 4
           && g(legacy) === undefined,
         `big=${JSON.stringify({ s: g(big)?.chunksSampled, cov: g(big)?.coverageScore })} small=${JSON.stringify({ s: g(small)?.chunksSampled, cov: g(small)?.coverageScore, chunks: g(small)?.chunkCount })} legacyListed=${g(legacy) !== undefined}`);
+      check('AD-N7-1. lectureChunks lists and counts each Q&A pair once (a 3-piece answer is one row), with its full answer',
+        page.total === 2 && page.items.length === 2 && page.items.every(i => i.answer === 'full answer'),
+        `total=${page.total} items=${page.items.length}`);
     } finally {
       await query('DELETE FROM student_questions WHERE lecture_id = ANY($1::int[])', [[big, small, legacy]]);
     }

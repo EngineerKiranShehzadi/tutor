@@ -135,9 +135,12 @@ export const getLectureChunks = async (
     params.push(likePattern(search));
     searchSql = `AND (question ILIKE $2 OR answer ILIKE $2 OR topic ILIKE $2)`;
   }
+  // One row per Q&A pair (the page labels them so): a long answer is stored
+  // as several pieces, and every piece carries the full question and answer,
+  // so only the first is listed and counted — as exportActiveDataset does.
   const where = `WHERE lecture_id = $1
        AND id IN (SELECT chunk_id FROM dataset_version_chunks
-                  WHERE version_id = (SELECT active_version_id FROM lectures WHERE id = $1))
+                  WHERE version_id = (SELECT active_version_id FROM lectures WHERE id = $1) AND chunk_index = 0)
        ${searchSql}`;
   const [{ rows }, { rows: cnt }] = await Promise.all([
     query<{
