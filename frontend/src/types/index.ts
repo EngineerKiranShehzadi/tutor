@@ -20,7 +20,8 @@ export interface AuthState {
 }
 
 export type LoginResult =
-  | { status: 'AUTHENTICATED'; user: User; accessToken: string; refreshToken: string }
+  // The refresh token is only ever an httpOnly cookie, never in the body.
+  | { status: 'AUTHENTICATED'; user: User; accessToken: string }
   | { status: 'EMAIL_VERIFICATION_REQUIRED'; email: string; verificationExpiresInSeconds: number };
 
 // ── API ───────────────────────────────────────────────

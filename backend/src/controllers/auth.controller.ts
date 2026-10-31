@@ -80,9 +80,12 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
   const result = await AuthService.loginUser(email, password);
 
   if (result.status === 'AUTHENTICATED') {
-    res.cookie(REFRESH_COOKIE, result.refreshToken, REFRESH_COOKIE_OPTS);
+    // The refresh token goes only in the httpOnly cookie, never in the body —
+    // no script on the page (or body logger) may ever see it.
+    const { refreshToken: refresh, ...body } = result;
+    res.cookie(REFRESH_COOKIE, refresh, REFRESH_COOKIE_OPTS);
     logger.info(`[AUTH] ✅ Login success: "${email}" role=${result.user.role}`);
-    sendSuccess(res, 'Logged in successfully', result);
+    sendSuccess(res, 'Logged in successfully', body);
   } else {
     // The ticket goes in an httpOnly cookie, never in the body.
     const { verificationTicket, ...body } = result;

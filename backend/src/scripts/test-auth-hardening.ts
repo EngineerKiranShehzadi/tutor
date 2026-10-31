@@ -616,6 +616,25 @@ test('AU1 GraphQL: verifyOtp sets reset_ticket (httpOnly, not in the body); rese
   };
 });
 
+// ── AU2: the refresh token never appears in a response body ────────────
+test('AU2 POST /login: the body has no refreshToken (anywhere), the httpOnly refreshToken cookie is set', async (base) => {
+  const email = addr('rest-login');
+  await insertUser(email);
+  const res = await fetch(`${base}/api/v1/auth/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password: PW }),
+  });
+  const text = await res.text();
+  const body = JSON.parse(text) as { data?: Record<string, unknown> };
+  const raw = (res.headers.getSetCookie?.() ?? []).find(c => c.startsWith('refreshToken=')) ?? '';
+  const cookie = cookieValue(res, 'refreshToken') ?? '';
+  return {
+    pass: res.status === 200 && body.data?.status === 'AUTHENTICATED' && !!body.data?.accessToken
+      && !('refreshToken' in (body.data ?? {})) && !/refreshToken/.test(text) && cookie.length > 20 && !text.includes(cookie)
+      && /HttpOnly/i.test(raw),
+    detail: `keys=${Object.keys(body.data ?? {}).join(',')} cookie=${raw.slice(0, 30)}…`,
+  };
+});
+
 // ── runner ───────────────────────────────────────────────────────────────
 async function cleanup(): Promise<void> {
   await query(`DELETE FROM users WHERE email LIKE $1`, [`%${DOMAIN}`]);
