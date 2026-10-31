@@ -7,6 +7,35 @@ Newest entry at the top.
 
 ---
 
+## 2026-10-31 — Compound question with one part down: answer the rest, say that part couldn't be retrieved
+
+**Changed by:** Kiran
+**Files:** `backend/src/services/chat.service.ts`,
+`backend/src/services/llm-gemini.service.ts`,
+`backend/src/rag/guardrails/output/output-guardrail.service.ts`,
+`backend/src/rag/query-processing/retrieval/decomposed-retrieval.service.ts`,
+tests in `backend/src/scripts/`
+
+Follow-up to D3. When some parts of a compound question found evidence but one
+part's lookup failed (embed/search/rerank outage), that part used to be passed on as
+"not covered", so the answer said it was not in the lecture. Now it is kept on a
+separate "unavailable" list:
+
+- The generator gets its own note for it: don't answer it, don't call it missing
+  from the lecture; say it could not be retrieved right now and to ask again.
+  The other parts are answered as before.
+- The verifier and the revision step treat it as a part that must not be answered.
+- If the draft is rejected, the fallback says "I also couldn't retrieve part of
+  this right now (…) — please ask again in a moment" instead of "not found".
+- Such an answer is never written to answer memory, since it is transient.
+- Traces get `query.decomposition.unavailable_subqueries` and
+  `unavailableAspectCount`.
+
+The answer prompt is unchanged when nothing failed, so `ANSWER_PROMPT_VERSION`
+stays `v2`.
+
+---
+
 ## 2026-10-31 — Student RAG fixes, batch 3: streamed PII, compound-question budget, PII and retrieval (D4, D6, D9)
 
 **Changed by:** Kiran

@@ -395,7 +395,7 @@ cases.push({
     const { deps, spies } = makeDeps({ extra: { getAgentProfile: async id => { seam.push(`lookup:${id}`); return { status: 'FOUND', profile: novaObject }; } } });
     await inWorld(w, () => ask(4, deps));
     const a = spies.generate[0].args;
-    const pass = a[7] === novaObject && a[2] === 'Introductory Lecture' && a[0] === QUESTION && seam.join() === 'lookup:4' && a.length === 8;
+    const pass = a[7] === novaObject && a[2] === 'Introductory Lecture' && a[0] === QUESTION && seam.join() === 'lookup:4' && a.length === 9 && JSON.stringify(a[8]) === '[]'; // 9th = unavailableAspects (none here)
     return { pass, detail: `seam=${seam.join()}, argCount=${a.length}` };
   },
 });
@@ -644,6 +644,25 @@ cases.push({
       // memory lookup + memory write embed the masked text; only the search embeds RAW
       && embedded.filter(t => t === RAW).length === 1 && embedded.filter(t => t === MASKED).length === 2;
     return { pass, detail: `embedded=[${embedded.map(t => (t === RAW ? 'RAW' : t === MASKED ? 'MASKED' : '?')).join(',')}], rerank=${reranked[0] === RAW ? 'RAW' : 'other'}, stored=${stored.map(q => (q === MASKED ? 'M' : 'X')).join('')}` };
+  },
+});
+
+cases.push({
+  label: 'P4. One part\'s rerank fails, the other is answered: failed part goes to the generator as unavailable (not uncovered), answer saved, not cached',
+  run: async () => {
+    const w = newWorld();
+    const { deps, spies } = makeDeps({ extra: {
+      decomposeQuery: async q => decomposed(q),
+      rerankChunks: async (q, c) => { if (q === 'part two?') throw new Error('rerank down'); return c.map(x => ({ ...x, rerankScore: 0.9 })); },
+      runAdaptiveRetrieval: async p => ({ triggered: false, iterations: [], stopReason: 'NO_MISSING_ASPECT', selectedChunks: [],
+        coveredSubqueryIndexes: p.coveredSubqueryIndexes, uncoveredSubqueryIndexes: p.uncoveredSubqueryIndexes }) as never,
+    } });
+    const r = await inWorld(w, () => ask(4, deps));
+    const g = spies.generate[0]?.args;
+    const pass = r.answer === 'VERIFIED: AGENT DRAFT ANSWER'
+      && JSON.stringify(g?.[4]) === '[]' && JSON.stringify(g?.[8]) === '["part two?"]'
+      && w.history.length === 1 && !kinds(w).includes('memory-upsert');
+    return { pass, detail: `uncovered=${JSON.stringify(g?.[4])}, unavailable=${JSON.stringify(g?.[8])}, cached=${kinds(w).includes('memory-upsert')}` };
   },
 });
 

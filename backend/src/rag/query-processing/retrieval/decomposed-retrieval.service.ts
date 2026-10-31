@@ -194,6 +194,23 @@ export function mergeAndSelectWithCoverage(
   return { selectedChunks, mergedRankedAll };
 }
 
+// Splits the uncovered subqueries by WHY they are uncovered:
+//   notFound    — the lookup ran and found nothing above the floors
+//                 ("not in this lecture" is true);
+//   unavailable — the lookup itself failed (RETRIEVAL_ERROR), so nothing is
+//                 known; the student is told it couldn't be retrieved now.
+export function splitUncoveredAspects(
+  subqueries: string[],
+  uncoveredIndexes: number[],
+  perSubquery: SubqueryRetrievalOutcome[]
+): { notFound: string[]; unavailable: string[] } {
+  const failed = new Set(perSubquery.filter(r => r.failureReason === 'RETRIEVAL_ERROR').map(r => r.index));
+  const notFound: string[] = [];
+  const unavailable: string[] = [];
+  for (const i of uncoveredIndexes) (failed.has(i) ? unavailable : notFound).push(subqueries[i]);
+  return { notFound, unavailable };
+}
+
 // The context budget a single (DIRECT) question gets — chat.service.ts's
 // dedupeAndSelect(rankedAll, 5) and dedupeAndSelect's own default.
 export const SINGLE_QUERY_CONTEXT_CHUNKS = 5;

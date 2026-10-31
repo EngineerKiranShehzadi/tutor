@@ -21,7 +21,7 @@ import { createLocalHttpRerankProvider } from '../rerank/providers/local-http-re
 import { EmbeddingUnavailableError } from '../embedding/embedding-errors';
 import { createPiiSafeStream, settledLength } from '../rag/guardrails/output/pii/streaming-pii-redactor';
 import { scanForPii } from '../rag/guardrails/shared/pii/pii-detector.service';
-import { decomposedContextBudget } from '../rag/query-processing/retrieval/decomposed-retrieval.service';
+import { decomposedContextBudget, splitUncoveredAspects } from '../rag/query-processing/retrieval/decomposed-retrieval.service';
 import { runInputGuardrails } from '../rag/guardrails/input/input-guardrail.service';
 
 interface CaseResult { pass: boolean; detail?: string }
@@ -292,6 +292,52 @@ cases.push({
     const pass = pii.sanitizedInput === 'What is [IP_ADDRESS] used for?' && pii.retrievalInput === 'What is 192.168.10.20 used for?'
       && clean.sanitizedInput === clean.retrievalInput;
     return { pass, detail: `action=${pii.action}, sanitized="${pii.sanitizedInput}"` };
+  },
+});
+
+// ── Partial outage: a failed part is "unavailable", not "not in the lecture" ──
+cases.push({
+  label: 'P1. splitUncoveredAspects puts RETRIEVAL_ERROR parts in unavailable, real misses in notFound',
+  run: async () => {
+    const per = [outcome('ALL_BELOW_RERANK_FLOOR'), outcome('RETRIEVAL_ERROR', 'RERANK'), outcome(undefined)]
+      .map((o, i) => ({ ...o, index: i }));
+    const r = splitUncoveredAspects(['A?', 'B?', 'C?'], [0, 1], per);
+    return { pass: r.notFound.join() === 'A?' && r.unavailable.join() === 'B?', detail: JSON.stringify(r) };
+  },
+});
+
+cases.push({
+  label: 'P2. Generator prompt: unavailable part gets the "could not be retrieved right now" note, not the "not in this lecture" note; kept on retry',
+  run: async () => {
+    const { requests } = await withFakeLlm(env.LLM.RAG_ANSWER.PROVIDER, [new Error('503 service unavailable'), 'ok'], () =>
+      generateAnswer('Q?', CHUNKS, 'Lecture', [], ['MISSING-PART'], 1, undefined, null, ['BROKEN-PART']));
+    const p = requests[0].userPrompt;
+    const notFoundNote = p.slice(p.indexOf('does not cover'), p.indexOf('could not be looked up'));
+    const pass = requests.length === 2 && requests[1].userPrompt === p
+      && /could not be looked up right now[\s\S]*- BROKEN-PART/.test(p)
+      && notFoundNote.includes('MISSING-PART') && !notFoundNote.includes('BROKEN-PART');
+    return { pass, detail: `attempts=${requests.length}` };
+  },
+});
+
+cases.push({
+  label: 'P3. Verifier is told not to expect the unavailable part; the fallback says it could not be retrieved now (never "not found" for it)',
+  run: async () => {
+    const av = env.ANSWER_VERIFICATION as { ENABLED: boolean; FAIL_OPEN_ON_VERIFIER_ERROR: boolean };
+    const saved = { enabled: av.ENABLED, failOpen: av.FAIL_OPEN_ON_VERIFIER_ERROR };
+    av.ENABLED = true; av.FAIL_OPEN_ON_VERIFIER_ERROR = false;
+    try {
+      const { value: r, requests } = await withFakeLlm(env.LLM.ANSWER_VERIFICATION.PROVIDER, [new Error('provider down')], () =>
+        runOutputGuardrail({
+          question: 'Q?', effectiveQuery: 'Q?', uncoveredAspects: [], unavailableAspects: ['BROKEN-PART'],
+          evidenceTexts: CHUNKS.map(c => c.chunk_text), draftAnswer: 'draft', notFoundMessage: 'I could not find this information in this lecture.',
+        }));
+      const pass = /Known unsupported aspects[\s\S]*- BROKEN-PART/.test(requests[0].userPrompt)
+        && r.finalAnswer === "I could not find this information in this lecture. I also couldn't retrieve part of this right now (BROKEN-PART) — please ask again in a moment.";
+      return { pass, detail: `final="${r.finalAnswer}"` };
+    } finally {
+      av.ENABLED = saved.enabled; av.FAIL_OPEN_ON_VERIFIER_ERROR = saved.failOpen;
+    }
   },
 });
 

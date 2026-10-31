@@ -165,7 +165,12 @@ export const generateAnswer = async (
   // are added as a block between the global rules and the lecture title —
   // see buildAgentInstructionBlock. When absent/null the prompt is exactly
   // what it was before agent profiles existed.
-  agentProfile?: LectureAgentProfile | null
+  agentProfile?: LectureAgentProfile | null,
+  // Decomposed query only: subquery texts whose lookup FAILED (embed/search/
+  // rerank outage), so nothing is known about them. Kept apart from
+  // uncoveredAspects, which means "searched, not in the lecture". The model
+  // is told to say these parts couldn't be retrieved right now.
+  unavailableAspects: string[] = []
 ): Promise<string> => {
   // Falls back to env.LLM.RAG_ANSWER.FALLBACK_MODEL after 2 failed attempts
   // on the primary model (default gemini-2.5-flash -> gemini-flash-latest,
@@ -180,6 +185,9 @@ export const generateAnswer = async (
   const uncoveredBlock = uncoveredAspects.length > 0
     ? `\n\nNote: the lecture content above does not cover the following part(s) of the question. If your answer would otherwise need them, explicitly say that part was not found in this lecture — do not guess or use outside knowledge for it:\n${uncoveredAspects.map(a => `- ${a}`).join('\n')}`
     : '';
+  const unavailableBlock = unavailableAspects.length > 0
+    ? `\n\nNote: the following part(s) of the question could not be looked up right now because of a temporary problem. Do not answer them and do not say they are missing from this lecture — say that this part could not be retrieved right now and the student can ask again in a moment:\n${unavailableAspects.map(a => `- ${a}`).join('\n')}`
+    : '';
   const agentBlock = buildAgentInstructionBlock(agentProfile);
   const prompt = `${SYSTEM_PROMPT}
 ${agentBlock ? `\n${agentBlock}\n` : ''}
@@ -189,7 +197,7 @@ Lecture Q&A Context:
 ${context}
 ${historyBlock ? `\n${historyBlock}` : ''}
 Current Student Question:
-${question}${uncoveredBlock}`;
+${question}${uncoveredBlock}${unavailableBlock}`;
 
   logger.info(`[LLM] 🤖 Sending prompt to Gemini (${chunks.length} chunks, question="${logSafeText(question, 60)}")`);
 
@@ -243,7 +251,7 @@ ${question}${uncoveredBlock}`;
       logger.warn(`[LLM] Transient error on attempt ${attempt}/3${fallbackNote} — retrying in ${wait / 1000}s...`);
       if (streamedAny) stream?.onReset?.();
       await sleep(wait);
-      return generateAnswer(question, chunks, lectureTitle, history, uncoveredAspects, attempt + 1, stream, agentProfile);
+      return generateAnswer(question, chunks, lectureTitle, history, uncoveredAspects, attempt + 1, stream, agentProfile, unavailableAspects);
     }
 
     if (err instanceof AppError) throw err;

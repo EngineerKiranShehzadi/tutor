@@ -18,7 +18,7 @@ import { runInputGuardrails, REJECTION_MESSAGE_BY_REASON } from '../rag/guardrai
 import type { InputGuardrailResult } from '../rag/guardrails/input/input-guardrail.service';
 import { decomposeQuery } from '../rag/query-processing/decomposition/subquery-decomposition.service';
 import type { SubqueryDecompositionResult } from '../rag/query-processing/decomposition/subquery-decomposition.types';
-import { retrieveForDecomposedQuery, classifyEmptyDecomposedResult, decomposedContextBudget } from '../rag/query-processing/retrieval/decomposed-retrieval.service';
+import { retrieveForDecomposedQuery, classifyEmptyDecomposedResult, decomposedContextBudget, splitUncoveredAspects } from '../rag/query-processing/retrieval/decomposed-retrieval.service';
 import { runAdaptiveRetrieval } from '../rag/query-processing/adaptive-retrieval/adaptive-retrieval.service';
 import type { AdaptiveRetrievalParams } from '../rag/query-processing/adaptive-retrieval/adaptive-retrieval.service';
 import type { AdaptiveRetrievalResult } from '../rag/query-processing/adaptive-retrieval/adaptive-retrieval.types';
@@ -70,7 +70,7 @@ export interface AskLectureAgentDeps {
   rerankChunks?:           (question: string, candidates: QnaChunk[], topN?: number) => Promise<QnaChunk[]>;
   dedupeAndSelect?:        (rankedChunks: QnaChunk[], desiredCount?: number, minRerankScore?: number) => DedupeResult;
   reorderForContext?:      (chunks: QnaChunk[]) => QnaChunk[];
-  generateAnswer?:         (question: string, chunks: QnaChunk[], lectureTitle: string, history?: ConversationTurn[], uncoveredAspects?: string[], attempt?: number, stream?: AnswerStreamHandlers, agentProfile?: LectureAgentProfile | null) => Promise<string>;
+  generateAnswer?:         (question: string, chunks: QnaChunk[], lectureTitle: string, history?: ConversationTurn[], uncoveredAspects?: string[], attempt?: number, stream?: AnswerStreamHandlers, agentProfile?: LectureAgentProfile | null, unavailableAspects?: string[]) => Promise<string>;
   // Resolves the lecture's agent profile by lecture_id only (see
   // lecture-agent-profile.service.ts). Defaults to the real service.
   getAgentProfile?:        (lectureId: number) => Promise<AgentProfileLookup>;
@@ -689,6 +689,9 @@ export const askLectureAgent = async (
     let chunks: QnaChunk[];
     let finalCandidateCount: number;
     let uncoveredAspects: string[] = [];
+    // Decomposed parts whose lookup failed (outage) — kept out of
+    // uncoveredAspects so they are never called "not in this lecture".
+    let unavailableAspects: string[] = [];
     // Only ever populated by the DIRECT branch below — a decomposed query
     // has no single embedding representing the parent query (each subquery
     // gets its own, see decomposed-retrieval.service.ts). Answer-memory
@@ -712,10 +715,12 @@ export const askLectureAgent = async (
         { generateEmbedding, searchChunks, rerankChunks: rerankChunksFn }
       );
       finalCandidateCount = decomposedResult.totalCandidateCount;
-      uncoveredAspects = decomposedResult.uncoveredSubqueryIndexes.map(i => decomposition.subqueries[i]);
+      ({ notFound: uncoveredAspects, unavailable: unavailableAspects } =
+        splitUncoveredAspects(decomposition.subqueries, decomposedResult.uncoveredSubqueryIndexes, decomposedResult.perSubquery));
       trace.setAttributes({
         'query.decomposition.covered_subqueries': decomposedResult.coveredSubqueryIndexes.join(','),
         'query.decomposition.uncovered_subqueries': decomposedResult.uncoveredSubqueryIndexes.join(','),
+        'query.decomposition.unavailable_subqueries': decomposedResult.perSubquery.filter(r => r.failureReason === 'RETRIEVAL_ERROR').map(r => r.index).join(','),
       });
 
       // Only a complete absence of evidence across every subquery is a real
@@ -777,7 +782,10 @@ export const askLectureAgent = async (
         });
         if (adaptiveResult.triggered) {
           chunks = adaptiveResult.selectedChunks;
-          uncoveredAspects = adaptiveResult.uncoveredSubqueryIndexes.map(i => decomposition.subqueries[i]);
+          // A part adaptive retrieval recovered becomes covered; one that
+          // is still uncovered keeps the reason its first lookup had.
+          ({ notFound: uncoveredAspects, unavailable: unavailableAspects } =
+            splitUncoveredAspects(decomposition.subqueries, adaptiveResult.uncoveredSubqueryIndexes, decomposedResult.perSubquery));
           finalCandidateCount += adaptiveResult.iterations.reduce((sum, it) => sum + it.newChunkCount, 0);
           if (adaptiveResult.coveredSubqueryIndexes.length > decomposedResult.coveredSubqueryIndexes.length) {
             logger.info(`[CHAT] 🔁 Adaptive retrieval recovered evidence for ${adaptiveResult.coveredSubqueryIndexes.length - decomposedResult.coveredSubqueryIndexes.length} subquery(ies) (${adaptiveResult.iterations.length} iteration(s), stopReason=${adaptiveResult.stopReason})`);
@@ -915,7 +923,7 @@ export const askLectureAgent = async (
       // llm-gemini.service.ts for how it's used (a note, never merged into
       // the grounded context itself).
       async () => {
-        const draft = await generateAnswer(question, contextChunks, lecture.title, historyTurns, uncoveredAspects, 1, draftStream, agentProfile);
+        const draft = await generateAnswer(question, contextChunks, lecture.title, historyTurns, uncoveredAspects, 1, draftStream, agentProfile, unavailableAspects);
         piiSafeStream?.flush();
         return draft;
       },
@@ -925,6 +933,7 @@ export const askLectureAgent = async (
         contextChunkIds: contextChunks.map(c => c.id).join(','),
         answerCharLength: a.length,
         uncoveredAspectCount: uncoveredAspects.length,
+        unavailableAspectCount: unavailableAspects.length,
         ...(isContentCaptureEnabled() ? { [ATTR.OUTPUT_VALUE]: truncateContent(a, 2000).value } : {}),
       })
     );
@@ -945,6 +954,7 @@ export const askLectureAgent = async (
       // retrieval — see OutputGuardrailParams.effectiveQuery's doc comment.
       effectiveQuery: retrievalQuery,
       uncoveredAspects,
+      unavailableAspects,
       evidenceTexts: contextChunks.map(c => c.chunk_text),
       draftAnswer,
       notFoundMessage: LECTURE_NOT_FOUND_MESSAGE,
@@ -986,8 +996,9 @@ export const askLectureAgent = async (
     // transient verifier failure in particular, caching that fallback
     // would keep serving "not found" for a question retrieval could
     // actually answer. Best-effort: any failure here must never change the
-    // response already returned below.
-    if (route === 'FACT_QUESTION' && guardrailOutcome.verified) {
+    // response already returned below. An answer that says a part "couldn't
+    // be retrieved right now" is transient by definition, so it is never cached.
+    if (route === 'FACT_QUESTION' && guardrailOutcome.verified && unavailableAspects.length === 0) {
       try {
         const memoryService = await import('./rag-answer-memory.service');
         const writeAnswerMemory = deps.writeAnswerMemory ?? memoryService.writeAnswerMemory;

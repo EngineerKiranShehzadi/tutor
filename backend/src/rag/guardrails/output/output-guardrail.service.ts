@@ -24,6 +24,10 @@ export interface OutputGuardrailParams {
   // uncoveredAspects param — the aspects Selective Subquery Decomposition/
   // Iterative Adaptive Retrieval already determined have no evidence.
   uncoveredAspects: string[];
+  // Aspects whose lookup failed (outage), not "not in the lecture" — see
+  // generateAnswer's unavailableAspects. The verifier/revision treat them as
+  // parts that must not be answered; the fallback names them honestly.
+  unavailableAspects?: string[];
   // The exact chunk_text values supplied to the generator — not the whole
   // candidate pool, not raw QnaChunk rows.
   evidenceTexts: string[];
@@ -41,9 +45,18 @@ export interface OutputGuardrailParams {
 // existing message; partial coverage names the specific missing aspect(s)
 // using the same "I could not find ... in this lecture" phrasing.
 function conservativeFallback(params: OutputGuardrailParams): string {
-  if (params.uncoveredAspects.length === 0) return params.notFoundMessage;
-  return `I could not find enough information in this lecture to fully answer this — specifically: ${params.uncoveredAspects.join('; ')}.`;
+  const base = params.uncoveredAspects.length === 0
+    ? params.notFoundMessage
+    : `I could not find enough information in this lecture to fully answer this — specifically: ${params.uncoveredAspects.join('; ')}.`;
+  const unavailable = params.unavailableAspects ?? [];
+  if (unavailable.length === 0) return base;
+  return `${base} I also couldn't retrieve part of this right now (${unavailable.join('; ')}) — please ask again in a moment.`;
 }
+
+// Parts the verifier/revision must treat as "do not answer": the ones not in
+// the lecture and the ones that couldn't be looked up.
+const aspectsNotToAnswer = (params: OutputGuardrailParams): string[] =>
+  [...params.uncoveredAspects, ...(params.unavailableAspects ?? [])];
 
 function buildResult(args: {
   finalAnswer: string;
@@ -180,7 +193,7 @@ async function runGroundednessVerification(params: OutputGuardrailParams): Promi
 
   const firstPass = await verifyAnswerGroundedness({
     question: params.question,
-    uncoveredAspects: params.uncoveredAspects,
+    uncoveredAspects: aspectsNotToAnswer(params),
     evidenceTexts: params.evidenceTexts,
     draftAnswer: params.draftAnswer,
   });
@@ -243,7 +256,7 @@ async function runGroundednessVerification(params: OutputGuardrailParams): Promi
     evidenceTexts: params.evidenceTexts,
     draftAnswer: params.draftAnswer,
     unsupportedClaims: verdict.unsupportedClaims,
-    uncoveredAspects: params.uncoveredAspects,
+    uncoveredAspects: aspectsNotToAnswer(params),
   });
 
   if (!revision.ok) {
@@ -257,7 +270,7 @@ async function runGroundednessVerification(params: OutputGuardrailParams): Promi
   // Never assume the revision succeeded — verify it exactly once more.
   const finalPass = await verifyAnswerGroundedness({
     question: params.question,
-    uncoveredAspects: params.uncoveredAspects,
+    uncoveredAspects: aspectsNotToAnswer(params),
     evidenceTexts: params.evidenceTexts,
     draftAnswer: revision.revisedAnswer,
   });
