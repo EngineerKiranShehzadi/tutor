@@ -383,7 +383,7 @@ cases.push({
     const r = await checkReadiness();
     const shapeOk = ['healthy', 'degraded', 'unhealthy'].includes(r.status)
       && typeof r.checkedAt === 'string'
-      && r.components.database && r.components.pgvector && r.components.embeddingServer && r.components.reranker && r.components.gemini;
+      && r.components.database && r.components.pgvector && r.components.embeddingServer && r.components.reranker && r.components.answerLlm;
     const dbHealthy = r.components.database.status === 'healthy';
     const pgvectorHealthy = r.components.pgvector.status === 'healthy';
     // Required-dependency (embeddingServer) down in this environment ->

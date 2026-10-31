@@ -28,7 +28,7 @@ import { enforceAskQuota, AskQuotaExceededError, resetAskQuotaForTests, askQuota
 import { chatResolvers } from '../graphql/resolvers/chat.resolver';
 import chatRoutes from '../routes/chat.routes';
 import { generateAccessToken } from '../utils/jwt';
-import { checkProviderHealth, overallStatus, requiredComponents, ComponentHealth } from '../observability/health.service';
+import { checkProviderHealth, overallStatus, requiredComponents, ComponentHealth, checkAnswerLlm, checkReadiness } from '../observability/health.service';
 import { recordProviderFailure, recordProviderSuccess, resetProviderSignals } from '../observability/provider-signal';
 import { EmbeddingUnavailableError } from '../embedding/embedding-errors';
 import { mkdtempSync, writeFileSync, rmSync, statSync } from 'fs';
@@ -303,18 +303,17 @@ const run = async () => {
   // ── A6: readiness ────────────────────────────────────────────────────
   {
     const h = (status: ComponentHealth['status']): ComponentHealth => ({ status, latencyMs: 1 });
-    const all = (over: Partial<Record<'database' | 'pgvector' | 'embeddingServer' | 'reranker' | 'gemini', ComponentHealth>>) =>
-      ({ database: h('healthy'), pgvector: h('healthy'), embeddingServer: h('healthy'), reranker: h('healthy'), gemini: h('healthy'), ...over });
-    const reqG = requiredComponents('gemini');
-    const reqOther = requiredComponents('groq');
-    const geminiDown = overallStatus(all({ gemini: h('unhealthy') }), reqG);
-    const geminiDownOther = overallStatus(all({ gemini: h('unhealthy') }), reqOther);
-    const rerankDown = overallStatus(all({ reranker: h('unhealthy') }), reqG);
-    const unverified = overallStatus(all({ gemini: h('degraded') }), reqG);
-    check('A6-1. A dead answer model (Gemini) or reranker → unhealthy (503); unverified (config-only) → degraded (200); Gemini not required when another provider answers',
-      reqG.join() === 'database,pgvector,embeddingServer,reranker,gemini' && !reqOther.includes('gemini')
-        && geminiDown === 'unhealthy' && rerankDown === 'unhealthy' && unverified === 'degraded' && geminiDownOther === 'degraded',
-      `required=${reqG.join()} geminiDown=${geminiDown} rerankDown=${rerankDown} unverified=${unverified} geminiDown(groq answers)=${geminiDownOther}`);
+    const all = (over: Partial<Record<'database' | 'pgvector' | 'embeddingServer' | 'reranker' | 'answerLlm', ComponentHealth>>) =>
+      ({ database: h('healthy'), pgvector: h('healthy'), embeddingServer: h('healthy'), reranker: h('healthy'), answerLlm: h('healthy'), ...over });
+    const req = requiredComponents();
+    const answerDown = overallStatus(all({ answerLlm: h('unhealthy') }), req);
+    const rerankDown = overallStatus(all({ reranker: h('unhealthy') }), req);
+    const unverified = overallStatus(all({ answerLlm: h('degraded') }), req);
+    // AD10: the answer LLM is always required (renamed from `gemini`).
+    check('A6-1. A dead answer model or reranker → unhealthy (503); unverified (config-only) → degraded (200); the answer LLM is always required',
+      req.join() === 'database,pgvector,embeddingServer,reranker,answerLlm'
+        && answerDown === 'unhealthy' && rerankDown === 'unhealthy' && unverified === 'degraded',
+      `required=${req.join()} answerDown=${answerDown} rerankDown=${rerankDown} unverified=${unverified}`);
 
     resetProviderSignals();
     const hosted = { assertConfigured: () => undefined };
@@ -936,6 +935,23 @@ const run = async () => {
     check('AD9-1. Rollback validates the target inside its own transaction (no second pool connection) and still switches the pointer',
       !(result instanceof Error) && result.activeVersionId === previous && after.active_version_id === previous && poolQueries === 0,
       `result=${result instanceof Error ? result.message : result.activeVersionId} active=${after.active_version_id} poolQueries=${poolQueries}`);
+  }
+
+  // ── AD10: readiness never claims an unprobed answer LLM is healthy ───
+  {
+    const rag = env.LLM.RAG_ANSWER as { PROVIDER: string };
+    const saved = rag.PROVIDER;
+    try {
+      rag.PROVIDER = 'groq';
+      const direct = await checkAnswerLlm();
+      const r = await checkReadiness();
+      check('AD10-1. RAG_LLM_PROVIDER=groq: readiness is not healthy and answerLlm.errorCode = UNVERIFIED_PROVIDER (it used to probe no LLM at all)',
+        direct.status === 'degraded' && direct.errorCode === 'UNVERIFIED_PROVIDER'
+          && r.status !== 'healthy' && r.components.answerLlm.errorCode === 'UNVERIFIED_PROVIDER' && !('gemini' in r.components),
+        `direct=${JSON.stringify(direct)} overall=${r.status} answerLlm=${JSON.stringify(r.components.answerLlm)}`);
+    } finally {
+      rag.PROVIDER = saved;
+    }
   }
 
 };

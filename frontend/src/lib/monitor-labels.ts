@@ -125,7 +125,7 @@ export const COMPONENT_LABELS: Record<string, string> = {
   pgvector: 'Vector search',
   embeddingServer: 'Embedding server',
   reranker: 'Reranker',
-  gemini: 'AI model',
+  answerLlm: 'AI model',
 };
 
 const GENERIC = {
