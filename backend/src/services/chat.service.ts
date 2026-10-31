@@ -18,12 +18,13 @@ import { runInputGuardrails, REJECTION_MESSAGE_BY_REASON } from '../rag/guardrai
 import type { InputGuardrailResult } from '../rag/guardrails/input/input-guardrail.service';
 import { decomposeQuery } from '../rag/query-processing/decomposition/subquery-decomposition.service';
 import type { SubqueryDecompositionResult } from '../rag/query-processing/decomposition/subquery-decomposition.types';
-import { retrieveForDecomposedQuery, classifyEmptyDecomposedResult } from '../rag/query-processing/retrieval/decomposed-retrieval.service';
+import { retrieveForDecomposedQuery, classifyEmptyDecomposedResult, decomposedContextBudget } from '../rag/query-processing/retrieval/decomposed-retrieval.service';
 import { runAdaptiveRetrieval } from '../rag/query-processing/adaptive-retrieval/adaptive-retrieval.service';
 import type { AdaptiveRetrievalParams } from '../rag/query-processing/adaptive-retrieval/adaptive-retrieval.service';
 import type { AdaptiveRetrievalResult } from '../rag/query-processing/adaptive-retrieval/adaptive-retrieval.types';
 import type { SubqueryRetrievalDeps } from '../rag/query-processing/retrieval/decomposed-retrieval.service';
 import { runOutputGuardrail } from '../rag/guardrails/output/output-guardrail.service';
+import { createPiiSafeStream } from '../rag/guardrails/output/pii/streaming-pii-redactor';
 import type { OutputGuardrailParams } from '../rag/guardrails/output/output-guardrail.service';
 import type { OutputGuardrailResult } from '../rag/guardrails/output/answer-verification.types';
 import type { ConversationTurn, AnswerStreamHandlers } from './llm-gemini.service';
@@ -267,8 +268,9 @@ export const askLectureAgent = async (
 ): Promise<{ answer: string; sources: QnaChunk[] }> => {
   const { studentId, lectureId, sessionId } = params;
   // Reassigned once the input guardrail runs — from that point on, every
-  // downstream stage (routing, retrieval, persistence, generation) sees the
-  // guarded (possibly PII-sanitized) text, never the raw original.
+  // downstream stage (routing, persistence, logs, every LLM prompt) sees the
+  // guarded (possibly PII-sanitized) text. The one exception is the direct
+  // path's embed/search/rerank text — see unmaskedQuestion below.
   let question = params.question;
 
   const trace = new RequestTrace('ask-lecture-agent');
@@ -444,8 +446,13 @@ export const askLectureAgent = async (
 
     // Carry the guarded (possibly PII-sanitized) text forward — every stage
     // from here on, including the DB write immediately below, sees this
-    // value instead of the raw original.
+    // value instead of the raw original (except searchQuery, below).
     question = guardrailResult.sanitizedInput ?? question;
+    // The same text before PII masking. Used ONLY as the text that is
+    // embedded, vector-searched and reranked on the direct path — a masked
+    // "[PHONE]" would search for the placeholder, not the number. Never
+    // stored, logged, traced or sent to an LLM; those all use `question`.
+    const unmaskedQuestion = guardrailResult.retrievalInput ?? question;
     trace.setAttributes({
       ...(isContentCaptureEnabled() ? { [ATTR.INPUT_VALUE]: truncateContent(question, 500).value } : {}),
     });
@@ -688,11 +695,20 @@ export const askLectureAgent = async (
     // still needs one for the parent/effective question; it's computed
     // on-demand at the write-memory step below when this stays null.
     let questionEmbedding: number[] | null = null;
+    // What the DIRECT path embeds and reranks: the unmasked question when
+    // retrieval is using the student's own wording, else the rewrite (which
+    // was produced from the masked text). Decomposed subqueries come from an
+    // LLM call, so they are built from the masked text.
+    const searchQuery = retrievalQuery === question ? unmaskedQuestion : retrievalQuery;
 
     if (decomposition.mode === 'DECOMPOSED') {
       currentStage = 'decomposed-retrieval';
+      // A compound question gets a wider context budget than a single one,
+      // scaled by its subquery count — see decomposedContextBudget.
+      const contextBudget = decomposedContextBudget(decomposition.subqueries.length);
+      trace.setAttributes({ 'query.decomposition.context_budget': contextBudget });
       const decomposedResult = await retrieveForDecomposedQuery(
-        { lectureId, subqueries: decomposition.subqueries },
+        { lectureId, subqueries: decomposition.subqueries, desiredCount: contextBudget },
         { generateEmbedding, searchChunks, rerankChunks: rerankChunksFn }
       );
       finalCandidateCount = decomposedResult.totalCandidateCount;
@@ -751,6 +767,7 @@ export const askLectureAgent = async (
             perSubquery: decomposedResult.perSubquery,
             coveredSubqueryIndexes: decomposedResult.coveredSubqueryIndexes,
             uncoveredSubqueryIndexes: decomposedResult.uncoveredSubqueryIndexes,
+            desiredCount: contextBudget,
           },
           { generateEmbedding, searchChunks, rerankChunks: rerankChunksFn }
         );
@@ -772,15 +789,17 @@ export const askLectureAgent = async (
     } else {
       // 5. Embed the retrieval query (reuse the embedding computed during
       // answer-memory lookup, if any, instead of generating it twice)
-      if (precomputedEmbedding) {
+      // The memory lookup embedded the masked question; reuse it only when
+      // that is also what we search with (i.e. nothing was masked).
+      if (precomputedEmbedding && searchQuery === retrievalQuery) {
         questionEmbedding = precomputedEmbedding;
       } else {
         logger.info(`[CHAT] 🔍 Embedding: "${logSafeText(retrievalQuery, 60)}"`);
         currentStage = 'generate-query-embedding';
         questionEmbedding = await trace.span(
           'generate-query-embedding',
-          () => generateEmbedding(retrievalQuery, true),
-          vec => ({ embeddingModelVersion: EMBEDDING_MODEL_VERSION, inputCharLength: retrievalQuery.length, vectorDimension: vec.length, retryCount: 0 })
+          () => generateEmbedding(searchQuery, true),
+          vec => ({ embeddingModelVersion: EMBEDDING_MODEL_VERSION, inputCharLength: searchQuery.length, vectorDimension: vec.length, retryCount: 0 })
         );
       }
 
@@ -831,7 +850,7 @@ export const askLectureAgent = async (
       chunks = await trace.span(
         'rerank-candidates',
         async () => {
-          const rankedAll = await rerankChunksFn(retrievalQuery, candidates, candidates.length);
+          const rankedAll = await rerankChunksFn(searchQuery, candidates, candidates.length);
           topRerankerScore = rankedAll[0]?.rerankScore ?? null;
           const { selected, dedupedAway } = dedupeAndSelect(rankedAll, 5);
           dedupedAwayCount = dedupedAway.length;
@@ -884,13 +903,22 @@ export const askLectureAgent = async (
     // the middle. chunkIds/sources below intentionally keep rerank order.
     const contextChunks = reorderForContext(chunks);
     currentStage = 'generate-grounded-answer';
+    // The streamed draft is PII-redacted piece by piece before it is sent
+    // (text already on screen can't be taken back). Groundedness/format are
+    // still settled by the final answer, which replaces the draft.
+    const piiSafeStream = params.stream && env.OUTPUT_PII_GUARD.ENABLED ? createPiiSafeStream(params.stream) : undefined;
+    const draftStream = piiSafeStream ?? params.stream;
     const draftAnswer = await trace.span(
       'generate-grounded-answer',
       // uncoveredAspects is only ever non-empty for a decomposed query with
       // partial coverage — see generateAnswer's doc comment in
       // llm-gemini.service.ts for how it's used (a note, never merged into
       // the grounded context itself).
-      () => generateAnswer(question, contextChunks, lecture.title, historyTurns, uncoveredAspects, 1, params.stream, agentProfile),
+      async () => {
+        const draft = await generateAnswer(question, contextChunks, lecture.title, historyTurns, uncoveredAspects, 1, draftStream, agentProfile);
+        piiSafeStream?.flush();
+        return draft;
+      },
       a => ({
         answerPromptVersion: ANSWER_PROMPT_VERSION,
         contextChunkCount: contextChunks.length,
@@ -972,7 +1000,11 @@ export const askLectureAgent = async (
         // implements). Answer-memory still needs one to support the
         // optional semantic-similarity lookup, so it's computed here, once,
         // only when actually persisting — never during retrieval itself.
-        const memoryEmbedding = questionEmbedding ?? await generateEmbedding(retrievalQuery, true);
+        // Stored with the answer, so it must be of the masked text (the same
+        // text the semantic lookup embeds) — not of the unmasked search query.
+        const memoryEmbedding = questionEmbedding && searchQuery === retrievalQuery
+          ? questionEmbedding
+          : await generateEmbedding(retrievalQuery, true);
         await trace.span(
           'write-answer-memory',
           () => writeAnswerMemory({

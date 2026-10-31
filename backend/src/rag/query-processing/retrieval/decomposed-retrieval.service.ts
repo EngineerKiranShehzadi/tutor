@@ -3,6 +3,7 @@ import type { NotFoundReason } from '../../../observability/types';
 import { dedupeAndSelect, DEFAULT_MIN_RERANK_SCORE } from '../../../services/rerank.service';
 import { getActiveTrace } from '../../../observability/tracer';
 import { logger } from '../../../utils/logger';
+import { env } from '../../../config/env';
 
 // Same candidate pool size as the existing single-query path
 // (chat.service.ts's CANDIDATE_LIMIT) — decomposition changes how many
@@ -193,10 +194,25 @@ export function mergeAndSelectWithCoverage(
   return { selectedChunks, mergedRankedAll };
 }
 
+// The context budget a single (DIRECT) question gets — chat.service.ts's
+// dedupeAndSelect(rankedAll, 5) and dedupeAndSelect's own default.
+export const SINGLE_QUERY_CONTEXT_CHUNKS = 5;
+
+// Final context budget for a decomposed question: CONTEXT_PER_SUBQUERY per
+// subquery, capped at CONTEXT_MAX_CHUNKS, never below a single question's
+// budget. Used for both decomposed and adaptive retrieval.
+export function decomposedContextBudget(
+  subqueryCount: number,
+  perSubquery: number = env.QUERY_DECOMPOSITION.CONTEXT_PER_SUBQUERY,
+  maxChunks: number = env.QUERY_DECOMPOSITION.CONTEXT_MAX_CHUNKS
+): number {
+  return Math.max(SINGLE_QUERY_CONTEXT_CHUNKS, Math.min(perSubquery * subqueryCount, maxChunks));
+}
+
 export interface DecomposedRetrievalParams {
   lectureId: number;
   subqueries: string[];
-  desiredCount?: number; // final context budget — defaults to 5, matching the existing single-query dedupeAndSelect default
+  desiredCount?: number; // final context budget — chat.service.ts passes decomposedContextBudget(); defaults to the single-question 5
 }
 
 export interface DecomposedRetrievalResult {
@@ -219,7 +235,7 @@ export async function retrieveForDecomposedQuery(
   params: DecomposedRetrievalParams,
   deps: SubqueryRetrievalDeps
 ): Promise<DecomposedRetrievalResult> {
-  const { lectureId, subqueries, desiredCount = 5 } = params;
+  const { lectureId, subqueries, desiredCount = SINGLE_QUERY_CONTEXT_CHUNKS } = params;
 
   const run = async (): Promise<DecomposedRetrievalResult> => {
     const perSubquery = await Promise.all(

@@ -586,6 +586,67 @@ cases.push({
   },
 });
 
+// ── D4 / D6 / D9 ────────────────────────────────────────────────────────
+
+cases.push({
+  label: 'D4. Streamed draft pieces are PII-redacted before they are sent (no raw email/phone ever streamed)',
+  run: async () => {
+    const pieces = ['Write to jo', 'hn.doe@exam', 'ple.com or call 0300 12', '34567 today.'];
+    const sent: string[] = [];
+    const w = newWorld();
+    const { deps } = makeDeps({ extra: {
+      generateAnswer: async (...args: unknown[]) => {
+        const stream = args[6] as { onDelta: (t: string) => void } | undefined;
+        for (const p of pieces) stream?.onDelta(p);
+        return pieces.join('');
+      },
+    } });
+    await inWorld(w, () => askLectureAgent(
+      { studentId: STUDENT, lectureId: 4, question: QUESTION, sessionId: sessionOf(4), stream: { onDelta: t => sent.push(t) } }, deps));
+    const shown = sent.join('');
+    const pass = shown === 'Write to [EMAIL] or call [PHONE] today.' && !/john|doe@|0300|1234567/.test(sent.join('|'));
+    return { pass, detail: `shown="${shown}"` };
+  },
+});
+
+cases.push({
+  label: 'D6. A 2-subquery decomposed question gets 8 context chunks (single question: 5)',
+  run: async () => {
+    const many = (l: number) => Array.from({ length: 12 }, (_, i) => fakeChunk(i + 1, l));
+    const dec = makeDeps({ searchResult: many, extra: { decomposeQuery: async q => decomposed(q) } });
+    const dir = makeDeps({ searchResult: many });
+    await inWorld(newWorld(), () => ask(4, dec.deps));
+    await inWorld(newWorld(), () => ask(4, dir.deps));
+    const n = (sp: Spies) => (sp.generate[0]?.args[1] as QnaChunk[] | undefined)?.length;
+    return { pass: n(dec.spies) === 8 && n(dir.spies) === 5, detail: `decomposed=${n(dec.spies)}, direct=${n(dir.spies)}` };
+  },
+});
+
+cases.push({
+  label: 'D9. Masked question is stored/sent to the LLM; the unmasked one is used only to embed, search and rerank',
+  run: async () => {
+    const RAW = 'What does 192.168.10.20 mean here?';
+    const MASKED = 'What does [IP_ADDRESS] mean here?';
+    const embedded: string[] = []; const reranked: string[] = [];
+    const w = newWorld();
+    const { deps, spies } = makeDeps({ extra: {
+      runInputGuardrails: async () => ({ action: 'SANITIZE', reason: 'PII_DETECTED', sanitizedInput: MASKED, retrievalInput: RAW }),
+      generateEmbedding: async t => { embedded.push(t); return EMB; },
+      rerankChunks: async (q, c) => { reranked.push(q); return c.map(x => ({ ...x, rerankScore: 0.9 })); },
+    } });
+    await inWorld(w, () => ask(4, deps, RAW));
+    const upsert = w.stmts.find(s => s.kind === 'memory-upsert');
+    const stored = [w.studentQuestions[0]?.question, w.history[0]?.question, upsert?.params[3], upsert?.params[4]];
+    const pass = stored.every(q => q === MASKED)
+      && spies.generate[0]?.args[0] === MASKED
+      && reranked.length === 1 && reranked[0] === RAW
+      && embedded.includes(RAW)
+      // memory lookup + memory write embed the masked text; only the search embeds RAW
+      && embedded.filter(t => t === RAW).length === 1 && embedded.filter(t => t === MASKED).length === 2;
+    return { pass, detail: `embedded=[${embedded.map(t => (t === RAW ? 'RAW' : t === MASKED ? 'MASKED' : '?')).join(',')}], rerank=${reranked[0] === RAW ? 'RAW' : 'other'}, stored=${stored.map(q => (q === MASKED ? 'M' : 'X')).join('')}` };
+  },
+});
+
 async function main(): Promise<void> {
   let failures = 0;
   for (const c of cases) {

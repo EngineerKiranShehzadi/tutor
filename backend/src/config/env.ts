@@ -424,6 +424,12 @@ export const env = {
     // prompt.ts's instruction to use the smallest useful number of
     // subqueries.
     MAX_SUBQUERIES: parseInt(optional('QUERY_DECOMPOSITION_MAX_SUBQUERIES', '3'), 10),
+    // Context budget for a decomposed question: this many chunks per
+    // subquery, capped at CONTEXT_MAX_CHUNKS (and never below the 5 a single
+    // question gets). Coverage-aware selection still guarantees each covered
+    // subquery a chunk; this only widens how many slots there are.
+    CONTEXT_PER_SUBQUERY: positiveInt('QUERY_DECOMPOSITION_CONTEXT_PER_SUBQUERY', 4),
+    CONTEXT_MAX_CHUNKS:   positiveInt('QUERY_DECOMPOSITION_CONTEXT_MAX_CHUNKS', 12),
   },
 
   // ── Iterative Adaptive Retrieval ─────────────────────────────────

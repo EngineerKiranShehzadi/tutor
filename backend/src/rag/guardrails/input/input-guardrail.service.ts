@@ -21,7 +21,7 @@ export type { InputGuardrailAction, InputGuardrailResult } from './types/input-g
 // askLectureAgent's 'input-guardrail' stage.
 export async function runInputGuardrails(rawInput: string): Promise<InputGuardrailResult> {
   if (!env.INPUT_GUARDRAIL.ENABLED) {
-    return { action: 'ALLOW', sanitizedInput: rawInput, metadata: { guardrailEnabled: false } };
+    return { action: 'ALLOW', sanitizedInput: rawInput, retrievalInput: rawInput, metadata: { guardrailEnabled: false } };
   }
 
   // 1. Length — cheapest possible check, and the only one worth doing
@@ -46,6 +46,8 @@ export async function runInputGuardrails(rawInput: string): Promise<InputGuardra
 
   // 3. PII — never rejects, only sanitizes. The sanitized text is what
   // every guard from here on (and the query router afterward) evaluates.
+  // The unmasked text is kept for retrieval only (see retrievalInput).
+  const beforePiiMasking = current;
   if (env.INPUT_GUARDRAIL.PII_ENABLED) {
     const result = detectAndSanitizePii(current);
     if (result.action === 'SANITIZE' && result.sanitizedInput !== undefined) {
@@ -73,6 +75,7 @@ export async function runInputGuardrails(rawInput: string): Promise<InputGuardra
     // rawInput when nothing was sanitized, so callers can use this value
     // unconditionally instead of branching on `action`.
     sanitizedInput: current,
+    retrievalInput: beforePiiMasking,
     metadata,
   };
 }

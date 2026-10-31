@@ -19,6 +19,10 @@ import { classifyEmptyDecomposedResult, type SubqueryRetrievalOutcome } from '..
 import { createLocalHttpEmbeddingProvider } from '../embedding/providers/local-http-embedding.provider';
 import { createLocalHttpRerankProvider } from '../rerank/providers/local-http-rerank.provider';
 import { EmbeddingUnavailableError } from '../embedding/embedding-errors';
+import { createPiiSafeStream, settledLength } from '../rag/guardrails/output/pii/streaming-pii-redactor';
+import { scanForPii } from '../rag/guardrails/shared/pii/pii-detector.service';
+import { decomposedContextBudget } from '../rag/query-processing/retrieval/decomposed-retrieval.service';
+import { runInputGuardrails } from '../rag/guardrails/input/input-guardrail.service';
 
 interface CaseResult { pass: boolean; detail?: string }
 interface Case { label: string; run: () => Promise<CaseResult> }
@@ -223,6 +227,71 @@ cases.push({
     const pass = ok.calls.length === 2 && ok.value.map(s => s.id).join() === '3,2,1'
       && bad.value instanceof Error && /unknown or duplicate candidate id \(42\)/.test(bad.value.message);
     return { pass, detail: `order=${ok.value.map(s => s.id).join()}, calls=${ok.calls.length}` };
+  },
+});
+
+// ── D4: streamed draft is redacted before it is sent ────────────────────
+const PII_TEXT = 'Mail john.doe@example.com, call +92 300 1234567 or (042) 3571-2345, card 4111 1111 1111 1111, '
+  + 'CNIC 35202-1234567-1, IP 10.0.0.12. Version 2 of 3 steps, see 7:09. Done.';
+// Matches only what the final guard would redact, so the property below is exactly "never ahead of redaction".
+const FINAL = scanForPii(PII_TEXT).sanitizedText;
+
+cases.push({
+  label: 'D4a. For every chunk size 1..12, everything streamed is always a prefix of the final redacted answer, and flush completes it',
+  run: async () => {
+    let worst = '';
+    for (let size = 1; size <= 12; size++) {
+      let shown = '';
+      const s = createPiiSafeStream({ onDelta: t => { shown += t; } });
+      for (let i = 0; i < PII_TEXT.length; i += size) {
+        s.onDelta(PII_TEXT.slice(i, i + size));
+        if (!FINAL.startsWith(shown)) { worst = `size=${size} leaked "${shown.slice(-30)}"`; break; }
+      }
+      s.flush();
+      if (!worst && shown !== FINAL) worst = `size=${size} final mismatch`;
+      if (worst) break;
+    }
+    return { pass: worst === '' && /\[EMAIL\].*\[PHONE\].*\[CREDIT_CARD\].*\[IDENTIFIER\].*\[IP_ADDRESS\]/.test(FINAL), detail: worst || `final="${FINAL.slice(0, 60)}…"` };
+  },
+});
+
+cases.push({
+  label: 'D4b. Held-back tail is only the run that could still become PII; onReset clears the draft',
+  run: async () => {
+    const t1 = settledLength('Call 0300 12');         // "0300 12" held
+    const t2 = settledLength('Call 0300 is busy');    // "busy" held, rest settled
+    const t3 = settledLength('Done. ');               // nothing held
+    const events: string[] = [];
+    const s = createPiiSafeStream({ onDelta: t => events.push(`d:${t}`), onReset: () => events.push('reset') });
+    s.onDelta('Hello there ');
+    s.onReset!();
+    s.onDelta('Again ');
+    const pass = t1 === 5 && t2 === 13 && t3 === 6 && events.join('|') === 'd:Hello there |reset|d:Again ';
+    return { pass, detail: `t1=${t1} t2=${t2} t3=${t3} events=${events.join('|')}` };
+  },
+});
+
+// ── D6: compound questions get a budget scaled by subquery count ────────
+cases.push({
+  label: 'D6. decomposedContextBudget = max(5, min(per x n, cap)); defaults 4 per subquery, cap 12',
+  run: async () => {
+    const got = [2, 3, 4].map(n => decomposedContextBudget(n));
+    const custom = [decomposedContextBudget(3, 3, 15), decomposedContextBudget(2, 1, 12), decomposedContextBudget(5, 4, 14)];
+    const pass = env.QUERY_DECOMPOSITION.CONTEXT_PER_SUBQUERY === 4 && env.QUERY_DECOMPOSITION.CONTEXT_MAX_CHUNKS === 12
+      && got.join() === '8,12,12' && custom.join() === '9,5,14';
+    return { pass, detail: `defaults=${got.join()}, custom=${custom.join()}` };
+  },
+});
+
+// ── D9: the guardrail hands back the unmasked text for retrieval only ───
+cases.push({
+  label: 'D9. runInputGuardrails returns the masked text as sanitizedInput and the unmasked text as retrievalInput',
+  run: async () => {
+    const pii = await runInputGuardrails('What is 192.168.10.20 used for?');
+    const clean = await runInputGuardrails('What is a system prompt?');
+    const pass = pii.sanitizedInput === 'What is [IP_ADDRESS] used for?' && pii.retrievalInput === 'What is 192.168.10.20 used for?'
+      && clean.sanitizedInput === clean.retrievalInput;
+    return { pass, detail: `action=${pii.action}, sanitized="${pii.sanitizedInput}"` };
   },
 });
 

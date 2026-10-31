@@ -7,6 +7,40 @@ Newest entry at the top.
 
 ---
 
+## 2026-10-31 — Student RAG fixes, batch 3: streamed PII, compound-question budget, PII and retrieval (D4, D6, D9)
+
+**Changed by:** Kiran
+**Files:** `backend/src/services/chat.service.ts`,
+`backend/src/rag/guardrails/output/pii/streaming-pii-redactor.ts` (new),
+`backend/src/rag/guardrails/input/input-guardrail.service.ts`,
+`backend/src/rag/guardrails/input/types/input-guardrail.types.ts`,
+`backend/src/rag/query-processing/retrieval/decomposed-retrieval.service.ts`,
+`backend/src/rag/query-processing/adaptive-retrieval/adaptive-retrieval.service.ts`,
+`backend/src/config/env.ts`, `backend/.env.example`, tests in `backend/src/scripts/`
+
+- **D4 — PII was shown before it was removed.** The draft streamed to the
+  browser unredacted; only the final answer was cleaned. Now each streamed piece
+  goes through the same PII detector first. The only text held back is the
+  trailing run that could still turn into an email, phone, card, ID or IP number
+  (so the last word or number appears one piece later); everything sent is
+  already redacted. Groundedness and format are still settled by the final
+  answer, which replaces the draft, as before. Runs when `OUTPUT_PII_GUARD_ENABLED`
+  is on (the default).
+- **D6 — compound questions got the same 5 chunks as a one-line question.** A
+  decomposed question now gets 4 chunks per sub-question, capped at 12 (never
+  fewer than 5): 2 parts → 8, 3 parts → 12. Adaptive retrieval uses the same
+  budget. Configurable with `QUERY_DECOMPOSITION_CONTEXT_PER_SUBQUERY` and
+  `QUERY_DECOMPOSITION_CONTEXT_MAX_CHUNKS`. Selection logic is unchanged.
+- **D9 — PII masking ran before retrieval.** A question with, say, an IP address
+  was searched as "[IP_ADDRESS]". The input guardrail now also returns the text
+  before masking (`retrievalInput`), and the direct path uses it only to embed,
+  vector-search and rerank. Everything stored (student_questions, chat_history,
+  answer memory and its embedding), logged, traced or sent to an LLM still uses
+  the masked text. Decomposed sub-questions and follow-up rewrites are produced
+  by an LLM from the masked text, so they stay masked.
+
+---
+
 ## 2026-10-31 — Student RAG fixes, batch 2: outages handled the same way on both paths (D3, D5)
 
 **Changed by:** Kiran

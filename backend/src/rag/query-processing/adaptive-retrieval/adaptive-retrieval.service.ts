@@ -5,6 +5,7 @@ import { logger } from '../../../utils/logger';
 import {
   retrieveForSubquery,
   mergeAndSelectWithCoverage,
+  SINGLE_QUERY_CONTEXT_CHUNKS,
 } from '../retrieval/decomposed-retrieval.service';
 import type {
   RetrievalGroup,
@@ -169,7 +170,9 @@ export async function runAdaptiveRetrieval(
   params: AdaptiveRetrievalParams,
   deps: SubqueryRetrievalDeps
 ): Promise<AdaptiveRetrievalResult> {
-  const { effectiveQuery, lectureId, subqueries, perSubquery, desiredCount = 5 } = params;
+  // chat.service.ts passes the same decomposedContextBudget() the decomposed
+  // retrieval used, so adaptive merging never shrinks the budget.
+  const { effectiveQuery, lectureId, subqueries, perSubquery, desiredCount = SINGLE_QUERY_CONTEXT_CHUNKS } = params;
   const initialGroups: RetrievalGroup[] = subqueries.map((_, index) => ({
     index,
     reranked: perSubquery[index]?.reranked ?? [],
