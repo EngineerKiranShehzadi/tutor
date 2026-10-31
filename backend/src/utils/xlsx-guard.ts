@@ -24,6 +24,8 @@ const reject = (message: string): never => { throw new AppError(message, 400); }
 const notXlsx = (): never => reject('The file is not a valid .xlsx workbook.');
 
 export function assertSafeXlsx(buf: Buffer, limits: XlsxLimits): void {
+  // A zip starts with a local file header ("PK\x03\x04"); anything else is refused at once.
+  if (buf.length < 30 || buf.readUInt32LE(0) !== LFH_SIG) notXlsx();
   // End-of-central-directory record: last 22 bytes, plus up to 64 KB of comment.
   let eocd = -1;
   for (let i = buf.length - 22; i >= Math.max(0, buf.length - 22 - 0xffff); i--) {

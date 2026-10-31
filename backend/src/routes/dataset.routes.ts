@@ -1,23 +1,40 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { protect, requireRole } from '../middleware/auth.middleware';
+import { AppError } from '../middleware/errorHandler';
+import { env } from '../config/env';
 import { uploadDataset, getDatasetVersions, rollbackDatasetVersion, exportDataset, cancelDatasetUpdate } from '../controllers/dataset.controller';
 
 const router = Router();
 
-// Store file in memory (no disk write) — buffer passed directly to xlsx parser
+// Store file in memory (no disk write) — buffer passed directly to xlsx parser.
+// Rejections are client errors (A16): an oversized file is a 413 and a
+// non-spreadsheet a 400 (errorHandler maps multer's errors); the file's
+// CONTENT is then checked by parseExcel (zip structure, size when unpacked)
+// before anything parses it.
+//
+// The name must end in .xlsx AND the browser-reported type must be a
+// spreadsheet or a generic binary type (some browsers/OSes send those for
+// .xlsx). A .csv, .pdf or image renamed to .xlsx is refused here, and anything
+// that is not really a workbook is refused by the content check.
+export const XLSX_MIME_TYPES = new Set([
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-excel',
+  'application/octet-stream',
+  'application/zip',
+  'application/x-zip-compressed',
+  '',
+]);
+
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB max
+  limits: { fileSize: env.DATASET.MAX_UPLOAD_BYTES, files: 1 },
   fileFilter: (_req, file, cb) => {
-    const allowed = [
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'application/vnd.ms-excel',
-    ];
-    if (allowed.includes(file.mimetype) || file.originalname.endsWith('.xlsx')) {
+    const isXlsxName = file.originalname.toLowerCase().endsWith('.xlsx');
+    if (isXlsxName && XLSX_MIME_TYPES.has((file.mimetype ?? '').toLowerCase())) {
       cb(null, true);
     } else {
-      cb(new Error('Only .xlsx files are allowed'));
+      cb(new AppError('Only .xlsx files are allowed.', 400));
     }
   },
 });

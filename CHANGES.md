@@ -7,6 +7,59 @@ Newest entry at the top.
 
 ---
 
+## 2026-10-31 — Admin/dataset fixes, batch 4 (low): dead cache rows, upload errors, xlsx upgrade, safe error logs, bounded maps (A15–A20)
+
+**Changed by:** Kiran
+**Files:** `backend/src/db/migrations/015_drop_unversioned_answer_memory.sql` (new),
+`backend/src/routes/dataset.routes.ts`, `backend/src/middleware/errorHandler.ts`, `backend/src/utils/xlsx-guard.ts`,
+`backend/src/graphql/index.ts`, `backend/src/graphql/resolvers/auth.resolver.ts`,
+`backend/src/services/observability/aggregate.service.ts`, `backend/src/utils/expiring-map.ts` (new),
+`backend/src/config/env.ts`, `backend/.env.example`, `backend/package.json`, `backend/package-lock.json`,
+`backend/scripts/reembed-local.ts` (deleted), tests in `backend/src/scripts/`
+
+**Deploy note:** run `npm run db:setup` to apply migration `015`, and `npm ci` in
+`backend` to install `xlsx` 0.20.3.
+
+- **A15 — unreachable cached answers.** Migration `015` deletes
+  `rag_answer_memory` rows with `dataset_version_id IS NULL`. These are rows
+  migration 007 could not match. They could never be served or purged, and they
+  kept the chunks they cite alive. New rows always carry a version.
+- **A16 — upload errors and the parser.**
+  - A file over the upload limit is now a 413, not a 500. The limit is
+    configurable as `DATASET_MAX_UPLOAD_MB`, default 10.
+  - The file filter requires a `.xlsx` name and a spreadsheet or generic binary
+    type, so a renamed `.csv` or `.pdf` gets a 400. Content that isn't a zip
+    gets a 400 at the first bytes. Malformed or oversized JSON bodies get a 400
+    or 413 instead of a 500.
+  - `xlsx` goes from 0.18.5 to 0.20.3, pinned to the SheetJS CDN tarball. npm
+    has no fixed release, and 0.20.3 fixes CVE-2023-30533 (prototype pollution)
+    and CVE-2024-22363 (ReDoS). It parses all 7 real lecture datasets
+    identically, so no re-embedding is needed.
+- **A17 — `backend/scripts/reembed-local.ts` deleted.** It wrote vectors with no
+  model stamp, which made lectures read as STALE_EMBEDDING_MODEL, straight onto
+  live chunks. Use `npm run seed:retry -- <lectureId>`, which only fills the
+  active version's missing vectors and stamps the model.
+- **A18 — error logs.**
+  - Unexpected REST and GraphQL errors are logged as `code=…`, the error type,
+    and a content-safe message (`logSafeText`), not their raw text, which can
+    quote a student's question.
+  - `LOG_ERROR_DETAILS` adds the raw message and stack. It is off in production
+    by default and on otherwise.
+  - GraphQL clients now get "Internal server error" for an unexpected error
+    instead of its raw message and stack. GraphQL's own and the app's intended
+    messages are unchanged.
+- **A19 — enrichment errors.** A failed Phoenix enrichment reports
+  `Enrichment request failed (<CODE>): <stable message>`, via
+  `toObservabilityError`, never the raw thrown text.
+- **A20 — unbounded maps.** New `ExpiringMap` (entries expire, expired entries
+  are swept on write, oldest evicted past a cap). The GraphQL auth rate-limit
+  store is capped at 10,000 entries and the overview cache at 100.
+- **Tests:** test-admin-hardening A15-1, A16-1..2, A18-1..2, A19-1, A20-1
+  (30/30); the real-dataset parse was compared between xlsx 0.18.5 and 0.20.3
+  and is byte-identical.
+
+---
+
 ## 2026-10-31 — Admin/dataset fixes, batch 3: honest preview, upload status race, CSV injection, migrations, PII paging, GraphQL limits, CSP, indexed purge (A7–A14)
 
 **Changed by:** Kiran

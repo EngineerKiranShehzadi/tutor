@@ -4,19 +4,21 @@ import { AppError } from '../../middleware/errorHandler';
 import * as AuthService from '../../services/auth.service';
 import { GraphQLContext } from '../context';
 import { logger } from '../../utils/logger';
+import { ExpiringMap } from '../../utils/expiring-map';
 import { REFRESH_COOKIE, REFRESH_COOKIE_OPTS, VERIFY_TICKET_COOKIE_OPTS, CLEAR_COOKIE_OPTS } from '../../utils/auth-cookies';
 
 // ── In-memory rate limiter (per mutation, per IP) ─────
-const rateLimitStore = new Map<string, { count: number; resetAt: number }>();
+// Entries expire with their window and the store is capped, so it cannot grow
+// without bound as client IPs vary (A20).
+export const rateLimitStore = new ExpiringMap<{ count: number }>(10_000);
 
 const checkRateLimit = (req: Request, prefix: string, max: number, windowMs: number): void => {
   const ip = req.ip ?? req.socket?.remoteAddress ?? 'unknown';
   const key = `${prefix}:${ip}`;
-  const now = Date.now();
   const entry = rateLimitStore.get(key);
 
-  if (!entry || entry.resetAt < now) {
-    rateLimitStore.set(key, { count: 1, resetAt: now + windowMs });
+  if (!entry) {
+    rateLimitStore.set(key, { count: 1 }, windowMs);
     return;
   }
   if (entry.count >= max) {

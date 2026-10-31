@@ -1,0 +1,11 @@
+-- A15. Idempotent.
+--
+-- Migration 007 bound cached answers to a dataset version and left every row
+-- it could not match at dataset_version_id = NULL. Such a row can never be
+-- served (lookups match dataset_version_id = <id>, and NULL never equals
+-- anything), is never deleted by dataset cleanup (it deletes by version id),
+-- and its source_chunk_ids keep otherwise-unused chunks alive forever (cleanup
+-- keeps any chunk a cached answer cites). They are provably dead: delete them.
+-- New rows always carry a version (writeAnswerMemory checks the cited chunks
+-- belong to it), so this does not recur.
+DELETE FROM rag_answer_memory WHERE dataset_version_id IS NULL;

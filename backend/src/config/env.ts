@@ -88,6 +88,9 @@ export const env = {
   // other value is passed to Express as-is (e.g. 'loopback'). Default: 1 hop in
   // production, none otherwise. Do not trust hops you don't have — clients
   // could then pick their own IP via X-Forwarded-For.
+  // Unexpected (500) errors: also log the raw message and stack. They can
+  // contain user content, so off by default in production (A18).
+  LOG_ERROR_DETAILS: optional('LOG_ERROR_DETAILS', optional('NODE_ENV', 'development') === 'production' ? 'false' : 'true') === 'true',
   // GraphQL: schema introspection is on outside production only; every
   // operation is rejected beyond these limits (graphql/query-limits.ts).
   GRAPHQL: {
@@ -131,6 +134,8 @@ export const env = {
     // long without progress (0 = wait forever). Admins can also cancel it.
     // Upload limits, checked before the spreadsheet is parsed (A4). Real lecture
     // datasets: ≤ 545 rows, 10 columns, < 1 MB uncompressed, ≤ 17 zip entries.
+    // Compressed .xlsx upload size (multer); bigger uploads get HTTP 413.
+    MAX_UPLOAD_BYTES:       Math.max(1, parseInt(optional('DATASET_MAX_UPLOAD_MB', '10'), 10) || 10) * 1024 * 1024,
     MAX_ROWS:               Math.max(1, parseInt(optional('DATASET_MAX_ROWS', '5000'), 10) || 5000),
     MAX_COLUMNS:            Math.max(1, parseInt(optional('DATASET_MAX_COLUMNS', '100'), 10) || 100),
     MAX_UNCOMPRESSED_BYTES: Math.max(1, parseInt(optional('DATASET_MAX_UNCOMPRESSED_MB', '50'), 10) || 50) * 1024 * 1024,

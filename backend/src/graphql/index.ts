@@ -1,6 +1,10 @@
 import { ApolloServer } from '@apollo/server';
 import { expressMiddleware } from '@apollo/server/express4';
 import { Express } from 'express';
+import { GraphQLError, type GraphQLFormattedError } from 'graphql';
+import { unwrapResolverError } from '@apollo/server/errors';
+import { AppError, describeError } from '../middleware/errorHandler';
+import { logSafeText } from '../observability/sanitize';
 import { typeDefs } from './typeDefs';
 import { resolvers as authResolvers } from './resolvers/auth.resolver';
 import { chatResolvers } from './resolvers/chat.resolver';
@@ -31,6 +35,23 @@ const mergedResolvers = {
   },
 };
 
+// Logs every GraphQL error without its raw text (A18): error messages can
+// quote variable values — i.e. a student's question — so the log gets the code
+// and a content-safe form (logSafeText / describeError). The client keeps
+// GraphQL's own messages and the app's intended AppError messages; anything
+// else that escaped a resolver is replaced by a generic message.
+export function formatGraphQLError(err: GraphQLFormattedError, originalError: unknown): GraphQLFormattedError {
+  const code = String(err.extensions?.code ?? 'UNKNOWN');
+  const cause = unwrapResolverError(originalError);
+  const unexpected = !(cause instanceof GraphQLError) && !(cause instanceof AppError) && code === 'INTERNAL_SERVER_ERROR';
+  const d = describeError(cause ?? err);
+  const log = unexpected ? logger.error.bind(logger) : logger.warn.bind(logger);
+  log(`[GRAPHQL] ${code} path=${err.path?.join('.') ?? '-'} message=${logSafeText(err.message, 120)} cause: ${d.line}`, d.details ?? {});
+  if (!unexpected) return err;
+  const { stacktrace: _drop, ...extensions } = (err.extensions ?? {}) as Record<string, unknown>;
+  return { ...err, message: 'Internal server error', extensions };
+}
+
 export const setupApollo = async (app: Express): Promise<void> => {
   const server = new ApolloServer<GraphQLContext>({
     typeDefs,
@@ -39,11 +60,7 @@ export const setupApollo = async (app: Express): Promise<void> => {
     // schema is not published in production (GRAPHQL_INTROSPECTION overrides).
     introspection: env.GRAPHQL.INTROSPECTION,
     validationRules: [queryLimitsRule({ maxDepth: env.GRAPHQL.MAX_DEPTH, maxFields: env.GRAPHQL.MAX_FIELDS })],
-    formatError: (err, originalError) => {
-      const cause = (originalError as Error)?.message ?? err.message;
-      logger.error(`[GRAPHQL] ❌ ${err.message} | cause: ${cause}`, { extensions: err.extensions });
-      return err;
-    },
+    formatError: (err, originalError) => formatGraphQLError(err, originalError),
   });
 
   await server.start();

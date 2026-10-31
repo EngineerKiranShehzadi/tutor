@@ -59,9 +59,9 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.35.0",
     "@apollo/server": "^4.13.0",
-    "@aws-sdk/client-s3": "^3.637.0",
     "@arizeai/openinference-semantic-conventions": "^2.6.0",
     "@arizeai/phoenix-client": "^7.1.1",
+    "@aws-sdk/client-s3": "^3.637.0",
     "@google/genai": "^1.0.0",
     "@langchain/core": "^0.3.0",
     "@langchain/textsplitters": "^0.1.0",
@@ -88,7 +88,7 @@
     "pg": "^8.11.5",
     "uuid": "^9.0.1",
     "winston": "^3.13.0",
-    "xlsx": "^0.18.5"
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",

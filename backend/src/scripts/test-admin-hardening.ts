@@ -1,5 +1,5 @@
 /**
- * Admin/production hardening, batches 2–3 (A4, A5, A6, A9, A10, A11, A12):
+ * Admin/production hardening, batches 2–4 (A4–A6, A9–A12, A15–A20):
  *   A4  upload limits (zip bomb, lying zip, rows, columns) and the linear
  *       possible-duplicate scan (same result as the all-pairs scan)
  *   A5  trust proxy, per-student question limits on GraphQL and /chat/ask-stream
@@ -40,6 +40,13 @@ import { applyMigrations } from './db-setup';
 import { getRecentQuestions, getRecentQuestionsPage } from '../services/analytics.service';
 import { queryLimitsRule } from '../graphql/query-limits';
 import { typeDefs } from '../graphql/typeDefs';
+import datasetRoutes from '../routes/dataset.routes';
+import { errorHandler, AppError } from '../middleware/errorHandler';
+import { formatGraphQLError } from '../graphql';
+import { logger } from '../utils/logger';
+import { computeEnrichedOverviewMetrics, overviewCache } from '../services/observability/aggregate.service';
+import { rateLimitStore } from '../graphql/resolvers/auth.resolver';
+import { ExpiringMap } from '../utils/expiring-map';
 
 const results: { name: string; pass: boolean; detail: string }[] = [];
 const check = (name: string, pass: boolean, detail: string) => {
@@ -445,6 +452,133 @@ const run = async () => {
     const devI = probe({ NODE_ENV: 'development' });
     check('A12-2. Introspection is off in production by default (on in development) and a __schema query is then refused',
       prodI === 'false' && devI === 'true' && /introspection/i.test(introErr), `production=${prodI} development=${devI} __schema→"${introErr.slice(0, 90)}"`);
+  }
+
+  // ── A15: dead NULL-version cached answers are deleted ────────────────
+  {
+    const lec = (await query<{ id: number }>(`INSERT INTO lectures (title, youtube_url, youtube_video_id) VALUES ('[a15] memory', 'https://youtu.be/xxxxxxxxxxx', 'xxxxxxxxxxx') RETURNING id`)).rows[0].id;
+    const stu = (await query<{ id: string }>(`INSERT INTO users (name, email, password_hash, is_verified, role) VALUES ('A15', $1, 'x', TRUE, 'STUDENT') RETURNING id`, [`a15-${Date.now()}@example.test`])).rows[0].id;
+    const chunk = (await query<{ id: number }>(`INSERT INTO lecture_qna_chunks (lecture_id, question, answer, chunk_text) VALUES ($1, 'q', 'a', 'Question: q') RETURNING id`, [lec])).rows[0].id;
+    const ver = (await query<{ id: number }>(
+      `INSERT INTO dataset_versions (lecture_id, version_no, status, mode, embedding_model_version, chunking_config_version, stats)
+       VALUES ($1, 1, 'SUPERSEDED', 'MERGE', 'm', 'c', '{}'::jsonb) RETURNING id`, [lec])).rows[0].id;
+    const ins = (v: number | null, nq: string) => query(
+      `INSERT INTO rag_answer_memory (student_id, lecture_id, original_question, retrieval_query, normalized_query, question_embedding,
+         answer, source_chunk_ids, embedding_model_version, answer_prompt_version, dataset_version_id)
+       VALUES ($1, $2, 'q', 'q', $3, array_fill(0.1::real, ARRAY[1024])::vector, 'a', ARRAY[$4::int], 'm', 'p', $5)`, [stu, lec, nq, chunk, v]);
+    await ins(null, 'dead row');
+    await ins(ver, 'live row');
+    await pool.query(readFileSync(join(__dirname, '../db/migrations/015_drop_unversioned_answer_memory.sql'), 'utf8'));
+    const left = (await query<{ normalized_query: string }>('SELECT normalized_query FROM rag_answer_memory WHERE lecture_id = $1', [lec])).rows.map(r => r.normalized_query);
+    check('A15-1. Migration 015 deletes cached answers with no dataset version (never servable, never purged) and keeps versioned ones',
+      left.join() === 'live row', `remaining=${JSON.stringify(left)}`);
+  }
+
+  // ── A16: upload rejections are 413/400, never 500 ────────────────────
+  {
+    const admin = (await query<{ id: string }>(`INSERT INTO users (name, email, password_hash, is_verified, role) VALUES ('A16 Admin', $1, 'x', TRUE, 'ADMIN') RETURNING id`, [`a16-${Date.now()}@example.test`])).rows[0].id;
+    const lec = (await query<{ id: number }>(`INSERT INTO lectures (title, youtube_url, youtube_video_id) VALUES ('[a16] upload', 'https://youtu.be/xxxxxxxxxxx', 'xxxxxxxxxxx') RETURNING id`)).rows[0].id;
+    const app = express();
+    app.use(express.json());
+    app.use('/datasets', datasetRoutes);
+    app.post('/echo', (_req, res) => { res.json({ ok: true }); });
+    app.use(errorHandler);
+    const srv = app.listen(0);
+    const base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+    const auth = { Authorization: `Bearer ${generateAccessToken(admin, 'ADMIN')}` };
+    const upload = async (name: string, type: string, body: Buffer) => {
+      const fd = new FormData();
+      fd.append('file', new Blob([body], { type }), name);
+      fd.append('dryRun', 'true');
+      const r = await fetch(`${base}/datasets/upload/${lec}`, { method: 'POST', headers: auth, body: fd });
+      return { status: r.status, message: ((await r.json().catch(() => ({}))) as { message?: string }).message ?? '' };
+    };
+    const XLSXMIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    const big = await upload('big.xlsx', XLSXMIME, Buffer.alloc(env.DATASET.MAX_UPLOAD_BYTES + 1024, 1));
+    const csvRenamed = await upload('data.xlsx', 'text/csv', Buffer.from('question,answer\nq,a\n'));
+    const pdf = await upload('report.pdf', 'application/pdf', Buffer.from('%PDF-1.4'));
+    const notZip = await upload('fake.xlsx', XLSXMIME, Buffer.from('this is plain text pretending to be a workbook, long enough'));
+    const good = await upload('ok.xlsx', 'application/octet-stream', workbook([['question', 'answer'], ['q', 'a']]));
+    const badJson = await fetch(`${base}/echo`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"broken": ' });
+    srv.close();
+    check('A16-1. Too large → 413; a .csv/.pdf (even renamed .xlsx) → 400; a non-zip "xlsx" → 400; a real workbook as octet-stream → accepted; malformed JSON → 400 (all were 500 or parser errors)',
+      big.status === 413 && /too large/.test(big.message) && csvRenamed.status === 400 && /Only \.xlsx/.test(csvRenamed.message)
+        && pdf.status === 400 && notZip.status === 400 && /not a valid \.xlsx/.test(notZip.message) && good.status === 200 && badJson.status === 400,
+      `big=${big.status} csvRenamed=${csvRenamed.status} pdf=${pdf.status} notZip=${notZip.status}("${notZip.message}") good=${good.status} badJson=${badJson.status}`);
+    check('A16-2. xlsx is SheetJS 0.20.3 (fixes CVE-2023-30533 prototype pollution and CVE-2024-22363 ReDoS), pinned to the SheetJS CDN tarball',
+      XLSX.version === '0.20.3' && /cdn\.sheetjs\.com\/xlsx-0\.20\.3/.test(JSON.parse(readFileSync(join(__dirname, '../../package.json'), 'utf8')).dependencies.xlsx),
+      `xlsx=${XLSX.version}`);
+  }
+
+  // ── A18: unexpected errors are logged without their raw text ─────────
+  {
+    const SECRET = 'my phone is 0300-1234567 and my question is about loss functions';
+    const captured: string[] = [];
+    const orig = { error: logger.error, warn: logger.warn };
+    const grab = (...a: unknown[]) => { captured.push(a.map(x => typeof x === 'string' ? x : JSON.stringify(x)).join(' ')); return logger; };
+    (logger as unknown as { error: unknown }).error = grab;
+    (logger as unknown as { warn: unknown }).warn = grab;
+    const flags = env as unknown as { LOG_ERROR_DETAILS: boolean };
+    const savedFlag = flags.LOG_ERROR_DETAILS;
+    let restBody = ''; let restStatus = 0; let gqlMasked: { message: string; ext: string } | null = null; let gqlApp = '';
+    try {
+      flags.LOG_ERROR_DETAILS = false;
+      const app = express();
+      app.get('/boom', () => { throw new Error(`duplicate key value violates unique constraint: (question)=(${SECRET})`); });
+      app.use(errorHandler);
+      const srv = app.listen(0);
+      const r = await fetch(`http://127.0.0.1:${(srv.address() as AddressInfo).port}/boom`);
+      restStatus = r.status; restBody = await r.text();
+      srv.close();
+      const masked = formatGraphQLError({ message: `Unexpected: ${SECRET}`, extensions: { code: 'INTERNAL_SERVER_ERROR', stacktrace: ['x'] } }, new Error(SECRET));
+      gqlMasked = { message: masked.message, ext: JSON.stringify(masked.extensions) };
+      gqlApp = formatGraphQLError({ message: 'Lecture #9 not found', extensions: { code: 'INTERNAL_SERVER_ERROR' } }, new AppError('Lecture #9 not found', 404)).message;
+      formatGraphQLError({ message: `Variable "$input" got invalid value { question: "${SECRET}" }`, extensions: { code: 'BAD_USER_INPUT' } }, undefined);
+    } finally {
+      (logger as unknown as { error: unknown }).error = orig.error;
+      (logger as unknown as { warn: unknown }).warn = orig.warn;
+      flags.LOG_ERROR_DETAILS = savedFlag;
+    }
+    const leaked = captured.filter(l => l.includes('0300-1234567'));
+    check('A18-1. With LOG_ERROR_DETAILS off: REST 500 and GraphQL errors are logged with a code + content-safe message, never the raw text; clients get a generic message for unexpected errors, AppError messages are kept',
+      restStatus === 500 && !restBody.includes('0300') && captured.some(l => /code=\w+ type=Error message=\[len=\d+ sha=/.test(l)) && leaked.length === 0
+        && gqlMasked?.message === 'Internal server error' && !gqlMasked.ext.includes('stacktrace') && gqlApp === 'Lecture #9 not found',
+      `logLines=${captured.length} leaked=${leaked.length} rest=${restStatus} gqlMasked="${gqlMasked?.message}" appErr="${gqlApp}" sample="${(captured[0] ?? '').slice(0, 110)}"`);
+    const prodDetails = (() => {
+      const r = spawnSync(join(__dirname, '../../node_modules/.bin/ts-node'), ['--transpile-only', '-e',
+        "console.log('LD=' + JSON.stringify(require('./src/config/env').env.LOG_ERROR_DETAILS))"],
+        { cwd: join(__dirname, '../..'), env: { ...process.env, NODE_ENV: 'production', LOG_ERROR_DETAILS: '' }, encoding: 'utf8' });
+      return (r.stdout.split('\n').find(l => l.startsWith('LD=')) ?? 'LD=?').slice(3);
+    })();
+    check('A18-2. LOG_ERROR_DETAILS defaults to off in production', prodDetails === 'false', `production default=${prodDetails}`);
+  }
+
+  // ── A19: enrichment failure → stable, classified reason ──────────────
+  {
+    (env.OBSERVABILITY as unknown as { PHOENIX_BASE_URL: string }).PHOENIX_BASE_URL = 'http://127.0.0.1:1';
+    const caps = { reachable: true, supportsSpanTraceIdFiltering: true, details: {} } as unknown as Parameters<typeof computeEnrichedOverviewMetrics>[1];
+    const traces = [{ traceId: 'a'.repeat(32) }] as unknown as Parameters<typeof computeEnrichedOverviewMetrics>[0];
+    const m = await computeEnrichedOverviewMetrics(traces, caps);
+    const reason = m.memory.hits.unavailableReason ?? '';
+    check('A19-1. Phoenix enrichment failure → unavailableReason is a classified, stable string (no raw error text, host or port)',
+      /^Enrichment request failed \(PHOENIX_[A-Z_]+\): /.test(reason) && !/127\.0\.0\.1|ECONNREFUSED|fetch failed/i.test(reason),
+      `reason="${reason}"`);
+  }
+
+  // ── A20: in-memory maps are bounded ──────────────────────────────────
+  {
+    const m = new ExpiringMap<number>(3, 0);
+    m.set('a', 1, 1000, 0); m.set('b', 2, 1000, 0); m.set('c', 3, 10, 0);
+    const expired = m.get('c', 50);
+    m.set('d', 4, 1000, 60); m.set('e', 5, 1000, 60);
+    const evicted = m.get('a', 60) === undefined && m.size === 3 && m.get('e', 60) === 5;
+    rateLimitStore.clear(); overviewCache.clear();
+    for (let i = 0; i < 12_000; i++) rateLimitStore.set(`login:10.0.${i >> 8}.${i & 255}`, { count: 1 }, 60_000);
+    for (let i = 0; i < 150; i++) overviewCache.set(`{"filter":${i}}`, {} as never, 60_000);
+    const sizes = `${rateLimitStore.size}/${overviewCache.size}`;
+    rateLimitStore.clear(); overviewCache.clear();
+    check('A20-1. ExpiringMap drops expired entries and evicts the oldest past its cap; the auth rate-limit store stays ≤ 10,000 and the overview cache ≤ 100',
+      expired === undefined && evicted && sizes === '10000/100', `expiredGet=${expired} evictedOldest=${evicted} sizes(rateLimit/overview)=${sizes}`);
   }
 
 };

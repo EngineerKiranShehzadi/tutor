@@ -3,7 +3,9 @@ import { getSpans } from '@arizeai/phoenix-client/spans';
 import { env } from '../../config/env';
 import { getPhoenixClient, phoenixProject, withPhoenixRetry } from './phoenix-client';
 import { getPhoenixCapabilities, type PhoenixCapabilities } from './capabilities';
-import { ObservabilityError } from './errors';
+import { ObservabilityError, toObservabilityError } from './errors';
+import { ExpiringMap } from '../../utils/expiring-map';
+import { logger } from '../../utils/logger';
 import { mapPhoenixSpan, extractTraceSummary } from './normalize';
 import type { RawPhoenixSpan } from './normalize';
 import { computeMemoryMetrics, computeZeroRetrievalMetric, computeFallbackMetrics, unavailableMetric } from './overview-metrics';
@@ -222,12 +224,16 @@ export async function computeEnrichedOverviewMetrics(
       telemetryCoverage,
     };
   } catch (err) {
-    return unavailableEnrichedMetrics(`Enrichment request failed: ${(err as Error).message.slice(0, 150)}`);
+    // A stable, classified reason — never the raw thrown message (A19).
+    const e = toObservabilityError(err);
+    logger.warn(`[OBSERVABILITY] overview enrichment failed: ${e.code}`);
+    return unavailableEnrichedMetrics(`Enrichment request failed (${e.code}): ${e.message}`);
   }
 }
 
-interface CacheEntry { value: OverviewResult; expiresAt: number }
-const overviewCache = new Map<string, CacheEntry>();
+// One entry per distinct filter combination; entries expire with the TTL and
+// at most 100 are kept (A20).
+export const overviewCache = new ExpiringMap<OverviewResult>(100);
 
 export interface OverviewResult {
   metrics: OverviewMetrics;
@@ -238,7 +244,7 @@ export interface OverviewResult {
 export async function computeOverview(filters: OverviewFilters): Promise<OverviewResult> {
   const cacheKey = JSON.stringify(filters);
   const cached = overviewCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  if (cached) return cached;
 
   const caps = await getPhoenixCapabilities();
   if (!caps.reachable) throw new ObservabilityError('PHOENIX_UNREACHABLE', 'Phoenix server is unreachable');
@@ -379,6 +385,6 @@ export async function computeOverview(filters: OverviewFilters): Promise<Overvie
     coveredTraceCount: traces.length,
     truncated: result.traces.length >= OVERVIEW_TRACE_LIMIT,
   };
-  overviewCache.set(cacheKey, { value, expiresAt: Date.now() + env.OBSERVABILITY.PHOENIX_OVERVIEW_CACHE_TTL_MS });
+  overviewCache.set(cacheKey, value, env.OBSERVABILITY.PHOENIX_OVERVIEW_CACHE_TTL_MS);
   return value;
 }
