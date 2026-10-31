@@ -7,6 +7,35 @@ Newest entry at the top.
 
 ---
 
+## 2026-10-31 — Student RAG fixes, batch 2: outages handled the same way on both paths (D3, D5)
+
+**Changed by:** Kiran
+**Files:** `backend/src/services/chat.service.ts`,
+`backend/src/rag/query-processing/retrieval/decomposed-retrieval.service.ts`,
+`backend/src/embedding/providers/local-http-embedding.provider.ts`,
+`backend/src/rerank/providers/local-http-rerank.provider.ts`,
+tests in `backend/src/scripts/`
+
+- **D3 — one outage, two answers.** When the embedder, vector search or reranker
+  failed, a normal question got an error but a compound (decomposed) question got
+  "I could not find this information in this lecture." — and its trace said
+  `ALL_CANDIDATES_BELOW_RERANK_FLOOR`. Now each failed sub-question records which
+  step failed. If nothing was found and any lookup failed, the request ends in the
+  same error as a normal question, with the same trace reason
+  (`EMBEDDING_FAILURE` / `VECTOR_SEARCH_FAILURE` / `RERANKER_FAILURE`). "Not found"
+  is returned only when every lookup ran and found nothing, and its trace reason is
+  now the one observed (`NO_VECTOR_CANDIDATES` or
+  `ALL_CANDIDATES_BELOW_RERANK_FLOOR`).
+- **D5 — local embedding/rerank adapters (the default).** They now use the same
+  retry helper as the hosted adapters (2 quick retries on 429/5xx or no
+  connection), so a 503 while the local model loads no longer fails the question.
+  They also check replies the way the hosted adapters do: every vector must be
+  1024 finite numbers (the single-question `embed()` was not checked before);
+  every rerank result must name a known candidate once, with a numeric score;
+  rerank scores are sorted best-first before being returned.
+
+---
+
 ## 2026-10-31 — Student RAG fixes, batch 1: timeout, fail-closed verifier, prompt (D1, D2, D7, D8)
 
 **Changed by:** Kiran

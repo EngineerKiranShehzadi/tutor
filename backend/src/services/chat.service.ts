@@ -18,7 +18,7 @@ import { runInputGuardrails, REJECTION_MESSAGE_BY_REASON } from '../rag/guardrai
 import type { InputGuardrailResult } from '../rag/guardrails/input/input-guardrail.service';
 import { decomposeQuery } from '../rag/query-processing/decomposition/subquery-decomposition.service';
 import type { SubqueryDecompositionResult } from '../rag/query-processing/decomposition/subquery-decomposition.types';
-import { retrieveForDecomposedQuery } from '../rag/query-processing/retrieval/decomposed-retrieval.service';
+import { retrieveForDecomposedQuery, classifyEmptyDecomposedResult } from '../rag/query-processing/retrieval/decomposed-retrieval.service';
 import { runAdaptiveRetrieval } from '../rag/query-processing/adaptive-retrieval/adaptive-retrieval.service';
 import type { AdaptiveRetrievalParams } from '../rag/query-processing/adaptive-retrieval/adaptive-retrieval.service';
 import type { AdaptiveRetrievalResult } from '../rag/query-processing/adaptive-retrieval/adaptive-retrieval.types';
@@ -299,6 +299,10 @@ export const askLectureAgent = async (
   // Tracks which stage is in flight so an unexpected thrown error can be
   // mapped to a safe not-found/failure reason code in the outer catch.
   let currentStage = 'unknown';
+  // Set when a stage reports a retrieval failure itself instead of throwing
+  // from a DIRECT-path stage (see the decomposed zero-result branch). Wins
+  // over the currentStage mapping in the outer catch.
+  let retrievalFailureReason: NotFoundReason | undefined;
 
   const finishTrace = (status: 'SUCCESS' | 'ERROR', extra: SafeMetadata): void => {
     const finished = trace.end(status, extra);
@@ -701,7 +705,14 @@ export const askLectureAgent = async (
       // Only a complete absence of evidence across every subquery is a real
       // "not found" — partial coverage continues to generation below, which
       // is told (via uncoveredAspects) which part(s) it must not guess at.
+      // Zero chunks because a lookup failed (embed/search/rerank outage) is
+      // an error, exactly as on the DIRECT path — never "not in this lecture".
       if (decomposedResult.selectedChunks.length === 0) {
+        const empty = classifyEmptyDecomposedResult(decomposedResult.perSubquery);
+        if (empty.outcome === 'ERROR') {
+          retrievalFailureReason = empty.reason;
+          throw new Error(`Decomposed retrieval failed (${empty.reason}); no subquery produced evidence`);
+        }
         logger.warn(`[CHAT] ⚠️  No subquery produced qualifying evidence — returning not-found message`);
         await trace.span('save-chat-entry', async () => {
           await saveChatEntry({ studentId, lectureId, question, answer: LECTURE_NOT_FOUND_MESSAGE, sourceChunkIds: [], sessionId, traceId: trace.traceId });
@@ -709,7 +720,7 @@ export const askLectureAgent = async (
         }, () => ({ sourceChunkCount: 0 }));
         finishTrace('SUCCESS', {
           responseStatus: 'NOT_FOUND',
-          notFoundReason: 'ALL_CANDIDATES_BELOW_RERANK_FLOOR',
+          notFoundReason: empty.reason,
           memoryResult: memoryResultAttr,
           candidateCount: finalCandidateCount,
           selectedChunkCount: 0,
@@ -998,7 +1009,8 @@ export const askLectureAgent = async (
   } catch (err) {
     if (err instanceof AppError) throw err; // already recorded above (lecture-not-ready path)
     const notFoundReason: NotFoundReason | undefined =
-      currentStage === 'generate-query-embedding' ? 'EMBEDDING_FAILURE'
+      retrievalFailureReason ? retrievalFailureReason
+      : currentStage === 'generate-query-embedding' ? 'EMBEDDING_FAILURE'
       : currentStage === 'vector-search' ? 'VECTOR_SEARCH_FAILURE'
       : currentStage === 'rerank-candidates' ? 'RERANKER_FAILURE'
       : undefined;

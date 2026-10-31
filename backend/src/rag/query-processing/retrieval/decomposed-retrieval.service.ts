@@ -1,4 +1,5 @@
 import type { QnaChunk } from '../../../types';
+import type { NotFoundReason } from '../../../observability/types';
 import { dedupeAndSelect, DEFAULT_MIN_RERANK_SCORE } from '../../../services/rerank.service';
 import { getActiveTrace } from '../../../observability/tracer';
 import { logger } from '../../../utils/logger';
@@ -21,6 +22,8 @@ export interface SubqueryRetrievalOutcome {
   reranked: QnaChunk[]; // full reranked pool for this subquery, unfiltered, best-first
   covered: boolean;     // at least one reranked chunk meets the existing relevance floor
   failureReason?: 'NO_VECTOR_CANDIDATES' | 'ALL_BELOW_RERANK_FLOOR' | 'RETRIEVAL_ERROR';
+  // Set only with RETRIEVAL_ERROR: the step that threw.
+  failedStage?: 'EMBEDDING' | 'VECTOR_SEARCH' | 'RERANK';
 }
 
 // Runs the existing embed -> vector-search -> rerank pipeline for exactly
@@ -42,13 +45,16 @@ export async function retrieveForSubquery(
   deps: SubqueryRetrievalDeps
 ): Promise<SubqueryRetrievalOutcome> {
   const run = async (): Promise<SubqueryRetrievalOutcome> => {
+    let stage: NonNullable<SubqueryRetrievalOutcome['failedStage']> = 'EMBEDDING';
     try {
       const embedding = await deps.generateEmbedding(subquery, true);
+      stage = 'VECTOR_SEARCH';
       const candidates = await deps.searchChunks(embedding, lectureId, SUBQUERY_CANDIDATE_LIMIT);
       if (candidates.length === 0) {
         return { index, subquery, candidateCount: 0, reranked: [], covered: false, failureReason: 'NO_VECTOR_CANDIDATES' };
       }
 
+      stage = 'RERANK';
       const reranked = await deps.rerankChunks(subquery, candidates, candidates.length);
       const covered = reranked.some(c => (c.rerankScore ?? 0) >= DEFAULT_MIN_RERANK_SCORE);
       return {
@@ -56,8 +62,8 @@ export async function retrieveForSubquery(
         failureReason: covered ? undefined : 'ALL_BELOW_RERANK_FLOOR',
       };
     } catch (err) {
-      logger.warn(`[QUERY-DECOMPOSITION] ⚠️  Subquery ${index} retrieval failed, treating as uncovered: ${(err as Error).message}`);
-      return { index, subquery, candidateCount: 0, reranked: [], covered: false, failureReason: 'RETRIEVAL_ERROR' };
+      logger.warn(`[QUERY-DECOMPOSITION] ⚠️  Subquery ${index} retrieval failed at ${stage}, treating as uncovered: ${(err as Error).message}`);
+      return { index, subquery, candidateCount: 0, reranked: [], covered: false, failureReason: 'RETRIEVAL_ERROR', failedStage: stage };
     }
   };
 
@@ -73,8 +79,33 @@ export async function retrieveForSubquery(
       covered: r.covered,
       topRerankScore: r.reranked[0]?.rerankScore ?? null,
       failureReason: r.failureReason ?? null,
+      failedStage: r.failedStage ?? null,
     })
   );
+}
+
+const FAILURE_REASON_BY_STAGE: Record<NonNullable<SubqueryRetrievalOutcome['failedStage']>, NotFoundReason> = {
+  EMBEDDING: 'EMBEDDING_FAILURE',
+  VECTOR_SEARCH: 'VECTOR_SEARCH_FAILURE',
+  RERANK: 'RERANKER_FAILURE',
+};
+
+// Decides what a decomposed query that ended with ZERO selected chunks means,
+// using the same rule as the single-query path:
+//   - no evidence was found and every lookup ran -> NOT_FOUND, with the
+//     observed reason (all NO_VECTOR_CANDIDATES -> NO_VECTOR_CANDIDATES,
+//     otherwise ALL_CANDIDATES_BELOW_RERANK_FLOOR);
+//   - any subquery's lookup failed (embed/search/rerank threw) -> ERROR,
+//     with the failure reason of the first failed subquery. "Not in this
+//     lecture" can't be claimed for a part that was never searched, and the
+//     single-query path errors on the same failure.
+export function classifyEmptyDecomposedResult(
+  perSubquery: SubqueryRetrievalOutcome[]
+): { outcome: 'NOT_FOUND' | 'ERROR'; reason: NotFoundReason } {
+  const failed = perSubquery.find(r => r.failureReason === 'RETRIEVAL_ERROR');
+  if (failed) return { outcome: 'ERROR', reason: FAILURE_REASON_BY_STAGE[failed.failedStage ?? 'EMBEDDING'] };
+  const allNoCandidates = perSubquery.length > 0 && perSubquery.every(r => r.failureReason === 'NO_VECTOR_CANDIDATES');
+  return { outcome: 'NOT_FOUND', reason: allNoCandidates ? 'NO_VECTOR_CANDIDATES' : 'ALL_CANDIDATES_BELOW_RERANK_FLOOR' };
 }
 
 // Deterministic, coverage-preserving cap to `desiredCount` slots:

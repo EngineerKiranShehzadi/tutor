@@ -542,6 +542,50 @@ cases.push({
   },
 });
 
+// ── D3: one retrieval outage, one outcome on both paths ─────────────────
+
+const decomposed = (q: string) => ({ mode: 'DECOMPOSED' as const, effectiveQuery: q, subqueries: ['part one?', 'part two?'], reason: 'DECOMPOSED' as never, llmUsed: true });
+const rerankDown = async (): Promise<QnaChunk[]> => { throw new Error('rerank server down'); };
+const outcomeOf = async (extra: Partial<AskLectureAgentDeps>, opts: { searchResult?: (l: number) => QnaChunk[] } = {}) => {
+  const w = newWorld(); const { deps, spies } = makeDeps({ ...opts, extra });
+  let answer: string | null = null;
+  const err = await inWorld(w, () => rejects(ask(4, deps).then(r => { answer = r.answer; })));
+  const t = spies.traces[0];
+  return { err, answer: answer as string | null, w, spies, status: t?.status, attrs: (t?.attributes ?? {}) as Record<string, unknown> };
+};
+
+cases.push({
+  label: 'D3a. Rerank outage gives the same result on DIRECT and DECOMPOSED: an error (not "not found"), RERANKER_FAILURE, nothing saved',
+  run: async () => {
+    const direct = await outcomeOf({ rerankChunks: rerankDown });
+    const dec = await outcomeOf({ rerankChunks: rerankDown, decomposeQuery: async q => decomposed(q) });
+    const same = (o: typeof direct) => o.err instanceof Error && !(o.err instanceof AppError) && o.answer === null
+      && o.status === 'ERROR' && o.attrs.responseStatus === 'ERROR' && o.attrs.notFoundReason === 'RERANKER_FAILURE'
+      && !kinds(o.w).includes('chat-history-insert') && o.spies.generate.length === 0;
+    return { pass: same(direct) && same(dec) && dec.attrs.failedStage === 'decomposed-retrieval',
+      detail: `direct=${String(direct.attrs.notFoundReason)}/${String(direct.attrs.failedStage)}, decomposed=${String(dec.attrs.notFoundReason)}/${String(dec.attrs.failedStage)}` };
+  },
+});
+
+cases.push({
+  label: 'D3b. Embedding outage on a DECOMPOSED query is an error with EMBEDDING_FAILURE',
+  run: async () => {
+    const dec = await outcomeOf({ generateEmbedding: async () => { throw new Error('embedder down'); }, decomposeQuery: async q => decomposed(q) });
+    return { pass: dec.err instanceof Error && dec.attrs.notFoundReason === 'EMBEDDING_FAILURE' && !kinds(dec.w).includes('chat-history-insert'),
+      detail: `reason=${String(dec.attrs.notFoundReason)}` };
+  },
+});
+
+cases.push({
+  label: 'D3c. A DECOMPOSED query with no evidence (all lookups ran) is still NOT_FOUND, with the observed reason',
+  run: async () => {
+    const dec = await outcomeOf({ decomposeQuery: async q => decomposed(q) }, { searchResult: () => [] });
+    return { pass: dec.err === null && dec.answer === LECTURE_NOT_FOUND_MESSAGE && dec.attrs.responseStatus === 'NOT_FOUND'
+      && dec.attrs.notFoundReason === 'NO_VECTOR_CANDIDATES',
+      detail: `answer=${String(dec.answer).slice(0, 30)}, reason=${String(dec.attrs.notFoundReason)}` };
+  },
+});
+
 async function main(): Promise<void> {
   let failures = 0;
   for (const c of cases) {

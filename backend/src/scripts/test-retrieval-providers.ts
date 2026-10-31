@@ -108,25 +108,40 @@ async function main() {
   cases.push({ label: 'embedding: request bodies, empty batch makes no call, wrong dimensions rejected', run: async () => {
     const calls: { url: string; body: unknown }[] = [];
     stub((url, init) => { calls.push({ url, body: JSON.parse(init?.body ?? '{}') }); 
-      return url.endsWith('/embed_batch') ? json({ embeddings: [new Array(1024).fill(0.1)] }) : json({ embedding: [1, 2] }); });
+      return url.endsWith('/embed_batch') ? json({ embeddings: [new Array(1024).fill(0.1)] }) : json({ embedding: new Array(1024).fill(0.2) }); });
     await emb.generateEmbedding('hello', true);
     const batch = await emb.generateEmbeddingsBatch(['p']);
     const empty = await emb.generateEmbeddingsBatch([]);
     stub(() => json({ embeddings: [[1, 2, 3]] }));
     const bad = await emb.generateEmbeddingsBatch(['p']).catch(e => e as Error) as Error;
+    stub(() => json({ embedding: [1, 2] }));
+    const badSingle = await emb.generateEmbedding('q', true).catch(e => e as Error) as Error;
+    stub(() => json({ embedding: [...new Array(1023).fill(0.1), null] }));
+    const nonFinite = await emb.generateEmbedding('q', true).catch(e => e as Error) as Error;
     return calls.length === 2 && JSON.stringify(calls[0].body) === '{"text":"hello","is_query":true}'
       && JSON.stringify(calls[1].body) === '{"texts":["p"]}' && batch[0].length === 1024 && empty.length === 0
-      && bad instanceof Error && /3-dim vector at index 0; expected 1024/.test(bad.message);
+      && bad instanceof Error && /3-dim vector at index 0; expected 1024/.test(bad.message)
+      && badSingle instanceof Error && /2-dim vector; expected 1024/.test(badSingle.message)
+      && nonFinite instanceof Error && /non-numeric value/.test(nonFinite.message);
   } });
-  cases.push({ label: 'rerank: sends {query, candidates:[{id,text}]}, keeps server order, truncates to topN, attaches scores', run: async () => {
+  cases.push({ label: 'rerank: sends {query, candidates:[{id,text}]}, sorts best-first, truncates to topN, attaches scores', run: async () => {
     let sent: unknown;
-    stub((_u, init) => { sent = JSON.parse(init?.body ?? '{}'); return json({ results: [{ id: 2, score: 0.9 }, { id: 1, score: 0.6 }, { id: 99, score: 0.5 }] }); });
+    stub((_u, init) => { sent = JSON.parse(init?.body ?? '{}'); return json({ results: [{ id: 1, score: 0.6 }, { id: 2, score: 0.9 }] }); });
     const chunks = [{ id: 1, chunk_text: 'one' }, { id: 2, chunk_text: 'two' }] as never[];
     const top = await rr.rerankChunks('q', chunks, 5);
     const top1 = await rr.rerankChunks('q', chunks, 1);
     const none = await rr.rerankChunks('q', []);
     return JSON.stringify(sent) === '{"query":"q","candidates":[{"id":1,"text":"one"},{"id":2,"text":"two"}]}'
-      && top.map(c => c.id).join() === '2,1' && top[0].rerankScore === 0.9 && top1.length === 1 && none.length === 0;
+      && top.map(c => c.id).join() === '2,1' && top[0].rerankScore === 0.9 && top1.length === 1 && top1[0].id === 2 && none.length === 0;
+  } });
+  cases.push({ label: 'rerank: unknown id, duplicate id or non-numeric score is rejected', run: async () => {
+    const chunks = [{ id: 1, chunk_text: 'one' }, { id: 2, chunk_text: 'two' }] as never[];
+    const tryWith = async (results: unknown) => { stub(() => json({ results })); return rr.rerankChunks('q', chunks, 5).catch(e => e as Error); };
+    const unknown = await tryWith([{ id: 2, score: 0.9 }, { id: 99, score: 0.5 }]) as Error;
+    const dup = await tryWith([{ id: 1, score: 0.9 }, { id: 1, score: 0.5 }]) as Error;
+    const nan = await tryWith([{ id: 1, score: 'high' }]) as Error;
+    return /unknown or duplicate candidate id \(99\)/.test(unknown.message) && /duplicate candidate id \(1\)/.test(dup.message)
+      && /non-numeric score/.test(nan.message);
   } });
   cases.push({ label: 'rerank: server error and unreachable surface as errors', run: async () => {
     stub(() => json({}, 500));
