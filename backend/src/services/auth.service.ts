@@ -243,15 +243,17 @@ export const resetPasswordWithOtp = async (
   const user = userRows[0];
   if (!user) throw new AppError('No account found with that email address', 400);
 
-  // Require a token that is verified but not yet used
+  // Require a token that is verified, not yet used, and still inside its
+  // lifetime. verifyOtp does not consume the token, so without the expires_at
+  // predicate a verified token stayed usable for as long as the row existed.
   const { rows: tokenRows } = await query<PasswordResetToken>(
     `SELECT * FROM password_reset_tokens
-     WHERE user_id = $1 AND used = FALSE AND verified = TRUE
+     WHERE user_id = $1 AND used = FALSE AND verified = TRUE AND expires_at > NOW()
      ORDER BY created_at DESC LIMIT 1`,
     [user.id]
   );
   const token = tokenRows[0];
-  if (!token) throw new AppError('OTP not verified. Please complete verification first.', 400);
+  if (!token) throw new AppError('OTP not verified or expired. Please request a new code.', 400);
 
   const password_hash = await hashPassword(newPassword);
 
@@ -259,13 +261,18 @@ export const resetPasswordWithOtp = async (
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    // Consume first and require that this call is the one that flipped it, so
+    // two concurrent resets cannot both spend the same verified token.
+    const consumed = await client.query(
+      'UPDATE password_reset_tokens SET used = TRUE WHERE id = $1 AND used = FALSE',
+      [token.id]
+    );
+    if (consumed.rowCount !== 1) {
+      throw new AppError('OTP not verified or expired. Please request a new code.', 400);
+    }
     await client.query(
       'UPDATE users SET password_hash = $1 WHERE id = $2',
       [password_hash, user.id]
-    );
-    await client.query(
-      'UPDATE password_reset_tokens SET used = TRUE WHERE id = $1',
-      [token.id]
     );
     await client.query(
       'DELETE FROM refresh_tokens WHERE user_id = $1',
