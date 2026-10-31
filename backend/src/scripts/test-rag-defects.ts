@@ -33,7 +33,8 @@ import { logger } from '../utils/logger';
 import pool from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { askLectureAgent, LECTURE_NOT_FOUND_MESSAGE, type AskLectureAgentDeps } from '../services/chat.service';
-import { VERIFICATION_UNAVAILABLE_MESSAGE, repairAddsContent, repairDropsContent } from '../rag/guardrails/output/output-guardrail.service';
+import { VERIFICATION_UNAVAILABLE_MESSAGE } from '../rag/guardrails/output/output-guardrail.service';
+import { FORMAT_REPAIR_CHECK_SYSTEM_PROMPT, FORMAT_REPAIR_CHECK_SCHEMA, parseFormatRepairCheck } from '../rag/guardrails/output/format/response-format-repair-check.service';
 import type { OutputGuardrailResult } from '../rag/guardrails/output/answer-verification.types';
 import type { FinishedTrace } from '../observability/types';
 import { generateLectureSummary, LECTURE_SUMMARY_FAILED_MESSAGE, PARTIAL_SUMMARY_NOTE, buildSummaryBatches, summaryEntryText, MAX_CHARS_PER_BATCH } from '../services/lecture-summary.service';
@@ -645,15 +646,25 @@ cases.push({
   },
 });
 
-// ── S7: a refusal is never "reformatted"; a repair may not add content ──
-// Verification is off here so only the format-repair provider is involved.
-async function formatGuardWith(draftAnswer: string, question: string, repairReply: string) {
+// ── S7 / ST4 / R3 / R4: a format repair is served only if it says the same ──
+// Verification is off here, so the provider sees only the repair call and, for
+// an LLM repair, the check that compares it with the original answer. Both use
+// the same (fake) provider, so `replies` is [repair reply, check reply]. These
+// cases test what is sent and what each verdict does; how well the real model
+// judges a repair is measured by `npm run check:format-repair-live`.
+const SAME = JSON.stringify({ decision: 'SAME', added: [], dropped: [], changed: [] });
+const changedVerdict = (list: 'added' | 'dropped' | 'changed', what: string) =>
+  JSON.stringify({ decision: 'CHANGED', added: [], dropped: [], changed: [], [list]: [what] });
+async function formatGuardWith(draftAnswer: string, question: string, ...replies: Step[]) {
+  if (env.LLM.OUTPUT_FORMAT_REPAIR.PROVIDER !== env.LLM.ANSWER_VERIFICATION.PROVIDER) {
+    throw new Error('format repair and its check must share a provider for this fake');
+  }
   const av = env.ANSWER_VERIFICATION as { ENABLED: boolean };
   const fv = env.OUTPUT_FORMAT_VALIDATION as { ENABLED: boolean; REPAIR_ENABLED: boolean };
   const saved = { av: av.ENABLED, fv: fv.ENABLED, rep: fv.REPAIR_ENABLED };
   av.ENABLED = false; fv.ENABLED = true; fv.REPAIR_ENABLED = true;
   try {
-    return await withFakeLlm(env.LLM.OUTPUT_FORMAT_REPAIR.PROVIDER, [repairReply], () =>
+    return await withFakeLlm(env.LLM.OUTPUT_FORMAT_REPAIR.PROVIDER, replies, () =>
       runOutputGuardrail({
         question, effectiveQuery: question, uncoveredAspects: [], evidenceTexts: ['e'],
         draftAnswer, notFoundMessage: LECTURE_NOT_FOUND_MESSAGE,
@@ -666,33 +677,104 @@ const PROSE = 'Zero-shot prompting gives the model no examples. Few-shot prompti
   + 'Chain-of-thought prompting asks the model to reason step by step before answering.';
 const REFLOW = '- Zero-shot prompting gives the model no examples.\n- Few-shot prompting gives the model a few worked examples.\n'
   + '- Chain-of-thought prompting asks the model to reason step by step before answering.';
+const LIST_Q = 'List the three types of prompting';
+const TABLE_Q = 'Show the types of prompting in a table';
 
 cases.push({
   label: 'S7a. A refusal draft for a LIST question is never sent to format repair (no repair call)',
   run: async () => {
-    const { value: r, requests } = await formatGuardWith(LECTURE_NOT_FOUND_MESSAGE, 'List the three types of prompting', '- invented\n- bullets');
+    const { value: r, requests } = await formatGuardWith(LECTURE_NOT_FOUND_MESSAGE, LIST_Q, '- invented\n- bullets');
     const pass = requests.length === 0 && r.finalAnswer === LECTURE_NOT_FOUND_MESSAGE && r.formatRepairAttempted === false;
     return { pass, detail: `repairCalls=${requests.length}, final="${r.finalAnswer.slice(0, 40)}"` };
   },
 });
 
 cases.push({
-  label: 'S7b. A structurally valid repair that adds a new bullet is rejected (original kept, formatRepairRejected=NEW_CONTENT)',
+  label: 'S7b. An LLM repair is checked before it is served: one call on the verification model, with the check prompt and schema, given the original and the repair',
   run: async () => {
-    const added = `${REFLOW}\n- Self-consistency prompting samples several reasoning paths and takes a majority vote.`;
-    const { value: r, requests } = await formatGuardWith(PROSE, 'List the three types of prompting', added);
-    const pass = requests.length === 1 && r.finalAnswer === PROSE && r.formatRepairRejected === 'NEW_CONTENT'
-      && r.formatRepairSucceeded === false && repairAddsContent(PROSE, added);
-    return { pass, detail: `repairCalls=${requests.length}, rejected=${r.formatRepairRejected}` };
+    const { value: r, requests } = await formatGuardWith(PROSE, LIST_Q, REFLOW, SAME);
+    const check = requests[1];
+    const pass = requests.length === 2 && r.finalAnswer === REFLOW && r.formatRepairSucceeded === true && r.formatRepairRejected === null
+      && check?.model === env.LLM.ANSWER_VERIFICATION.MODEL && check.systemPrompt === FORMAT_REPAIR_CHECK_SYSTEM_PROMPT
+      && check.responseSchema === FORMAT_REPAIR_CHECK_SCHEMA && check.userPrompt.includes(PROSE) && check.userPrompt.includes(REFLOW);
+    return { pass, detail: `calls=${requests.length}, served=${r.formatRepairSucceeded}, checkModel=${check?.model}` };
   },
 });
 
 cases.push({
-  label: 'S7c. A pure reflow (the same sentences turned into bullets) is accepted',
+  label: 'S7c. A repair the check finds an added bullet in is refused (NEW_CONTENT, original kept)',
   run: async () => {
-    const { value: r } = await formatGuardWith(PROSE, 'List the three types of prompting', REFLOW);
-    const pass = r.finalAnswer === REFLOW && r.formatRepairSucceeded === true && r.formatRepairRejected === null && !repairAddsContent(PROSE, REFLOW);
-    return { pass, detail: `succeeded=${r.formatRepairSucceeded}, rejected=${r.formatRepairRejected}` };
+    const added = `${REFLOW}\n- Self-consistency prompting samples several reasoning paths and takes a majority vote.`;
+    const { value: r } = await formatGuardWith(PROSE, LIST_Q, added, changedVerdict('added', 'Self-consistency prompting'));
+    const pass = r.finalAnswer === PROSE && r.formatRepairRejected === 'NEW_CONTENT' && r.formatRepairSucceeded === false;
+    return { pass, detail: `rejected=${r.formatRepairRejected}` };
+  },
+});
+
+cases.push({
+  label: 'ST4. A repair the check finds a cut item in is refused (LOST_CONTENT, original kept)',
+  run: async () => {
+    const cut = '- Zero-shot prompting gives the model no examples.\n- Few-shot prompting gives the model a few worked examples.';
+    const { value: r } = await formatGuardWith(PROSE, LIST_Q, cut, changedVerdict('dropped', 'Chain-of-thought prompting'));
+    return { pass: r.finalAnswer === PROSE && r.formatRepairRejected === 'LOST_CONTENT', detail: `rejected=${r.formatRepairRejected}` };
+  },
+});
+
+cases.push({
+  label: 'R3. Table headers are judged by the check, not by length: a long plain header is served; a header carrying a claim ("Accuracy (%)") is refused',
+  run: async () => {
+    const body = '| Zero-shot | Gives the model no examples |\n| Few-shot | Gives the model a few worked examples |\n'
+      + '| Chain-of-thought | Asks the model to reason step by step before answering |';
+    const plain = `| Prompting technique | What the model is given before it answers |\n|---|---|\n${body}`;
+    const smuggled = '| Technique | Accuracy (%) |\n|---|---|\n| Zero-shot | 61 |\n| Few-shot | 78 |\n| Chain-of-thought | 92 |';
+    const { value: ok } = await formatGuardWith(PROSE, TABLE_Q, plain, SAME);
+    const { value: bad } = await formatGuardWith(PROSE, TABLE_Q, smuggled, changedVerdict('added', 'Accuracy (%) 61/78/92'));
+    const pass = ok.finalAnswer === plain && ok.formatRepairSucceeded === true
+      && bad.finalAnswer === PROSE && bad.formatRepairRejected === 'NEW_CONTENT';
+    return { pass, detail: `plain served=${ok.formatRepairSucceeded}, smuggled → ${bad.formatRepairRejected}` };
+  },
+});
+
+cases.push({
+  label: 'R4. A repair the check finds a flipped statement in (curly "isn’t" → "is") is refused (CHANGED_MEANING, original kept)',
+  run: async () => {
+    const original = 'Zero-shot prompting isn’t given any examples. Few-shot prompting is given a few worked examples. Chain-of-thought prompting asks for step-by-step reasoning.';
+    const flipped = '- Zero-shot prompting is given examples.\n- Few-shot prompting is given a few worked examples.\n- Chain-of-thought prompting asks for step-by-step reasoning.';
+    const { value: r } = await formatGuardWith(original, LIST_Q, flipped, changedVerdict('changed', 'isn’t given → is given'));
+    return { pass: r.finalAnswer === original && r.formatRepairRejected === 'CHANGED_MEANING', detail: `rejected=${r.formatRepairRejected}` };
+  },
+});
+
+cases.push({
+  label: 'R4b. The check cannot run (error, or an unusable reply) → CHECK_FAILED, original kept, no retry',
+  run: async () => {
+    const results = [];
+    for (const reply of [new Error('timeout'), 'not json', JSON.stringify({ decision: 'MAYBE', added: [], dropped: [], changed: [] }), JSON.stringify({ decision: 'SAME' })]) {
+      const { value: r, requests } = await formatGuardWith(PROSE, LIST_Q, REFLOW, reply);
+      results.push({ ok: r.finalAnswer === PROSE && r.formatRepairRejected === 'CHECK_FAILED' && requests.length === 2, rejected: r.formatRepairRejected });
+    }
+    return { pass: results.every(x => x.ok), detail: results.map(x => x.rejected).join(',') };
+  },
+});
+
+cases.push({
+  label: 'R4c. A listed problem rejects even under decision SAME, and CHANGED with nothing listed rejects too',
+  run: async () => {
+    const sameButAdded = parseFormatRepairCheck(JSON.stringify({ decision: 'SAME', added: ['x'], dropped: [], changed: [] }));
+    const changedBare = parseFormatRepairCheck(JSON.stringify({ decision: 'CHANGED', added: [], dropped: [], changed: [] }));
+    const same = parseFormatRepairCheck(SAME);
+    const pass = sameButAdded?.rejected === 'NEW_CONTENT' && changedBare?.rejected === 'CHANGED_MEANING' && same?.rejected === null;
+    return { pass, detail: `${sameButAdded?.rejected}, ${changedBare?.rejected}, ${same?.rejected}` };
+  },
+});
+
+cases.push({
+  label: 'R4d. A deterministic list repair (the answer\'s own "a, b, and c" re-punctuated) is served without a check call',
+  run: async () => {
+    const enumeration = 'The three types of prompting are: zero-shot, few-shot, and chain-of-thought.';
+    const { value: r, requests } = await formatGuardWith(enumeration, LIST_Q, 'unused');
+    const pass = requests.length === 0 && r.formatRepairSucceeded === true && r.finalAnswer.includes('- chain-of-thought');
+    return { pass, detail: `calls=${requests.length}, served=${r.formatRepairSucceeded}` };
   },
 });
 
@@ -1009,92 +1091,6 @@ cases.push({
     // Every format the detector recognises in these asks must also keep the summary route.
     const formatAsks = SUMMARY_FORMAT_TABLE.filter(r => r.summary && detectExpectedResponseFormat(r.q) !== 'NATURAL_TEXT').length;
     return { pass: wrong.length === 0 && formatAsks >= 10, detail: wrong.length ? wrong.map(w => `"${w.q}"→${got[SUMMARY_FORMAT_TABLE.indexOf(w)]}`).join(' | ') : `ok, ${formatAsks} format-named summary asks` };
-  },
-});
-
-// ── ST4: a format repair may not drop part of the answer either ─────────
-cases.push({
-  label: 'ST4. A repair that turns the 3-item answer into a 2-item list is rejected (LOST_CONTENT, original kept); dropping only a lead-in sentence is accepted',
-  run: async () => {
-    const truncated = '- Zero-shot prompting gives the model no examples.\n- Few-shot prompting gives the model a few worked examples.';
-    const { value: cut, requests } = await formatGuardWith(PROSE, 'List the three types of prompting', truncated);
-    const INTRO = `There are three types of prompting. ${PROSE}`;
-    const { value: intro } = await formatGuardWith(INTRO, 'List the three types of prompting', REFLOW);
-    const pass = requests.length === 1 && cut.finalAnswer === PROSE && cut.formatRepairRejected === 'LOST_CONTENT'
-      && cut.formatRepairSucceeded === false && repairDropsContent(PROSE, truncated)
-      && intro.finalAnswer === REFLOW && intro.formatRepairSucceeded === true && !repairDropsContent(PROSE, REFLOW);
-    return { pass, detail: `cut: rejected=${cut.formatRepairRejected}, kept original=${cut.finalAnswer === PROSE}; intro dropped: succeeded=${intro.formatRepairSucceeded}` };
-  },
-});
-
-// ── R3: a table's column headers are not new content ────────────────────
-const TABLE_BODY = '| Zero-shot prompting | Gives the model no examples |\n| Few-shot prompting | Gives the model a few worked examples |\n'
-  + '| Chain-of-thought prompting | Asks the model to reason step by step before answering |';
-const HEADER_PAIRS = [
-  ['Type', 'Description'], ['Metric', 'Definition'], ['Term', 'Meaning'], ['Concept', 'Explanation'], ['Technique', 'How it works'],
-  ['Method', 'Purpose'], ['Feature', 'Details'], ['Name', 'What the model gets'], ['Category', 'Example'], ['Approach', 'Key idea'],
-];
-const asTable = (h: string[], body = TABLE_BODY) => `| ${h.join(' | ')} |\n|---|---|\n${body}`;
-
-cases.push({
-  label: `R3. A table repair is accepted with any of ${HEADER_PAIRS.length} plausible column headers (was 0 of 10); a new row, or a "header" carrying a claim, is still NEW_CONTENT`,
-  run: async () => {
-    const Q = 'Show the types of prompting in a table';
-    const accepted: string[] = [];
-    for (const h of HEADER_PAIRS) {
-      const { value: r } = await formatGuardWith(PROSE, Q, asTable(h));
-      if (r.formatRepairSucceeded && r.finalAnswer === asTable(h)) accepted.push(h.join('/'));
-    }
-    const newRow = asTable(['Type', 'Description'], `${TABLE_BODY}\n| Self-consistency prompting | Samples several reasoning paths and takes a majority vote |`);
-    const { value: row } = await formatGuardWith(PROSE, Q, newRow);
-    const smuggled = asTable(['Type', 'Description, and self-consistency samples several reasoning paths']);
-    const { value: hdr } = await formatGuardWith(PROSE, Q, smuggled);
-    const pass = accepted.length === HEADER_PAIRS.length
-      && row.formatRepairRejected === 'NEW_CONTENT' && row.finalAnswer === PROSE
-      && hdr.formatRepairRejected === 'NEW_CONTENT' && hdr.finalAnswer === PROSE;
-    return { pass, detail: `accepted ${accepted.length}/${HEADER_PAIRS.length}; new row → ${row.formatRepairRejected}; long header → ${hdr.formatRepairRejected}` };
-  },
-});
-
-// ── R4: the lost-content check tells a reflow from a cut ────────────────
-const SEQ = 'The five built-in sequence types in Python are lists, tuples, strings, ranges and bytes.';
-const SEQ_Q = 'List the sequence types in Python';
-const TRAIN = 'To train a model you first collect data, then clean it, then split it into training and test sets, then fit the model, and finally evaluate it on the test set.';
-const TRAIN_Q = 'List the steps to train a model';
-const SHOTS = 'Zero-shot prompting gives no examples. One-shot prompting gives one example. Few-shot prompting gives a few examples. Many-shot prompting gives many examples.';
-const REPAIR_PAIRS: { name: string; original: string; repaired: string; q: string; drops: boolean }[] = [
-  { name: 'sentence → bullets', original: PROSE, repaired: REFLOW, q: 'List the three types of prompting', drops: false },
-  { name: 'lead-in dropped', original: `There are three types of prompting. ${PROSE}`, repaired: REFLOW, q: 'List the three types of prompting', drops: false },
-  { name: '5-item sentence → 5 bare bullets', original: SEQ, repaired: '- Lists\n- Tuples\n- Strings\n- Ranges\n- Bytes', q: SEQ_Q, drops: false },
-  { name: 'steps → numbered list', original: TRAIN, repaired: '1. Collect data\n2. Clean it\n3. Split it into training and test sets\n4. Fit the model\n5. Evaluate it on the test set', q: TRAIN_Q, drops: false },
-  { name: 'table, "prompting" folded into a header', original: PROSE, repaired: '| Prompting | What it does |\n|---|---|\n| Zero-shot | Gives the model no examples |\n| Few-shot | Gives the model a few worked examples |\n| Chain-of-thought | Asks the model to reason step by step before answering |', q: 'Show the types of prompting in a table', drops: false },
-  { name: '3 items → 2', original: PROSE, repaired: '- Zero-shot prompting gives the model no examples.\n- Few-shot prompting gives the model a few worked examples.', q: 'List the three types of prompting', drops: true },
-  { name: '5 items → 3', original: SEQ, repaired: '- Lists\n- Tuples\n- Strings', q: SEQ_Q, drops: true },
-  { name: 'half the items, every distinct word kept', original: SHOTS, repaired: '- Zero-shot prompting gives no examples.\n- One-shot prompting gives one example.', q: 'List the three types of prompting', drops: true },
-  { name: 'one of 5 steps dropped', original: TRAIN, repaired: '1. Collect data\n2. Clean it\n3. Fit the model\n4. Evaluate it on the test set', q: TRAIN_Q, drops: true },
-  { name: 'a qualifying clause dropped', original: 'Supervised learning needs labelled data; its main algorithms are linear regression, decision trees and neural networks.', repaired: '- Linear regression\n- Decision trees\n- Neural networks', q: 'List the supervised learning algorithms', drops: true },
-  { name: 'a negation dropped', original: 'Zero-shot prompting does not give the model examples. Few-shot prompting gives a few worked examples.', repaired: '- Zero-shot prompting does give the model examples.\n- Few-shot prompting gives a few worked examples.', q: 'List the types of prompting', drops: true },
-];
-
-cases.push({
-  label: `R4. Lost-content check on ${REPAIR_PAIRS.length} repairs: reflows that drop only framing words or a lead-in are accepted, cut items / a dropped clause / a lost "not" are LOST_CONTENT`,
-  run: async () => {
-    const wrong = REPAIR_PAIRS.filter(p => repairDropsContent(p.original, p.repaired, p.q) !== p.drops).map(p => p.name);
-    // End to end: the bare-bullet repair that was rejected at 0.5 is now served.
-    const { value: bullets } = await formatGuardWith(SEQ, SEQ_Q, REPAIR_PAIRS[2].repaired);
-    const { value: cut } = await formatGuardWith(SHOTS, 'List the three types of prompting', REPAIR_PAIRS[7].repaired);
-    const pass = wrong.length === 0 && bullets.formatRepairSucceeded === true && bullets.finalAnswer === REPAIR_PAIRS[2].repaired
-      && cut.formatRepairRejected === 'LOST_CONTENT' && cut.finalAnswer === SHOTS;
-    return { pass, detail: `misjudged=[${wrong.join(' | ')}], bullets served=${bullets.formatRepairSucceeded}, half-cut → ${cut.formatRepairRejected}` };
-  },
-});
-
-cases.push({
-  label: 'R4b. A repair that adds a negation ("gives" → "does not give") is NEW_CONTENT even though "not" is too short to count as a word',
-  run: async () => {
-    const flipped = '- Zero-shot prompting does not give the model examples.\n- Few-shot prompting gives the model a few worked examples.\n- Chain-of-thought prompting asks the model to reason step by step before answering.';
-    const { value: r } = await formatGuardWith(PROSE, 'List the three types of prompting', flipped);
-    return { pass: r.formatRepairRejected === 'NEW_CONTENT' && r.finalAnswer === PROSE, detail: `rejected=${r.formatRepairRejected}` };
   },
 });
 

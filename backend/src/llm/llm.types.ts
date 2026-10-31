@@ -75,4 +75,5 @@ export type LlmOperationType =
   | 'ANSWER_VERIFICATION'
   | 'ANSWER_REVISION'
   | 'FORMAT_REPAIR'
+  | 'FORMAT_REPAIR_CHECK'
   | 'GREETING_RESPONSE';

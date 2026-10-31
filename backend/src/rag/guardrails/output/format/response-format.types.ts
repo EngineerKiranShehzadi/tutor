@@ -26,8 +26,17 @@ export interface ResponseFormatValidationResult {
 
 // response-format-repair.service.ts's outcome — never throws, a failed
 // repair just means the caller keeps the original (already grounded, just
-// not restructured) answer instead.
+// not restructured) answer instead. `method` says how the repair was made:
+// DETERMINISTIC only re-punctuates the answer's own enumeration (no word is
+// added or removed), LLM is a rewrite that must be checked before it is served.
 export interface ResponseFormatRepairOutcome {
   ok: boolean;
   repairedAnswer?: string;
+  method?: 'DETERMINISTIC' | 'LLM';
 }
+
+// Why a structurally valid repair was not served (the original answer is sent
+// instead), from response-format-repair-check.service.ts: the rewrite added
+// something, left something out, or changed what a statement says — or the
+// check could not run, so the rewrite is unchecked.
+export type FormatRepairRejection = 'NEW_CONTENT' | 'LOST_CONTENT' | 'CHANGED_MEANING' | 'CHECK_FAILED';

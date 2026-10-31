@@ -4,8 +4,9 @@ import { logger } from '../../../utils/logger';
 import { verifyAnswerGroundedness } from './answer-groundedness-verifier.service';
 import { reviseAnswer } from './answer-revision.service';
 import { detectExpectedResponseFormat } from './format/response-format.detector';
-import { validateResponseFormat, tableHeaderRows } from './format/response-format.guard';
+import { validateResponseFormat } from './format/response-format.guard';
 import { repairResponseFormat } from './format/response-format-repair.service';
+import { checkFormatRepair } from './format/response-format-repair-check.service';
 import { detectOutputPiiLeakage } from './pii/output-pii-leakage.guard';
 import type { ExpectedResponseFormat } from './format/response-format.types';
 import type { OutputGuardrailResult, OutputGuardrailReason, AnswerVerificationDecision } from './answer-verification.types';
@@ -106,84 +107,6 @@ function buildResult(args: {
   };
 }
 
-// A format repair is a rewrite nobody verified against the evidence, so it may
-// only rearrange the answer, not add to it: lowercase words of 4+ letters
-// (markdown/punctuation stripped), and more than this share of the repaired
-// text's words missing from the original rejects it.
-export const MAX_REPAIR_NEW_WORD_RATIO = 0.05;
-const contentWords = (text: string): string[] =>
-  text.toLowerCase().replace(/[^\p{L}\s]/gu, ' ').split(/\s+/).filter(w => w.length >= 4);
-// A table's header row names its columns ("Type | Description", "Metric |
-// Definition"): labels the repair has to make up, not claims. A header whose
-// cells are all this short is left out of the count; a longer one is counted
-// like any other text, so it cannot carry new content.
-export const MAX_HEADER_CELL_WORDS = 4;
-function withoutTableHeaders(text: string): string {
-  let out = text;
-  for (const row of tableHeaderRows(text)) {
-    const cells = row.split('|').map(c => c.trim()).filter(Boolean);
-    if (cells.every(c => c.split(/\s+/).length <= MAX_HEADER_CELL_WORDS)) out = out.replace(row, '');
-  }
-  return out;
-}
-// Negations are shorter than 4 letters ("not", "no", "n't") or easy to lose,
-// and one more or one fewer reverses a claim, so they are counted on their own.
-const NEGATION = /\b(?:not|no|never|none|nor|neither|cannot|without)\b|n't\b/gi;
-const negations = (text: string): number => (text.match(NEGATION) ?? []).length;
-
-export function repairAddsContent(original: string, repaired: string): boolean {
-  if (negations(repaired) > negations(original)) return true;
-  const known = new Set(contentWords(original));
-  const words = contentWords(withoutTableHeaders(repaired));
-  if (words.length === 0) return false;
-  const novel = words.filter(w => !known.has(w)).length;
-  return novel / words.length > MAX_REPAIR_NEW_WORD_RATIO;
-}
-
-// The other direction: nor may a repair drop part of the answer. Groundedness
-// was checked on the draft, so a repair that turns a verified five-item answer
-// into a two-item list would still be served as verified — and cached.
-//
-// Measured on the original's content words, leaving out the words a reflow
-// legitimately drops: the ones that frame an enumeration or join its items
-// ("There are three types of…", "the following", "then", "finally"), and the
-// student's own question words, which a lead-in repeats. Two limits, both
-// needed: the share of distinct words lost catches a dropped item with words
-// of its own; the share of mentions lost catches dropped items whose words
-// also occur in the items kept ("One-shot gives one example. Few-shot gives a
-// few examples."), which keep every distinct word. A lost negation rejects too.
-export const MAX_REPAIR_LOST_WORD_RATIO = 0.2;
-export const MAX_REPAIR_LOST_MENTION_RATIO = 0.25;
-const FRAMING_WORDS = new Set([
-  'there', 'here', 'these', 'those', 'this', 'that', 'they', 'them', 'their', 'with', 'which', 'what', 'when', 'where',
-  'from', 'have', 'into', 'also', 'each', 'such', 'main', 'several', 'various', 'different', 'following', 'below',
-  'above', 'include', 'includes', 'including', 'type', 'types', 'kind', 'kinds', 'ways', 'form', 'forms',
-  'category', 'categories', 'list', 'listed', 'item', 'items', 'step', 'steps', 'three', 'four', 'five', 'seven',
-  'eight', 'nine', 'eleven', 'twelve', 'first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'then', 'next',
-  'finally', 'firstly', 'secondly', 'thirdly', 'lastly',
-]);
-const tally = (words: string[]): Map<string, number> => {
-  const m = new Map<string, number>();
-  for (const w of words) m.set(w, (m.get(w) ?? 0) + 1);
-  return m;
-};
-export function repairDropsContent(original: string, repaired: string, question = ''): boolean {
-  if (negations(original) > negations(repaired)) return true;
-  const asked = new Set(contentWords(question));
-  const before = tally(contentWords(original).filter(w => !FRAMING_WORDS.has(w) && !asked.has(w)));
-  if (before.size === 0) return false;
-  const after = tally(contentWords(repaired));
-  let lostWords = 0, lostMentions = 0, mentions = 0;
-  for (const [w, n] of before) {
-    const kept = after.get(w) ?? 0;
-    if (kept === 0) lostWords++;
-    lostMentions += Math.max(0, n - kept);
-    mentions += n;
-  }
-  return lostWords / before.size > MAX_REPAIR_LOST_WORD_RATIO
-    || lostMentions / mentions > MAX_REPAIR_LOST_MENTION_RATIO;
-}
-
 // Runs after the groundedness/revision stage above has already decided
 // finalAnswer — see this file's module doc for the full target flow.
 // Deliberately independent of ANSWER_VERIFICATION.ENABLED: format and PII
@@ -240,22 +163,32 @@ async function applyFormatAndPiiGuards(
         // produced the requested structure; otherwise keep the original
         // grounded (just unrestructured) answer rather than risk an
         // empty/malformed repair reaching the student.
-        // A structurally valid repair is also refused when it adds content —
-        // invented bullets would reach the student unverified — or drops it.
+        // The groundedness check above judged the original, not this
+        // rewrite, so an LLM rewrite is served only after one more call
+        // confirms it says the same thing: nothing added (an invented bullet
+        // or header), nothing left out (a cut item), no statement changed (a
+        // lost "not"). If that call fails, the rewrite is unchecked and the
+        // original is kept. A deterministic repair only re-punctuates the
+        // answer's own enumeration, so it needs no check.
         const structurallyValid = repair.ok && !!repair.repairedAnswer
           && validateResponseFormat(expectedFormat, repair.repairedAnswer).valid;
-        if (structurallyValid && repairAddsContent(finalAnswer, repair.repairedAnswer!)) {
-          formatRepairRejected = 'NEW_CONTENT';
-          logger.warn('[OUTPUT-GUARDRAIL] ⚠️  Format repair added content not in the answer — keeping original grounded answer');
-        } else if (structurallyValid && repairDropsContent(finalAnswer, repair.repairedAnswer!, effectiveQuery)) {
-          formatRepairRejected = 'LOST_CONTENT';
-          logger.warn('[OUTPUT-GUARDRAIL] ⚠️  Format repair dropped part of the answer — keeping original grounded answer');
-        } else if (structurallyValid) {
-          finalAnswer = repair.repairedAnswer!;
-          formatValid = true;
-          formatRepairSucceeded = true;
-        } else {
+        if (!structurallyValid) {
           logger.warn('[OUTPUT-GUARDRAIL] ⚠️  Format repair did not produce a valid structure — keeping original grounded answer');
+        } else {
+          const check = repair.method === 'DETERMINISTIC'
+            ? null
+            : await checkFormatRepair(expectedFormat, finalAnswer, repair.repairedAnswer!);
+          if (check && !check.ok) {
+            formatRepairRejected = 'CHECK_FAILED';
+            logger.warn('[OUTPUT-GUARDRAIL] ⚠️  Format repair could not be checked — keeping original grounded answer');
+          } else if (check && check.verdict.rejected) {
+            formatRepairRejected = check.verdict.rejected;
+            logger.warn(`[OUTPUT-GUARDRAIL] ⚠️  Format repair rejected (${check.verdict.rejected}: ${check.verdict.added.length} added, ${check.verdict.dropped.length} dropped, ${check.verdict.changed.length} changed) — keeping original grounded answer`);
+          } else {
+            finalAnswer = repair.repairedAnswer!;
+            formatValid = true;
+            formatRepairSucceeded = true;
+          }
         }
       }
     }

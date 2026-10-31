@@ -24,7 +24,8 @@ export interface RequestLogRow {
   // Set when memory was skipped on purpose ('PII_MASKED'); see chat.service.ts.
   memorySkipReason: string | null;
   answerVerificationReason: string | null;
-  // NEW_CONTENT / LOST_CONTENT when a requested list/table reformat was refused.
+  // NEW_CONTENT / LOST_CONTENT / CHANGED_MEANING / CHECK_FAILED when a
+  // requested list/table reformat was refused (see FormatRepairRejection).
   formatRepairRejected: string | null;
   totalMs: number;
   stageMs: Record<string, number>;

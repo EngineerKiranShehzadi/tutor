@@ -20,6 +20,7 @@
     "eval:reorder-comparison": "ts-node --transpile-only src/scripts/eval-reorder-comparison.ts",
     "eval:dedup-comparison": "ts-node --transpile-only src/scripts/eval-dedup-comparison.ts",
     "test:judge-discrimination": "ts-node --transpile-only src/scripts/test-judge-discrimination.ts",
+    "check:format-repair-live": "ts-node --transpile-only src/scripts/check-format-repair-live.ts",
     "test:query-rewriter": "ts-node --transpile-only src/scripts/test-query-rewriter.ts",
     "test:query-router": "ts-node --transpile-only src/scripts/test-query-router.ts",
     "test:rag-answer-memory": "ts-node --transpile-only src/scripts/test-rag-answer-memory.ts",

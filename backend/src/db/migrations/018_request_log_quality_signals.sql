@@ -10,8 +10,9 @@
 --
 -- format_repair_rejected: the student asked for a list or table, the answer
 -- was reformatted, and the reformat was refused because it added content
--- ('NEW_CONTENT') or dropped some ('LOST_CONTENT') — they got the answer as
--- plain text. NULL otherwise.
+-- ('NEW_CONTENT'), dropped some ('LOST_CONTENT'), changed what a statement
+-- says ('CHANGED_MEANING'), or could not be checked ('CHECK_FAILED') — they
+-- got the answer as plain text. NULL otherwise.
 --
 -- Additive and idempotent: two nullable columns, nothing rewritten or backfilled.
 

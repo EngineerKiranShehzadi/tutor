@@ -7,7 +7,9 @@ import type { ExpectedResponseFormat, ResponseFormatRepairOutcome } from './resp
 // Only reformats an already-grounded answer into the requested structure —
 // never re-runs retrieval, never changes factual content, never introduces
 // new information. Bounded to exactly one attempt; the caller
-// (output-guardrail.service.ts) never loops this.
+// (output-guardrail.service.ts) never loops this. An LLM repair is a rewrite
+// nobody has checked, so the caller compares it with the original
+// (response-format-repair-check.service.ts) before serving it.
 
 // ── Deterministic path (LIST only) ──────────────────────────────────────
 // Handles the common case where the grounded generator already produced an
@@ -94,7 +96,7 @@ async function repairWithLlm(expectedFormat: ExpectedResponseFormat, answer: str
       logger.warn('[RESPONSE-FORMAT] ⚠️  Format repair call returned an empty answer');
       return { ok: false };
     }
-    return { ok: true, repairedAnswer };
+    return { ok: true, repairedAnswer, method: 'LLM' };
   } catch (err) {
     logger.warn(`[RESPONSE-FORMAT] ⚠️  Format repair call failed: ${(err as Error).message}`);
     return { ok: false };
@@ -110,7 +112,7 @@ export async function repairResponseFormat(
 ): Promise<ResponseFormatRepairOutcome> {
   if (expectedFormat === 'LIST') {
     const deterministic = attemptDeterministicListRepair(answer);
-    if (deterministic) return { ok: true, repairedAnswer: deterministic };
+    if (deterministic) return { ok: true, repairedAnswer: deterministic, method: 'DETERMINISTIC' };
   }
 
   return repairWithLlm(expectedFormat, answer);

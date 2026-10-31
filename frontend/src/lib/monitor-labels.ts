@@ -90,6 +90,8 @@ export const VERIFIER_REASON_LABELS: Record<string, string> = {
 export const FORMAT_REJECTED_LABELS: Record<string, string> = {
   NEW_CONTENT: 'Sent as plain text: reformatting added content',
   LOST_CONTENT: 'Sent as plain text: reformatting dropped content',
+  CHANGED_MEANING: 'Sent as plain text: reformatting changed the meaning',
+  CHECK_FAILED: 'Sent as plain text: reformatting could not be checked',
 };
 
 export const ATTENTION_REASON_LABELS: Record<string, string> = {

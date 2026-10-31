@@ -1,4 +1,4 @@
-import type { ExpectedResponseFormat } from './format/response-format.types';
+import type { ExpectedResponseFormat, FormatRepairRejection } from './format/response-format.types';
 import type { PiiCategory } from '../shared/pii/pii.types';
 
 // Post-generation groundedness verification — the output-side counterpart
@@ -107,11 +107,11 @@ export interface OutputGuardrailResult {
   formatValid: boolean;
   formatRepairAttempted: boolean;
   formatRepairSucceeded: boolean;
-  // Set when a structurally valid repair was refused because it added words
-  // the original answer didn't contain (it was never verified against the
-  // evidence) — NEW_CONTENT — or left out part of it — LOST_CONTENT. The
-  // original answer is kept either way.
-  formatRepairRejected: 'NEW_CONTENT' | 'LOST_CONTENT' | null;
+  // Set when a structurally valid LLM repair was refused after comparing it
+  // with the original answer: it added something (NEW_CONTENT), left something
+  // out (LOST_CONTENT) or changed what a statement says (CHANGED_MEANING), or
+  // the comparison could not run (CHECK_FAILED). The original answer is kept.
+  formatRepairRejected: FormatRepairRejection | null;
 
   // ── Output PII Leakage Detection ────────────────────────────────────
   // Never the actual detected value(s) — only category labels, same
