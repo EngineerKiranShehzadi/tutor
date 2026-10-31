@@ -1,8 +1,8 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { downloadCsv } from '@/lib/csv';
 import { useRouter } from 'next/navigation';
-import { useQuery, useMutation } from '@apollo/client';
+import { useApolloClient, useQuery, useMutation } from '@apollo/client';
 import { cn } from '@/lib/cn';
 import { GET_REGISTERED_STUDENTS } from '@/graphql/analytics.queries';
 import { DELETE_USER_MUTATION } from '@/graphql/admin.mutations';
@@ -19,6 +19,14 @@ interface Student {
 
 const COLORS = ['bg-blue-100 text-blue-700','bg-violet-100 text-violet-700','bg-emerald-100 text-emerald-700','bg-amber-100 text-amber-700','bg-rose-100 text-rose-700','bg-indigo-100 text-indigo-700'];
 const PAGE_SIZE = 10;
+// Export pages through the same server API, 100 rows at a time (AD6).
+const EXPORT_PAGE = 100;
+const EXPORT_MAX = 20_000;
+
+interface StudentPage {
+  items: Student[]; total: number; hasMore: boolean;
+  totalStudents: number; activeCount: number; inactiveCount: number;
+}
 
 const STATUS_CONFIG = {
   ACTIVE:   { label: 'Active',   dot: 'bg-emerald-400', text: 'text-emerald-700', bg: 'bg-emerald-50', border: 'border-emerald-200' },
@@ -36,28 +44,60 @@ function exportCSV(students: Student[]) {
 
 export default function AdminStudents() {
   const router = useRouter();
-  const { data, loading, refetch } = useQuery(GET_REGISTERED_STUDENTS, { fetchPolicy: 'network-only' });
+  const client = useApolloClient();
   const [deleteUser] = useMutation(DELETE_USER_MUTATION);
 
+  const [searchInput,  setSearchInput]  = useState('');
   const [search,       setSearch]       = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [page,         setPage]         = useState(1);
   const [deleteId,     setDeleteId]     = useState<string | null>(null);
   const [deleteError,  setDeleteError]  = useState('');
+  const [exporting,    setExporting]    = useState(false);
 
-  const allStudents: Student[] = data?.registeredStudents ?? [];
+  // Search and the status filter run on the server; wait for a pause in typing.
+  useEffect(() => {
+    const t = setTimeout(() => { setSearch(searchInput.trim()); setPage(1); }, 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
 
-  const activeCount   = allStudents.filter(s => s.status === 'ACTIVE').length;
-  const inactiveCount = allStudents.filter(s => s.status === 'INACTIVE').length;
-
-  const filtered = allStudents.filter(s => {
-    const matchSearch = !search || s.name.toLowerCase().includes(search.toLowerCase()) || s.email.toLowerCase().includes(search.toLowerCase());
-    const matchStatus = statusFilter === 'ALL' || s.status === statusFilter;
-    return matchSearch && matchStatus;
+  const filters = { search: search || null, status: statusFilter === 'ALL' ? null : statusFilter };
+  const { data, loading, refetch } = useQuery<{ registeredStudents: StudentPage }>(GET_REGISTERED_STUDENTS, {
+    variables: { limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE, ...filters },
+    fetchPolicy: 'network-only',
   });
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const result        = data?.registeredStudents;
+  const paged         = result?.items ?? [];
+  const total         = result?.total ?? 0;
+  const totalStudents = result?.totalStudents ?? 0;
+  const activeCount   = result?.activeCount ?? 0;
+  const inactiveCount = result?.inactiveCount ?? 0;
+  const totalPages    = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  // Deleting the only row on the last page leaves `page` past the end.
+  useEffect(() => { if (result && page > totalPages) setPage(totalPages); }, [result, page, totalPages]);
+
+  // Every student matching the current filters, fetched page by page.
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const all: Student[] = [];
+      for (let offset = 0; offset < EXPORT_MAX; offset += EXPORT_PAGE) {
+        const { data: d } = await client.query<{ registeredStudents: StudentPage }>({
+          query: GET_REGISTERED_STUDENTS,
+          variables: { limit: EXPORT_PAGE, offset, ...filters },
+          fetchPolicy: 'network-only',
+        });
+        all.push(...d.registeredStudents.items);
+        if (!d.registeredStudents.hasMore) break;
+      }
+      exportCSV(all);
+    } catch {
+      setDeleteError('Export failed. Please try again.');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const handleDelete = async (id: string) => {
     if (deleteId !== id) { setDeleteId(id); setDeleteError(''); return; }
@@ -76,14 +116,14 @@ export default function AdminStudents() {
         icon="fas fa-user-graduate"
         iconGradient="from-emerald-500 to-teal-600"
         title="Students"
-        subtitle={loading ? 'Loading…' : `${allStudents.length} registered student${allStudents.length !== 1 ? 's' : ''} · ${activeCount} active`}
+        subtitle={loading && !data ? 'Loading…' : `${totalStudents} registered student${totalStudents !== 1 ? 's' : ''} · ${activeCount} active`}
         action={
           <button
-            onClick={() => exportCSV(filtered)}
-            disabled={loading || filtered.length === 0}
+            onClick={() => { void handleExport(); }}
+            disabled={loading || exporting || total === 0}
             className="flex items-center gap-2 px-4 py-2.5 bg-white/15 text-white border border-white/25 backdrop-blur-sm rounded-xl text-[14px] font-semibold hover:bg-white/25 transition-all disabled:opacity-40"
           >
-            <i className="fas fa-download text-[12px]" /> Export CSV
+            <i className={`fas ${exporting ? 'fa-spinner fa-spin' : 'fa-download'} text-[12px]`} /> {exporting ? 'Exporting…' : 'Export CSV'}
           </button>
         }
       />
@@ -97,10 +137,10 @@ export default function AdminStudents() {
       )}
 
       {/* Status summary cards */}
-      {!loading && (
+      {!(loading && !data) && (
         <div className="grid grid-cols-3 gap-4 mb-6">
           {[
-            { label: 'Total Students', value: allStudents.length, icon: 'fas fa-users',      bg: 'bg-blue-600'    },
+            { label: 'Total Students', value: totalStudents,      icon: 'fas fa-users',      bg: 'bg-blue-600'    },
             { label: 'Active',         value: activeCount,        icon: 'fas fa-bolt',        bg: 'bg-emerald-600' },
             { label: 'Inactive',       value: inactiveCount,      icon: 'fas fa-user-clock',  bg: 'bg-slate-500'   },
           ].map(c => (
@@ -122,8 +162,8 @@ export default function AdminStudents() {
         <div className="flex-1 relative">
           <i className="fas fa-search absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-[13px]" />
           <input
-            value={search}
-            onChange={e => { setSearch(e.target.value); setPage(1); }}
+            value={searchInput}
+            onChange={e => setSearchInput(e.target.value)}
             placeholder="Search by name or email…"
             className="w-full pl-9 pr-4 py-3 bg-white border border-slate-200 rounded-xl text-[14px] text-slate-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all"
           />
@@ -139,7 +179,7 @@ export default function AdminStudents() {
         </select>
       </div>
 
-      {loading ? (
+      {loading && !data ? (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
           {[1,2,3,4,5].map(i => (
             <div key={i} className="flex items-center gap-4 px-6 py-4 border-b border-slate-100 last:border-0">
@@ -150,7 +190,7 @@ export default function AdminStudents() {
             </div>
           ))}
         </div>
-      ) : filtered.length === 0 ? (
+      ) : paged.length === 0 ? (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col items-center justify-center py-20 text-slate-400">
           <div className="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center mb-4">
             <i className="fas fa-users text-2xl text-slate-400" />
@@ -249,7 +289,7 @@ export default function AdminStudents() {
 
           {/* Footer */}
           <div className="px-6 py-3.5 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between">
-            <span className="text-[13px] text-slate-400">{filtered.length} student{filtered.length !== 1 ? 's' : ''}</span>
+            <span className="text-[13px] text-slate-400">{total} student{total !== 1 ? 's' : ''}</span>
             {totalPages > 1 && (
               <div className="flex items-center gap-1.5">
                 <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}

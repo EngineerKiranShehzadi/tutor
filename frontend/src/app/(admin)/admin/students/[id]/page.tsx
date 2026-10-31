@@ -1,6 +1,7 @@
 'use client';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useQuery } from '@apollo/client';
+import { useApolloClient, useQuery } from '@apollo/client';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Cell,
@@ -13,9 +14,13 @@ interface StudentJourney {
   studentId: string; studentName: string; studentEmail: string;
   status: string; questionCount: number; lecturesEngaged: number;
   joinedAt: string; firstActivity: string | null; lastActivity: string | null;
-  questions: JourneyQuestion[];
+  questions: JourneyQuestion[];   // one page; questionCount is the total
+  hasMoreQuestions: boolean;
   byLecture: LectureEngagement[];
 }
+
+// The question list is served a page at a time (AD6); "Load more" appends.
+const QUESTIONS_PAGE = 25;
 
 const AVATAR_COLORS = ['bg-blue-100 text-blue-700','bg-violet-100 text-violet-700','bg-emerald-100 text-emerald-700','bg-amber-100 text-amber-700','bg-rose-100 text-rose-700','bg-indigo-100 text-indigo-700'];
 const BAR_COLORS = ['#6366f1','#8b5cf6','#06b6d4','#10b981','#f59e0b','#ef4444'];
@@ -27,12 +32,35 @@ function Skeleton({ className }: { className?: string }) {
 export default function StudentJourneyPage({ params }: { params: { id: string } }) {
   const { id } = params;
   const router = useRouter();
+  const client = useApolloClient();
   const { data, loading, error } = useQuery(GET_STUDENT_JOURNEY, {
-    variables: { id },
+    variables: { id, limit: QUESTIONS_PAGE, offset: 0 },
     fetchPolicy: 'network-only',
   });
 
   const journey: StudentJourney | undefined = data?.studentJourney;
+  const [moreQuestions, setMoreQuestions] = useState<JourneyQuestion[]>([]);
+  const [moreHasMore,   setMoreHasMore]   = useState<boolean | null>(null);
+  const [loadingMore,   setLoadingMore]   = useState(false);
+  const questions = [...(journey?.questions ?? []), ...moreQuestions];
+  const canLoadMore = moreHasMore ?? journey?.hasMoreQuestions ?? false;
+
+  const loadMore = async () => {
+    setLoadingMore(true);
+    try {
+      const { data: d } = await client.query<{ studentJourney: StudentJourney }>({
+        query: GET_STUDENT_JOURNEY,
+        variables: { id, limit: QUESTIONS_PAGE, offset: questions.length },
+        fetchPolicy: 'network-only',
+      });
+      setMoreQuestions(prev => [...prev, ...d.studentJourney.questions]);
+      setMoreHasMore(d.studentJourney.hasMoreQuestions);
+    } catch {
+      setMoreHasMore(false);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
   const avatarColor = AVATAR_COLORS[0];
 
   if (error) return (
@@ -172,13 +200,15 @@ export default function StudentJourneyPage({ params }: { params: { id: string } 
 
           {/* Questions list */}
           <div className="col-span-3 bg-white rounded-2xl border border-slate-200 shadow-sm p-5 flex flex-col">
-            <h2 className="text-[16px] font-bold text-slate-800 mb-0.5">All Questions</h2>
+            <h2 className="text-[16px] font-bold text-slate-800 mb-0.5">
+              Questions{journey ? ` (${questions.length} of ${journey.questionCount})` : ''}
+            </h2>
             <p className="text-[12px] text-slate-400 mb-4">Chronological interaction history</p>
             {loading ? (
               <div className="space-y-3">{[1,2,3,4].map(i => <Skeleton key={i} className="h-16 w-full" />)}</div>
             ) : journey && (
               <div className="flex flex-col gap-2.5 overflow-y-auto" style={{ maxHeight: 360 }}>
-                {journey.questions.map((q, i) => (
+                {questions.map((q, i) => (
                   <div key={q.id} className="p-3.5 rounded-xl bg-slate-50 border border-slate-100 hover:border-slate-200 transition-colors">
                     <div className="flex items-center gap-2 mb-1.5">
                       <span className="text-[10px] font-bold text-slate-400 tabular-nums">#{i + 1}</span>
@@ -192,6 +222,15 @@ export default function StudentJourneyPage({ params }: { params: { id: string } 
                     <p className="text-[14px] text-slate-700 leading-relaxed line-clamp-2">{q.question}</p>
                   </div>
                 ))}
+                {canLoadMore && (
+                  <button
+                    onClick={() => { void loadMore(); }}
+                    disabled={loadingMore}
+                    className="self-center mt-1 px-4 py-2 rounded-lg bg-indigo-50 text-indigo-700 text-[13px] font-semibold border border-indigo-100 hover:bg-indigo-100 disabled:opacity-50"
+                  >
+                    {loadingMore ? 'Loading…' : 'Load more'}
+                  </button>
+                )}
               </div>
             )}
           </div>

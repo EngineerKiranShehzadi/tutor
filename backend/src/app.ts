@@ -3,7 +3,7 @@ import helmet from 'helmet';
 import cors from 'cors';
 import morgan from 'morgan';
 import cookieParser from 'cookie-parser';
-import { globalLimiter } from './middleware/rateLimiter';
+import { globalLimiter, userLimiter } from './middleware/rateLimiter';
 import { errorHandler } from './middleware/errorHandler';
 import { env } from './config/env';
 import routes from './routes';
@@ -24,6 +24,8 @@ export const createApp = async (): Promise<Express> => {
     origin:      env.FRONTEND_URL,
     credentials: true,
     methods:     ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    // Lets the cross-origin frontend read how long to back off after a 429.
+    exposedHeaders: ['Retry-After'],
   }));
 
   // ── Parsing & Logging ─────────────────────────────────
@@ -33,11 +35,12 @@ export const createApp = async (): Promise<Express> => {
   app.use(morgan(env.NODE_ENV === 'production' ? 'combined' : 'dev'));
   logger.info(`[APP] Morgan HTTP logger active (format=${env.NODE_ENV === 'production' ? 'combined' : 'dev'})`);
 
-  // ── REST Routes (global per-IP limiter applies only here) ────
-  // /graphql is not behind it. Its expensive and sensitive mutations limit
+  // ── REST Routes (rate limits apply only here) ────────
+  // Anonymous requests: per IP (globalLimiter). Requests with a valid access
+  // token: per user (userLimiter). /graphql is not behind them. Its expensive and sensitive mutations limit
   // themselves: askLectureAgent per student (services/ask-quota.service.ts,
   // shared with /chat/ask-stream), the auth mutations per IP (auth.resolver.ts).
-  app.use('/api/v1', globalLimiter, routes);
+  app.use('/api/v1', globalLimiter, userLimiter, routes);
   logger.info('[APP] REST routes mounted at /api/v1');
 
   // ── GraphQL (/graphql) ────────────────────────────────

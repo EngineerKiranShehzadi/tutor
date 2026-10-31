@@ -53,6 +53,17 @@ function conservativeFallback(params: OutputGuardrailParams): string {
   return `${base} I also couldn't retrieve part of this right now (${unavailable.join('; ')}) — please ask again in a moment.`;
 }
 
+// Outcomes where the verifier could not reach a verdict at all. Failing
+// closed on these must not claim the lecture lacks the topic (retrieval
+// already found evidence above both floors), so they carry
+// verificationUnavailable and chat.service.ts turns them into a 503.
+const VERIFIER_INFRA_FAILURES: ReadonlySet<OutputGuardrailReason> = new Set<OutputGuardrailReason>([
+  'VERIFIER_TIMEOUT', 'VERIFIER_PROVIDER_ERROR', 'VERIFIER_INVALID_OUTPUT',
+  'REVISION_FAILED', 'FINAL_VERIFICATION_FAILED',
+]);
+export const VERIFICATION_UNAVAILABLE_MESSAGE =
+  "I couldn't check this answer against the lecture right now. Please ask again in a moment.";
+
 // Parts the verifier/revision must treat as "do not answer": the ones not in
 // the lecture and the ones that couldn't be looked up.
 const aspectsNotToAnswer = (params: OutputGuardrailParams): string[] =>
@@ -67,6 +78,7 @@ function buildResult(args: {
   revisionSucceeded: boolean;
   unsupportedClaimCount?: number;
   missingAspectCount?: number;
+  verificationUnavailable?: boolean;
 }): OutputGuardrailResult {
   return {
     finalAnswer: args.finalAnswer,
@@ -75,6 +87,8 @@ function buildResult(args: {
     reason: args.reason,
     revisionAttempted: args.revisionAttempted,
     revisionSucceeded: args.revisionSucceeded,
+    // Only ever true for an infra reason, whatever a caller passes.
+    verificationUnavailable: args.verificationUnavailable === true && VERIFIER_INFRA_FAILURES.has(args.reason),
     unsupportedClaimCount: args.unsupportedClaimCount ?? 0,
     missingAspectCount: args.missingAspectCount ?? 0,
     // Overwritten by applyFormatAndPiiGuards() below once the groundedness
@@ -86,9 +100,25 @@ function buildResult(args: {
     formatValid: true,
     formatRepairAttempted: false,
     formatRepairSucceeded: false,
+    formatRepairRejected: null,
     piiDetected: false,
     piiCategories: [],
   };
+}
+
+// A format repair is a rewrite nobody verified against the evidence, so it may
+// only rearrange the answer, not add to it: lowercase words of 4+ letters
+// (markdown/punctuation stripped), and more than this share of the repaired
+// text's words missing from the original rejects it.
+export const MAX_REPAIR_NEW_WORD_RATIO = 0.05;
+const contentWords = (text: string): string[] =>
+  text.toLowerCase().replace(/[^\p{L}\s]/gu, ' ').split(/\s+/).filter(w => w.length >= 4);
+export function repairAddsContent(original: string, repaired: string): boolean {
+  const known = new Set(contentWords(original));
+  const words = contentWords(repaired);
+  if (words.length === 0) return false;
+  const novel = words.filter(w => !known.has(w)).length;
+  return novel / words.length > MAX_REPAIR_NEW_WORD_RATIO;
 }
 
 // Runs after the groundedness/revision stage above has already decided
@@ -100,7 +130,8 @@ function buildResult(args: {
 async function applyFormatAndPiiGuards(
   effectiveQuery: string,
   groundedness: OutputGuardrailResult,
-  draftAnswer: string
+  draftAnswer: string,
+  notFoundMessage: string
 ): Promise<OutputGuardrailResult> {
   // Format validation only ever applies to real generated content. When the
   // groundedness stage fell back to its deterministic conservative message
@@ -110,9 +141,15 @@ async function applyFormatAndPiiGuards(
   // this..." apology would be pointless and could look like fabrication.
   // A fail-open draft is real generated content (unverified, but not a
   // static fallback), so it still gets format validation.
-  const isFallbackAnswer = !groundedness.verified
-    && groundedness.reason !== 'VERIFICATION_DISABLED'
-    && groundedness.finalAnswer !== draftAnswer;
+  // The model is told to answer with exactly the not-found sentence when the
+  // evidence is missing, so that refusal often IS the draft (even a verified
+  // one): it is never sent for a LIST/TABLE "repair" either, which would invite
+  // invented bullets.
+  const isFallbackAnswer = groundedness.verificationUnavailable
+    || groundedness.finalAnswer.trim() === notFoundMessage.trim()
+    || (!groundedness.verified
+      && groundedness.reason !== 'VERIFICATION_DISABLED'
+      && groundedness.finalAnswer !== draftAnswer);
 
   let finalAnswer = groundedness.finalAnswer;
   let expectedFormat: ExpectedResponseFormat = 'NATURAL_TEXT';
@@ -120,6 +157,7 @@ async function applyFormatAndPiiGuards(
   let formatValid = true;
   let formatRepairAttempted = false;
   let formatRepairSucceeded = false;
+  let formatRepairRejected: OutputGuardrailResult['formatRepairRejected'] = null;
 
   if (env.OUTPUT_FORMAT_VALIDATION.ENABLED && !isFallbackAnswer) {
     expectedFormat = detectExpectedResponseFormat(effectiveQuery);
@@ -139,8 +177,15 @@ async function applyFormatAndPiiGuards(
         // produced the requested structure; otherwise keep the original
         // grounded (just unrestructured) answer rather than risk an
         // empty/malformed repair reaching the student.
-        if (repair.ok && repair.repairedAnswer && validateResponseFormat(expectedFormat, repair.repairedAnswer).valid) {
-          finalAnswer = repair.repairedAnswer;
+        // A structurally valid repair is also refused when it adds content —
+        // invented bullets would reach the student unverified.
+        const structurallyValid = repair.ok && !!repair.repairedAnswer
+          && validateResponseFormat(expectedFormat, repair.repairedAnswer).valid;
+        if (structurallyValid && repairAddsContent(finalAnswer, repair.repairedAnswer!)) {
+          formatRepairRejected = 'NEW_CONTENT';
+          logger.warn('[OUTPUT-GUARDRAIL] ⚠️  Format repair added content not in the answer — keeping original grounded answer');
+        } else if (structurallyValid) {
+          finalAnswer = repair.repairedAnswer!;
           formatValid = true;
           formatRepairSucceeded = true;
         } else {
@@ -170,6 +215,7 @@ async function applyFormatAndPiiGuards(
     formatValid,
     formatRepairAttempted,
     formatRepairSucceeded,
+    formatRepairRejected,
     piiDetected,
     piiCategories,
   };
@@ -178,9 +224,9 @@ async function applyFormatAndPiiGuards(
 // Orchestrates: verify -> (optional, bounded) revise -> re-verify -> decide.
 // Only reached for an actual LLM-generated grounded draft (chat.service.ts
 // never calls this for GREETING's canned reply or a deterministic
-// not-found fallback — there's no draft to verify). Never throws; any
-// verifier/revision failure degrades to the conservative fallback above
-// rather than ever returning an unverified draft. Format/PII fields on its
+// not-found fallback — there's no draft to verify). Never throws; a
+// verifier/revision failure returns verificationUnavailable (the caller
+// reports an error) and never an unverified draft. Format/PII fields on its
 // return value are still at buildResult()'s defaults — runOutputGuardrail
 // below fills those in via applyFormatAndPiiGuards().
 async function runGroundednessVerification(params: OutputGuardrailParams): Promise<OutputGuardrailResult> {
@@ -210,10 +256,11 @@ async function runGroundednessVerification(params: OutputGuardrailParams): Promi
         reason: firstPass.failureReason, revisionAttempted: false, revisionSucceeded: false,
       });
     }
-    logger.warn(`[OUTPUT-GUARDRAIL] ⚠️  Verification failed (${firstPass.failureReason}) — using conservative fallback`);
+    logger.warn(`[OUTPUT-GUARDRAIL] ⚠️  Verifier unavailable (${firstPass.failureReason}) — failing closed, answer not served`);
     return buildResult({
-      finalAnswer: conservativeFallback(params), verified: false, decision: null,
+      finalAnswer: VERIFICATION_UNAVAILABLE_MESSAGE, verified: false, decision: null,
       reason: firstPass.failureReason, revisionAttempted: false, revisionSucceeded: false,
+      verificationUnavailable: true,
     });
   }
 
@@ -260,10 +307,11 @@ async function runGroundednessVerification(params: OutputGuardrailParams): Promi
   });
 
   if (!revision.ok) {
-    logger.warn('[OUTPUT-GUARDRAIL] ⚠️  Revision failed — using conservative fallback');
+    logger.warn('[OUTPUT-GUARDRAIL] ⚠️  Revision failed — failing closed, answer not served');
     return buildResult({
-      finalAnswer: conservativeFallback(params), verified: false, decision: verdict.decision,
+      finalAnswer: VERIFICATION_UNAVAILABLE_MESSAGE, verified: false, decision: verdict.decision,
       reason: 'REVISION_FAILED', revisionAttempted: true, revisionSucceeded: false, ...counts,
+      verificationUnavailable: true,
     });
   }
 
@@ -276,10 +324,11 @@ async function runGroundednessVerification(params: OutputGuardrailParams): Promi
   });
 
   if (!finalPass.ok) {
-    logger.warn(`[OUTPUT-GUARDRAIL] ⚠️  Final verification failed (${finalPass.failureReason}) — using conservative fallback`);
+    logger.warn(`[OUTPUT-GUARDRAIL] ⚠️  Final verification failed (${finalPass.failureReason}) — failing closed, answer not served`);
     return buildResult({
-      finalAnswer: conservativeFallback(params), verified: false, decision: verdict.decision,
+      finalAnswer: VERIFICATION_UNAVAILABLE_MESSAGE, verified: false, decision: verdict.decision,
       reason: 'FINAL_VERIFICATION_FAILED', revisionAttempted: true, revisionSucceeded: false, ...counts,
+      verificationUnavailable: true,
     });
   }
 
@@ -310,7 +359,7 @@ async function runGroundednessVerification(params: OutputGuardrailParams): Promi
 export async function runOutputGuardrail(params: OutputGuardrailParams): Promise<OutputGuardrailResult> {
   const run = async (): Promise<OutputGuardrailResult> => {
     const groundedness = await runGroundednessVerification(params);
-    return applyFormatAndPiiGuards(params.effectiveQuery, groundedness, params.draftAnswer);
+    return applyFormatAndPiiGuards(params.effectiveQuery, groundedness, params.draftAnswer, params.notFoundMessage);
   };
 
   const trace = getActiveTrace();
@@ -327,6 +376,7 @@ export async function runOutputGuardrail(params: OutputGuardrailParams): Promise
       'answer_verification.revision_attempted': r.revisionAttempted,
       'answer_verification.revision_count': r.revisionAttempted ? 1 : 0,
       'answer_verification.final_verified': r.verified,
+      'answer_verification.unavailable': r.verificationUnavailable,
       'answer_verification.provider': env.LLM.ANSWER_VERIFICATION.PROVIDER,
       'answer_verification.model': env.LLM.ANSWER_VERIFICATION.MODEL,
       ...(r.decision === null ? { 'answer_verification.failure_reason': r.reason } : {}),
@@ -336,11 +386,12 @@ export async function runOutputGuardrail(params: OutputGuardrailParams): Promise
       'output_guardrail.format_valid': r.formatValid,
       'output_guardrail.format_repair_attempted': r.formatRepairAttempted,
       'output_guardrail.format_repair_success': r.formatRepairSucceeded,
+      'output_guardrail.format_repair_rejected': r.formatRepairRejected,
 
       'output_guardrail.pii_detected': r.piiDetected,
       'output_guardrail.pii_categories': r.piiCategories.join(','),
       'output_guardrail.pii_sanitized': r.piiDetected,
     }),
-    (r: OutputGuardrailResult) => (r.verified ? 'SUCCESS' : 'FALLBACK')
+    (r: OutputGuardrailResult) => (r.verificationUnavailable ? 'ERROR' : r.verified ? 'SUCCESS' : 'FALLBACK')
   );
 }

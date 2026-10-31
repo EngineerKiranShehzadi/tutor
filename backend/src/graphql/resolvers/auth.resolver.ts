@@ -5,7 +5,7 @@ import * as AuthService from '../../services/auth.service';
 import { GraphQLContext } from '../context';
 import { logger } from '../../utils/logger';
 import { ExpiringMap } from '../../utils/expiring-map';
-import { REFRESH_COOKIE, REFRESH_COOKIE_OPTS, VERIFY_TICKET_COOKIE_OPTS, CLEAR_COOKIE_OPTS } from '../../utils/auth-cookies';
+import { REFRESH_COOKIE, REFRESH_COOKIE_OPTS, VERIFY_TICKET_COOKIE_OPTS, RESET_TICKET_COOKIE, RESET_TICKET_COOKIE_OPTS, CLEAR_COOKIE_OPTS } from '../../utils/auth-cookies';
 
 // ── In-memory rate limiter (per mutation, per IP) ─────
 // Entries expire with their window and the store is capped, so it cannot grow
@@ -94,7 +94,9 @@ export const resolvers = {
       const ip = ctx.req.ip ?? 'unknown';
       logger.info(`[GRAPHQL] verifyOtp: "${input.email}" from ${ip}`);
       checkRateLimit(ctx.req, 'vo', 3, 60_000);
-      await AuthService.verifyOtp(input.email, input.code).catch(toGQL);
+      const ticket = await AuthService.verifyOtp(input.email, input.code).catch(toGQL);
+      // Only this browser can complete the reset; the ticket never goes in the body.
+      ctx.res.cookie(RESET_TICKET_COOKIE, ticket, RESET_TICKET_COOKIE_OPTS);
       logger.info(`[GRAPHQL] ✅ verifyOtp: OTP verified for "${input.email}"`);
       return { success: true, message: 'OTP verified successfully.' };
     },
@@ -111,8 +113,10 @@ export const resolvers = {
       await AuthService.resetPasswordWithOtp(
         input.email,
         input.newPassword,
-        input.confirmPassword
+        input.confirmPassword,
+        ctx.req.cookies?.[RESET_TICKET_COOKIE]
       ).catch(toGQL);
+      ctx.res.clearCookie(RESET_TICKET_COOKIE, CLEAR_COOKIE_OPTS);
       logger.info(`[GRAPHQL] ✅ resetPassword: password reset for "${input.email}"`);
       return { success: true, message: 'Password reset successfully.' };
     },

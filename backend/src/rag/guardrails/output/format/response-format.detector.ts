@@ -11,19 +11,25 @@ import type { ExpectedResponseFormat } from './response-format.types';
 // ("Compare zero-shot and few-shot prompting.") also stays NATURAL_TEXT;
 // TABLE only fires when a table is explicitly asked for.
 
+// Request phrasing only — never the bare nouns, which are often the subject
+// matter ("What is a linked list?", "How does a lookup table work?"): a
+// correct prose answer to those must not be sent for a format "repair".
 const LIST_SIGNALS = [
-  /\blist(?:s|ed|ing)?\b/i,
+  /\blist\s+(?:the|all|some|me|out|each|every|down)\b/i,                 // "list the types…"
+  /\b(?:as|in)\s+(?:a\s+)?(?:bulleted\s+|numbered\s+)?list\b/i,          // "as a list", "in a bulleted list"
   /\bbullet(?:s|ed)?(?:\s*points?)?\b/i,
   /\bnumbered\s+list\b/i,
   /\bin\s+points\b/i,
-  /\b(?:give|name)\s+(?:me\s+)?\d+\b/i, // "give me 5 points/reasons/examples"
+  /\b(?:give|name|list)\s+(?:me\s+)?\d+\b/i,                             // "give me 5 points/reasons/examples"
+  /\bstep[-\s]by[-\s]step\b/i,
 ];
 
 const TABLE_SIGNALS = [
-  /\btables?\b/i,
+  /\b(?:as|in|into)\s+(?:a\s+)?table\b/i,                                // "in a table", "into a table"
   /\btabular(?:\s+form(?:at)?)?\b/i,
   /\bin\s+columns\b/i,
   /\bcomparison\s+table\b/i,
+  /\btabulate\b/i,
 ];
 
 // TABLE is checked first — it's the more specific/explicit structural ask,

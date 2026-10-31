@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
   used       BOOLEAN     NOT NULL DEFAULT FALSE,
   verified   BOOLEAN     NOT NULL DEFAULT FALSE,  -- true after OTP verified
   attempts   INT         NOT NULL DEFAULT 0,      -- wrong-guess counter, burns at 5
+  ticket_hash TEXT,                             -- sha256 of the verifying browser's reset_ticket cookie (016)
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

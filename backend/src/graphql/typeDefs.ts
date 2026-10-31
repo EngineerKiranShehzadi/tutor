@@ -143,6 +143,17 @@ export const typeDefs = `#graphql
     status:        String!
   }
 
+  # One page of students (AD6). total = rows matching the filters; the
+  # summary counts cover every student.
+  type StudentPage {
+    items:         [StudentEntry!]!
+    total:         Int!
+    hasMore:       Boolean!
+    totalStudents: Int!
+    activeCount:   Int!
+    inactiveCount: Int!
+  }
+
   # ── User Management ───────────────────────────────────
   type UserManagementEntry {
     id:         String!
@@ -151,6 +162,16 @@ export const typeDefs = `#graphql
     role:       String!
     isVerified: Boolean!
     createdAt:  String!
+  }
+
+  # One page of users (AD6); the summary counts cover every user.
+  type UserPage {
+    items:        [UserManagementEntry!]!
+    total:        Int!
+    hasMore:      Boolean!
+    totalUsers:   Int!
+    studentCount: Int!
+    adminCount:   Int!
   }
 
   # ── Q&A Chunks (dataset preview) ──────────────────────
@@ -162,6 +183,12 @@ export const typeDefs = `#graphql
     startTime: String
     endTime:   String
     keywords:  String
+  }
+
+  type QnaChunkPage {
+    items:   [QnaChunk!]!
+    total:   Int!
+    hasMore: Boolean!
   }
 
   # ── AI Agent Detail ────────────────────────────────────
@@ -209,7 +236,9 @@ export const typeDefs = `#graphql
     joinedAt:        String!
     firstActivity:   String
     lastActivity:    String
+    # One page of questions (newest first); questionCount is the total.
     questions:       [JourneyQuestion!]!
+    hasMoreQuestions: Boolean!
     byLecture:       [LectureEngagement!]!
   }
 
@@ -225,6 +254,10 @@ export const typeDefs = `#graphql
     status:              String!
     answeredFromLecture: Int!
     notInLecture:        Int!
+    # Analysis covers questions from the last windowDays days; sampled = the
+    # window held more questions than were analysed (newest 20,000 used).
+    sampled:             Boolean!
+    windowDays:          Int!
   }
 
   type DayActivity {
@@ -279,11 +312,12 @@ export const typeDefs = `#graphql
     # One page (limit capped at 200), filtered by question/student-name text and lecture.
     recentQuestionsPage(limit: Int!, offset: Int!, search: String, lectureId: Int): RecentQuestionPage!
     lectureStatusList:               [LectureStatusEntry!]!
-    registeredStudents:              [StudentEntry!]!
-    allUsers:                        [UserManagementEntry!]!
-    lectureChunks(lectureId: Int!):  [QnaChunk!]!
+    # Paged (AD6): limit default 25, at most 100.
+    registeredStudents(limit: Int, offset: Int, search: String, status: String): StudentPage!
+    allUsers(limit: Int, offset: Int, search: String, role: String): UserPage!
+    lectureChunks(lectureId: Int!, limit: Int, offset: Int, search: String): QnaChunkPage!
     lectureAgentDetails:             [LectureAgentDetail!]!
-    studentJourney(id: String!):     StudentJourney!
+    studentJourney(id: String!, limit: Int, offset: Int): StudentJourney!
     contentGaps:                     [LectureGapAnalysis!]!
   }
 

@@ -23,7 +23,7 @@ import { runAdaptiveRetrieval } from '../rag/query-processing/adaptive-retrieval
 import type { AdaptiveRetrievalParams } from '../rag/query-processing/adaptive-retrieval/adaptive-retrieval.service';
 import type { AdaptiveRetrievalResult } from '../rag/query-processing/adaptive-retrieval/adaptive-retrieval.types';
 import type { SubqueryRetrievalDeps } from '../rag/query-processing/retrieval/decomposed-retrieval.service';
-import { runOutputGuardrail } from '../rag/guardrails/output/output-guardrail.service';
+import { runOutputGuardrail, VERIFICATION_UNAVAILABLE_MESSAGE } from '../rag/guardrails/output/output-guardrail.service';
 import { createPiiSafeStream } from '../rag/guardrails/output/pii/streaming-pii-redactor';
 import type { OutputGuardrailParams } from '../rag/guardrails/output/output-guardrail.service';
 import type { OutputGuardrailResult } from '../rag/guardrails/output/answer-verification.types';
@@ -31,7 +31,7 @@ import type { ConversationTurn, AnswerStreamHandlers } from './llm-gemini.servic
 import type { DedupeResult } from './rerank.service';
 import type { RetrievalQueryResult } from './query-rewriter.service';
 import type { RouteClassification } from './query-router.service';
-import type { SummarizeDeps } from './lecture-summary.service';
+import type { SummarizeDeps, LectureSummaryResult } from './lecture-summary.service';
 import type { MemoryLookupResult, WriteMemoryParams, LookupParams as MemoryLookupParams } from './rag-answer-memory.service';
 import type { AgentProfileLookup } from './lecture-agent-profile.service';
 
@@ -85,7 +85,7 @@ export interface AskLectureAgentDeps {
   getAllLectureChunks?:    (lectureId: number, datasetVersionId?: number) => Promise<QnaChunk[]>;
   // Test-only: pin the request to this dataset version instead of resolving the active one.
   datasetVersionId?:       number | null;
-  generateLectureSummary?: (chunks: QnaChunk[], lectureTitle: string, deps?: SummarizeDeps) => Promise<string | null>;
+  generateLectureSummary?: (chunks: QnaChunk[], lectureTitle: string, deps?: SummarizeDeps) => Promise<LectureSummaryResult>;
   lookupAnswerMemory?:     (params: MemoryLookupParams) => Promise<MemoryLookupResult>;
   writeAnswerMemory?:      (params: WriteMemoryParams) => Promise<void>;
   recordMemoryHit?:        (memoryId: number) => Promise<void>;
@@ -299,14 +299,21 @@ export const askLectureAgent = async (
     // below.
   });
   // Tracks which stage is in flight so an unexpected thrown error can be
-  // mapped to a safe not-found/failure reason code in the outer catch.
-  let currentStage = 'unknown';
+  // mapped to a safe not-found/failure reason code in the outer catch. Every
+  // stage below sets it before it starts, so no failure reports 'unknown'.
+  let currentStage = 'load-lecture';
   // Set when a stage reports a retrieval failure itself instead of throwing
   // from a DIRECT-path stage (see the decomposed zero-result branch). Wins
   // over the currentStage mapping in the outer catch.
   let retrievalFailureReason: NotFoundReason | undefined;
 
+  // Idempotent: the first call records the request (one rag_request_log row,
+  // one Phoenix trace); later calls are no-ops. The outer catch relies on this
+  // to record any failure that escaped without a trace, exactly once.
+  let traceFinished = false;
   const finishTrace = (status: 'SUCCESS' | 'ERROR', extra: SafeMetadata): void => {
+    if (traceFinished) return;
+    traceFinished = true;
     const finished = trace.end(status, extra);
     // try/catch AND .catch(): onTraceComplete may throw synchronously
     // (before ever returning a promise) or reject asynchronously — either
@@ -333,6 +340,7 @@ export const askLectureAgent = async (
   async function runAskLectureAgent(): Promise<{ answer: string; sources: QnaChunk[] }> {
   try {
     // 1. Confirm lecture is READY
+    currentStage = 'load-lecture';
     const lecture = await getLectureById(lectureId);
     if (lecture.status !== 'READY') {
       logger.warn(`[CHAT] ⚠️  Lecture #${lectureId} not READY (status=${lecture.status})`);
@@ -343,6 +351,7 @@ export const askLectureAgent = async (
     // 1-bis. Dataset readiness: an active version whose every chunk is embedded
     // with the current model. A lecture that is READY by status but fails this
     // would only ever answer "not found", so reject it as not ready instead.
+    currentStage = 'check-dataset-readiness';
     const readiness = await (deps.getLectureReadiness ?? getLectureReadiness)(lectureId);
     if (!readiness.ready) {
       logger.warn(`[CHAT] ⚠️  Lecture #${lectureId} dataset not ready: ${readiness.reason}`);
@@ -458,6 +467,7 @@ export const askLectureAgent = async (
     });
 
     // 2. Persist question for admin analytics before AI call
+    currentStage = 'record-student-question';
     await query(
       'INSERT INTO student_questions (student_id, lecture_id, question) VALUES ($1, $2, $3)',
       [studentId, lectureId, question]
@@ -465,6 +475,7 @@ export const askLectureAgent = async (
 
     // 3. Lazy imports — skipped for any dependency the caller already
     // injected (tests only; production always falls through to these).
+    currentStage = 'resolve-dataset-version';
     const generateEmbedding     = deps.generateEmbedding     ?? (await import('./embedding.service')).generateEmbedding;
     // Pin this request to ONE dataset version: every retrieval call below (the
     // direct search, each decomposed sub-query, adaptive retrieval, the summary
@@ -513,6 +524,7 @@ export const askLectureAgent = async (
         () => generateGreeting(question, lecture.title, historyTurns),
         a => ({ answerLength: a.length })
       );
+      currentStage = 'save-chat-entry';
       await trace.span('save-chat-entry', async () => {
         await saveChatEntry({ studentId, lectureId, question, answer, sourceChunkIds: [], sessionId, traceId: trace.traceId });
         await touchSession(studentId, sessionId, question);
@@ -539,32 +551,54 @@ export const askLectureAgent = async (
         c => ({ chunkCount: c.length })
       );
 
-      currentStage = 'summarize-lecture-content';
-      const summary = allChunks.length > 0
-        ? await trace.span(
-            'summarize-lecture-content', // covers batching + per-batch summarize + combine as one stage
-            () => generateLectureSummaryFn(allChunks, lecture.title),
-            s => ({ summaryProduced: !!s })
-          )
-        : null;
-
-      if (!summary) {
-        const reason: NotFoundReason = allChunks.length === 0 ? 'EMPTY_LECTURE' : 'SUMMARY_CONTENT_EMPTY';
-        logger.warn(`[CHAT] ⚠️  No summary available for lecture #${lectureId} (${allChunks.length} chunk(s) found)`);
+      // No content at all: a real "nothing to summarise" answer.
+      if (allChunks.length === 0) {
+        logger.warn(`[CHAT] ⚠️  No summary available for lecture #${lectureId} (0 chunks found)`);
+        currentStage = 'save-chat-entry';
         await trace.span('save-chat-entry', async () => {
           await saveChatEntry({ studentId, lectureId, question, answer: summaryUnavailable, sourceChunkIds: [], sessionId, traceId: trace.traceId });
           await touchSession(studentId, sessionId, question);
         }, () => ({ sourceChunkCount: 0 }));
-        finishTrace('SUCCESS', { responseStatus: 'NOT_FOUND', notFoundReason: reason, memoryResult: 'NOT_ATTEMPTED' });
+        finishTrace('SUCCESS', { responseStatus: 'NOT_FOUND', notFoundReason: 'EMPTY_LECTURE', memoryResult: 'NOT_ATTEMPTED' });
         return { answer: summaryUnavailable, sources: [] };
       }
 
+      currentStage = 'summarize-lecture-content';
+      const result = await trace.span(
+        'summarize-lecture-content', // covers batching + per-batch summarize + combine as one stage
+        () => generateLectureSummaryFn(allChunks, lecture.title),
+        r => ({ summaryProduced: !!r.summary, summaryBatchesAttempted: r.batchesAttempted, summaryBatchesSucceeded: r.batchesSucceeded }),
+        r => (!r.summary ? 'ERROR' : r.batchesSucceeded < r.batchesAttempted ? 'FALLBACK' : 'SUCCESS')
+      );
+      trace.setAttributes({ summaryBatchesAttempted: result.batchesAttempted, summaryBatchesSucceeded: result.batchesSucceeded });
+
+      // Content exists but nothing could be summarised — an LLM outage, not
+      // an empty lecture. Not saved to chat history, so the failure text is
+      // never replayed as context on later turns.
+      if (!result.summary) {
+        logger.error(`[CHAT] ❌ Summary failed for lecture #${lectureId}: ${result.batchesSucceeded}/${result.batchesAttempted} batch(es) succeeded — returning 503, nothing saved`);
+        finishTrace('ERROR', {
+          responseStatus: 'ERROR',
+          failedStage: 'summarize-lecture-content',
+          memoryResult: 'NOT_ATTEMPTED',
+          summaryBatchesAttempted: result.batchesAttempted,
+          summaryBatchesSucceeded: result.batchesSucceeded,
+        });
+        throw new AppError(summaryModule.LECTURE_SUMMARY_FAILED_MESSAGE, 503);
+      }
+
+      // Some batches failed: say so, so a partial summary is never presented
+      // as the whole lecture. (Summaries are never written to answer memory.)
+      const partial = result.batchesSucceeded < result.batchesAttempted;
+      const summary = partial ? `${result.summary}${summaryModule.PARTIAL_SUMMARY_NOTE}` : result.summary;
+
       const chunkIds = allChunks.map(c => c.id);
+      currentStage = 'save-chat-entry';
       await trace.span('save-chat-entry', async () => {
         await saveChatEntry({ studentId, lectureId, question, answer: summary, sourceChunkIds: chunkIds, sessionId, traceId: trace.traceId });
         await touchSession(studentId, sessionId, question);
       }, () => ({ sourceChunkCount: chunkIds.length }));
-      logger.info(`[CHAT] ✅ Summary answered for session #${sessionId} (${allChunks.length} chunk(s))`);
+      logger.info(`[CHAT] ✅ Summary answered for session #${sessionId} (${allChunks.length} chunk(s)${partial ? `, partial ${result.batchesSucceeded}/${result.batchesAttempted}` : ''})`);
       finishTrace('SUCCESS', { responseStatus: 'SUMMARY_ANSWERED', selectedChunkCount: chunkIds.length, memoryResult: 'NOT_ATTEMPTED' });
       return { answer: summary, sources: allChunks };
     }
@@ -624,12 +658,14 @@ export const askLectureAgent = async (
       memoryResultAttr = memoryResult.lookupFailed ? 'LOOKUP_FAILED' : memoryResult.hit ? (memoryResult.hit.matchType === 'EXACT' ? 'EXACT_HIT' : 'SEMANTIC_HIT') : 'MISS';
 
       if (memoryResult.hit) {
+        currentStage = 'record-memory-hit';
         const recordMemoryHit = deps.recordMemoryHit ?? (await import('./rag-answer-memory.service')).recordMemoryHit;
         await trace.span(
           'record-memory-hit',
           () => recordMemoryHit(memoryResult.hit!.memoryId),
           () => ({ memoryId: memoryResult.hit!.memoryId })
         );
+        currentStage = 'save-chat-entry';
         await trace.span('save-chat-entry', async () => {
           await saveChatEntry({
             studentId, lectureId, question,
@@ -735,6 +771,7 @@ export const askLectureAgent = async (
           throw new Error(`Decomposed retrieval failed (${empty.reason}); no subquery produced evidence`);
         }
         logger.warn(`[CHAT] ⚠️  No subquery produced qualifying evidence — returning not-found message`);
+        currentStage = 'save-chat-entry';
         await trace.span('save-chat-entry', async () => {
           await saveChatEntry({ studentId, lectureId, question, answer: LECTURE_NOT_FOUND_MESSAGE, sourceChunkIds: [], sessionId, traceId: trace.traceId });
           await touchSession(studentId, sessionId, question);
@@ -836,6 +873,7 @@ export const askLectureAgent = async (
       finalCandidateCount = candidates.length;
       if (candidates.length === 0) {
         logger.warn(`[CHAT] ⚠️  No relevant chunks found — returning not-found message`);
+        currentStage = 'save-chat-entry';
         await trace.span('save-chat-entry', async () => {
           await saveChatEntry({ studentId, lectureId, question, answer: LECTURE_NOT_FOUND_MESSAGE, sourceChunkIds: [], sessionId, traceId: trace.traceId });
           await touchSession(studentId, sessionId, question);
@@ -854,6 +892,7 @@ export const askLectureAgent = async (
       currentStage = 'rerank-candidates';
       let dedupedAwayCount = 0;
       let belowFloorCount = 0;
+      let beyondBudgetCount = 0;
       let topRerankerScore: number | null = null;
       chunks = await trace.span(
         'rerank-candidates',
@@ -862,7 +901,11 @@ export const askLectureAgent = async (
           topRerankerScore = rankedAll[0]?.rerankScore ?? null;
           const { selected, dedupedAway } = dedupeAndSelect(rankedAll, 5);
           dedupedAwayCount = dedupedAway.length;
-          belowFloorCount = Math.max(0, rankedAll.length - selected.length - dedupedAway.length);
+          // dedupeAndSelect stops at the budget (5) before it ever reaches
+          // the floor, so "everything not selected or deduped" is NOT what the
+          // floor removed. Count the floor directly; the rest is beyond budget.
+          belowFloorCount = rankedAll.filter(c => (c.rerankScore ?? 0) < DEFAULT_MIN_RERANK_SCORE).length;
+          beyondBudgetCount = Math.max(0, rankedAll.length - belowFloorCount - selected.length - dedupedAway.length);
           return selected;
         },
         c => ({
@@ -872,9 +915,12 @@ export const askLectureAgent = async (
           rerankerInputCount: candidates.length,
           rerankerOutputCount: c.length,
           minRerankScore: DEFAULT_MIN_RERANK_SCORE,
+          rerankProvider: env.RETRIEVAL.RERANK_PROVIDER,
+          rerankMinScore: DEFAULT_MIN_RERANK_SCORE,
           topRerankerScore,
           lowestSelectedRerankerScore: c[c.length - 1]?.rerankScore ?? null,
           chunksRemovedByRelevanceFloor: belowFloorCount,
+          chunksBeyondContextBudget: beyondBudgetCount,
           chunksRemovedByDedupe: dedupedAwayCount,
           selectedChunkIds: c.map(chunk => chunk.id).join(','),
           ...(isContentCaptureEnabled() ? { [ATTR.RERANKER_QUERY]: truncateContent(retrievalQuery, 300).value } : {}),
@@ -891,6 +937,7 @@ export const askLectureAgent = async (
       // calling Gemini with an empty context.
       if (chunks.length === 0) {
         logger.warn(`[CHAT] ⚠️  All candidates fell below the relevance floor — returning not-found message`);
+        currentStage = 'save-chat-entry';
         await trace.span('save-chat-entry', async () => {
           await saveChatEntry({ studentId, lectureId, question, answer: LECTURE_NOT_FOUND_MESSAGE, sourceChunkIds: [], sessionId, traceId: trace.traceId });
           await touchSession(studentId, sessionId, question);
@@ -968,11 +1015,28 @@ export const askLectureAgent = async (
       outputFormatValid: guardrailOutcome.formatValid,
       outputFormatRepairAttempted: guardrailOutcome.formatRepairAttempted,
       outputFormatRepairSucceeded: guardrailOutcome.formatRepairSucceeded,
+      formatRepairRejected: guardrailOutcome.formatRepairRejected,
       outputPiiDetected: guardrailOutcome.piiDetected,
       outputPiiCategories: guardrailOutcome.piiCategories.join(','),
     });
     if (guardrailOutcome.reason !== 'VERIFIED') {
       logger.info(`[CHAT] 🛡️  Output guardrail: ${guardrailOutcome.reason} (verified=${guardrailOutcome.verified}, revisionAttempted=${guardrailOutcome.revisionAttempted})`);
+    }
+    // The verifier could not run. Failing closed means the draft is not
+    // served, but this is an outage, not "the lecture doesn't cover it": it
+    // is traced as an ERROR and nothing is saved to chat history or answer
+    // memory, so a transient failure never becomes a permanent turn.
+    if (guardrailOutcome.verificationUnavailable) {
+      logger.error(`[CHAT] ❌ Answer verification unavailable (${guardrailOutcome.reason}) — returning 503, nothing saved`);
+      finishTrace('ERROR', {
+        responseStatus: 'ERROR',
+        failedStage: 'output-guardrail',
+        answerVerificationReason: guardrailOutcome.reason,
+        memoryResult: memoryResultAttr,
+        candidateCount: finalCandidateCount,
+        selectedChunkCount: chunks.length,
+      });
+      throw new AppError(VERIFICATION_UNAVAILABLE_MESSAGE, 503);
     }
     if (guardrailOutcome.piiDetected) {
       logger.info(`[CHAT] 🛡️  Output guardrail: PII sanitized in final answer (${guardrailOutcome.piiCategories.join(', ')})`);
@@ -999,10 +1063,16 @@ export const askLectureAgent = async (
     // response already returned below. An answer that says a part "couldn't
     // be retrieved right now" is transient by definition, so it is never cached.
     if (route === 'FACT_QUESTION' && guardrailOutcome.verified && unavailableAspects.length === 0) {
+      currentStage = 'write-answer-memory';
       try {
         const memoryService = await import('./rag-answer-memory.service');
         const writeAnswerMemory = deps.writeAnswerMemory ?? memoryService.writeAnswerMemory;
-        const datasetVersionId = memoryDatasetVersionId ?? await memoryService.getActiveDatasetVersionId(lectureId);
+        // The version every retrieval in this request used. Re-reading the
+        // active version here (after a failed lookup) could file the answer
+        // under a dataset published mid-request, which it was not generated
+        // from — and unchanged rows keep their chunk ids, so the membership
+        // guard would not catch it.
+        const datasetVersionId = pinnedVersionId ?? memoryDatasetVersionId;
         if (datasetVersionId === null) throw new Error('lecture has no active dataset version');
         // A decomposed query never computes a single embedding for the
         // parent/effective question (each subquery gets its own — see
@@ -1050,7 +1120,13 @@ export const askLectureAgent = async (
     });
     return { answer, sources: chunks };
   } catch (err) {
-    if (err instanceof AppError) throw err; // already recorded above (lecture-not-ready path)
+    if (err instanceof AppError) {
+      // Most AppErrors are thrown right after their own finishTrace call; the
+      // rest (LLM "AI model failed…", missing provider key, unknown provider,
+      // lecture 404, …) are recorded here so they still count as errors.
+      if (!traceFinished) finishTrace('ERROR', { responseStatus: 'ERROR', failedStage: currentStage });
+      throw err;
+    }
     const notFoundReason: NotFoundReason | undefined =
       retrievalFailureReason ? retrievalFailureReason
       : currentStage === 'generate-query-embedding' ? 'EMBEDDING_FAILURE'

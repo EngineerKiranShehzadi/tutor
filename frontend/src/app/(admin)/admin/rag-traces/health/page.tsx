@@ -83,7 +83,7 @@ export default function SystemHealthPage() {
             <HealthCard name="PostgreSQL" icon="fa-database" health={readiness?.components.database} critical />
             <HealthCard name="Embedding service" icon="fa-vector-square" health={readiness?.components.embeddingServer} critical />
             <HealthCard name="Reranker service" icon="fa-sort" health={readiness?.components.reranker} critical={false} />
-            <HealthCard name="Gemini" icon="fa-brain" health={readiness?.components.gemini} critical={false} />
+            <HealthCard name="Answer LLM" icon="fa-brain" health={readiness?.components.answerLlm} critical />
           </div>
 
           <p className="text-[12px] font-bold text-slate-400 uppercase tracking-wide mb-3">Observability (non-critical to tutoring)</p>

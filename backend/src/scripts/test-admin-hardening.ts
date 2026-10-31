@@ -28,7 +28,7 @@ import { enforceAskQuota, AskQuotaExceededError, resetAskQuotaForTests, askQuota
 import { chatResolvers } from '../graphql/resolvers/chat.resolver';
 import chatRoutes from '../routes/chat.routes';
 import { generateAccessToken } from '../utils/jwt';
-import { checkProviderHealth, overallStatus, requiredComponents, ComponentHealth } from '../observability/health.service';
+import { checkProviderHealth, overallStatus, requiredComponents, ComponentHealth, checkAnswerLlm, checkReadiness } from '../observability/health.service';
 import { recordProviderFailure, recordProviderSuccess, resetProviderSignals } from '../observability/provider-signal';
 import { EmbeddingUnavailableError } from '../embedding/embedding-errors';
 import { mkdtempSync, writeFileSync, rmSync, statSync } from 'fs';
@@ -37,7 +37,10 @@ import { parse, validate, specifiedRules } from 'graphql';
 import { makeExecutableSchema } from '@graphql-tools/schema';
 import { ApolloServer } from '@apollo/server';
 import { applyMigrations } from './db-setup';
-import { getRecentQuestions, getRecentQuestionsPage } from '../services/analytics.service';
+import { getRecentQuestions, getRecentQuestionsPage, getContentGaps, CONTENT_GAPS_MAX_QUESTIONS, getMyStats,
+  getLectureChunks, getRegisteredStudents, getStudentJourney } from '../services/analytics.service';
+import { getAllUsers } from '../services/user.service';
+import { analyticsResolvers } from '../graphql/resolvers/analytics.resolver';
 import { queryLimitsRule } from '../graphql/query-limits';
 import { typeDefs } from '../graphql/typeDefs';
 import datasetRoutes from '../routes/dataset.routes';
@@ -47,6 +50,10 @@ import { logger } from '../utils/logger';
 import { computeEnrichedOverviewMetrics, overviewCache } from '../services/observability/aggregate.service';
 import { rateLimitStore } from '../graphql/resolvers/auth.resolver';
 import { ExpiringMap } from '../utils/expiring-map';
+import { globalLimiter, userLimiter } from '../middleware/rateLimiter';
+import { startMaintenanceScheduler, stopMaintenanceScheduler, maintenanceSchedulerState, runRetention } from '../observability/maintenance.scheduler';
+import { finishDatasetVersion, rollbackDataset } from '../services/dataset-version.service';
+import { EMBEDDING_MODEL_VERSION } from '../services/embedding.service';
 
 const results: { name: string; pass: boolean; detail: string }[] = [];
 const check = (name: string, pass: boolean, detail: string) => {
@@ -297,18 +304,17 @@ const run = async () => {
   // ── A6: readiness ────────────────────────────────────────────────────
   {
     const h = (status: ComponentHealth['status']): ComponentHealth => ({ status, latencyMs: 1 });
-    const all = (over: Partial<Record<'database' | 'pgvector' | 'embeddingServer' | 'reranker' | 'gemini', ComponentHealth>>) =>
-      ({ database: h('healthy'), pgvector: h('healthy'), embeddingServer: h('healthy'), reranker: h('healthy'), gemini: h('healthy'), ...over });
-    const reqG = requiredComponents('gemini');
-    const reqOther = requiredComponents('groq');
-    const geminiDown = overallStatus(all({ gemini: h('unhealthy') }), reqG);
-    const geminiDownOther = overallStatus(all({ gemini: h('unhealthy') }), reqOther);
-    const rerankDown = overallStatus(all({ reranker: h('unhealthy') }), reqG);
-    const unverified = overallStatus(all({ gemini: h('degraded') }), reqG);
-    check('A6-1. A dead answer model (Gemini) or reranker → unhealthy (503); unverified (config-only) → degraded (200); Gemini not required when another provider answers',
-      reqG.join() === 'database,pgvector,embeddingServer,reranker,gemini' && !reqOther.includes('gemini')
-        && geminiDown === 'unhealthy' && rerankDown === 'unhealthy' && unverified === 'degraded' && geminiDownOther === 'degraded',
-      `required=${reqG.join()} geminiDown=${geminiDown} rerankDown=${rerankDown} unverified=${unverified} geminiDown(groq answers)=${geminiDownOther}`);
+    const all = (over: Partial<Record<'database' | 'pgvector' | 'embeddingServer' | 'reranker' | 'answerLlm', ComponentHealth>>) =>
+      ({ database: h('healthy'), pgvector: h('healthy'), embeddingServer: h('healthy'), reranker: h('healthy'), answerLlm: h('healthy'), ...over });
+    const req = requiredComponents();
+    const answerDown = overallStatus(all({ answerLlm: h('unhealthy') }), req);
+    const rerankDown = overallStatus(all({ reranker: h('unhealthy') }), req);
+    const unverified = overallStatus(all({ answerLlm: h('degraded') }), req);
+    // AD10: the answer LLM is always required (renamed from `gemini`).
+    check('A6-1. A dead answer model or reranker → unhealthy (503); unverified (config-only) → degraded (200); the answer LLM is always required',
+      req.join() === 'database,pgvector,embeddingServer,reranker,answerLlm'
+        && answerDown === 'unhealthy' && rerankDown === 'unhealthy' && unverified === 'degraded',
+      `required=${req.join()} answerDown=${answerDown} rerankDown=${rerankDown} unverified=${unverified}`);
 
     resetProviderSignals();
     const hosted = { assertConfigured: () => undefined };
@@ -579,6 +585,393 @@ const run = async () => {
     rateLimitStore.clear(); overviewCache.clear();
     check('A20-1. ExpiringMap drops expired entries and evicts the oldest past its cap; the auth rate-limit store stays ≤ 10,000 and the overview cache ≤ 100',
       expired === undefined && evicted && sizes === '10000/100', `expiredGet=${expired} evictedOldest=${evicted} sizes(rateLimit/overview)=${sizes}`);
+  }
+
+  // ── AD1: authenticated REST traffic is limited per user, anonymous per IP ──
+  {
+    const app = express();
+    app.use('/api/v1', globalLimiter, userLimiter, (_req, res) => { res.json({ ok: true }); });
+    const server = app.listen(0, '127.0.0.1');
+    await new Promise<void>(r => server.once('listening', () => r()));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/v1/datasets/versions/1`;
+    const hit = async (auth?: string) => (await fetch(base, auth ? { headers: { Authorization: auth } } : {})).status;
+    try {
+      const admin = `Bearer ${generateAccessToken('00000000-0000-4000-8000-0000000000a1', 'ADMIN')}`;
+      const authed: number[] = [];
+      for (let i = 0; i < 200; i++) authed.push(await hit(admin));
+      check('AD1-1. 200 authenticated GETs in one window (build polling + monitor refresh) are not throttled',
+        authed.every(s => s === 200) && env.RATE_LIMIT.USER_MAX >= 200,
+        `statuses=${[...new Set(authed)].join(',')} USER_MAX=${env.RATE_LIMIT.USER_MAX}`);
+
+      // A garbage bearer is anonymous: it spends the per-IP bucket like no header at all.
+      const anon: number[] = [];
+      for (let i = 0; i < env.RATE_LIMIT.MAX; i++) anon.push(await hit(i % 2 ? 'Bearer not-a-real-token' : undefined));
+      const overGarbage = await hit('Bearer not-a-real-token');
+      const overNone = await hit();
+      const stillAuthed = await hit(admin);
+      check('AD1-2. Anonymous traffic is still throttled at RATE_LIMIT_MAX per IP; a garbage bearer token counts as anonymous',
+        anon.every(s => s === 200) && overGarbage === 429 && overNone === 429,
+        `first ${env.RATE_LIMIT.MAX} → ${[...new Set(anon)].join(',')}, then garbage=${overGarbage} none=${overNone}`);
+      check('AD1-3. With the IP bucket exhausted, a signed-in operator (e.g. Cancel) still gets through on their own bucket',
+        stillAuthed === 200, `authed after IP exhaustion=${stillAuthed}`);
+    } finally {
+      server.close();
+      await globalLimiter.resetKey('127.0.0.1'); await globalLimiter.resetKey('::ffff:127.0.0.1');
+      await userLimiter.resetKey('u:00000000-0000-4000-8000-0000000000a1');
+    }
+  }
+
+  // ── AD2: request-log retention runs even with email alerts off ───────
+  {
+    const obs = env.OBSERVABILITY as { ALERTS_ENABLED: boolean };
+    const saved = obs.ALERTS_ENABLED;
+    const serverSrc = readFileSync(join(__dirname, '..', 'server.ts'), 'utf8');
+    try {
+      obs.ALERTS_ENABLED = false;
+      stopMaintenanceScheduler();
+      startMaintenanceScheduler();
+      const off = maintenanceSchedulerState();
+      startMaintenanceScheduler(); // double start is a no-op
+      const again = maintenanceSchedulerState();
+      stopMaintenanceScheduler();
+      obs.ALERTS_ENABLED = true;
+      startMaintenanceScheduler();
+      const on = maintenanceSchedulerState();
+      stopMaintenanceScheduler();
+      const stopped = maintenanceSchedulerState();
+      check('AD2-1. ALERTS_ENABLED=false: the retention timer is registered and the alert timer is not; with alerts on both are; server.ts starts it outside tests regardless of alerts',
+        off.retention && !off.alerts && again.retention && !again.alerts && on.retention && on.alerts && !stopped.retention && !stopped.alerts
+          && /if \(env\.NODE_ENV !== 'test'\) \{\s*startMaintenanceScheduler\(\);/.test(serverSrc),
+        `off=${JSON.stringify(off)} on=${JSON.stringify(on)} stopped=${JSON.stringify(stopped)}`);
+    } finally {
+      stopMaintenanceScheduler();
+      obs.ALERTS_ENABLED = saved;
+    }
+  }
+
+  // ── AD3: a cancel that lands during the embedding pass keeps its reason ──
+  {
+    const lec = (await query<{ id: number }>(`INSERT INTO lectures (title, youtube_url, youtube_video_id) VALUES ('[ad3] cancel', 'https://youtu.be/xxxxxxxxxxx', 'xxxxxxxxxxx') RETURNING id`)).rows[0].id;
+    const chunkIds: number[] = [];
+    for (const q of ['q1', 'q2']) {
+      chunkIds.push((await query<{ id: number }>(`INSERT INTO lecture_qna_chunks (lecture_id, question, answer, chunk_text) VALUES ($1, $2, 'a', $2) RETURNING id`, [lec, q])).rows[0].id);
+    }
+    const ver = (await query<{ id: number }>(
+      `INSERT INTO dataset_versions (lecture_id, version_no, status, mode, embedding_model_version, chunking_config_version, stats)
+       VALUES ($1, 1, 'BUILDING', 'MERGE', 'm', 'c', '{"chunksToEmbed": 2}'::jsonb) RETURNING id`, [lec])).rows[0].id;
+    for (const [i, c] of chunkIds.entries()) {
+      await query('INSERT INTO dataset_version_chunks (version_id, chunk_id, qa_id, chunk_index) VALUES ($1, $2, $3, 0)', [ver, c, `ad3-${i}`]);
+    }
+    const CANCEL = 'Cancelled by an admin.';
+    let calls = 0;
+    // The admin cancels while the last chunk is being embedded; the loop's
+    // status re-check (every statusCheckMs) has not run since.
+    const r = await finishDatasetVersion(ver, {
+      embedBatchSize: 1, statusCheckMs: 60_000, maxAttempts: 1,
+      embed: async () => {
+        calls++;
+        if (calls === 2) await query(`UPDATE dataset_versions SET status = 'FAILED', last_error = $2 WHERE id = $1`, [ver, CANCEL]);
+        return new Array(1024).fill(0.01);
+      },
+    });
+    const row = (await query<{ status: string; last_error: string | null }>('SELECT status, last_error FROM dataset_versions WHERE id = $1', [ver])).rows[0];
+    check('AD3-1. A cancel during the embedding pass: the post-embed step leaves status FAILED and last_error "Cancelled by an admin." unchanged',
+      row.status === 'FAILED' && row.last_error === CANCEL && r.outcome !== 'ACTIVATED',
+      `outcome=${r.outcome} status=${row.status} last_error=${JSON.stringify(row.last_error)} embedCalls=${calls}`);
+  }
+
+  // ── AD4: Content Gaps reads a bounded, windowed sample ───────────────
+  {
+    const lec = (await query<{ id: number }>(`INSERT INTO lectures (title, youtube_url, youtube_video_id, status) VALUES ('[ad4] gaps', 'https://youtu.be/xxxxxxxxxxx', 'xxxxxxxxxxx', 'READY') RETURNING id`)).rows[0].id;
+    const stu = (await query<{ id: string }>(`INSERT INTO users (name, email, password_hash, is_verified, role) VALUES ('AD4', $1, 'x', TRUE, 'STUDENT') RETURNING id`, [`ad4-${Date.now()}@example.test`])).rows[0].id;
+    await query(`INSERT INTO student_questions (student_id, lecture_id, question)
+                 SELECT $1, $2, 'what is tokenization number ' || g FROM generate_series(1, 25000) g`, [stu, lec]);
+    // Outside the 90-day window: never counted or analysed.
+    await query(`INSERT INTO student_questions (student_id, lecture_id, question, created_at)
+                 SELECT $1, $2, 'ancient question', NOW() - INTERVAL '100 days' FROM generate_series(1, 50)`, [stu, lec]);
+    try {
+      const t0 = Date.now();
+      const gaps = await getContentGaps();
+      const ms = Date.now() - t0;
+      const mine = gaps.find(g => g.lectureId === lec);
+      const processed = gaps.reduce((n, g) => n + g.answeredFromLecture + g.notInLecture, 0);
+      check('AD4-1. 25,000 questions seeded: at most 20,000 are processed, sampled=true, windowDays=90, questionsAsked stays exact (old ones excluded)',
+        !!mine && processed <= CONTENT_GAPS_MAX_QUESTIONS && mine.sampled === true && mine.windowDays === 90 && mine.questionsAsked === 25000,
+        `processed=${processed} asked=${mine?.questionsAsked} sampled=${mine?.sampled} ms=${ms}`);
+    } finally {
+      await query('DELETE FROM student_questions WHERE lecture_id = $1', [lec]);
+    }
+  }
+
+  // ── AD5: student stats rank by number, not by text ──────────────────
+  {
+    const mk = async (title: string) => (await query<{ id: number }>(`INSERT INTO lectures (title, youtube_url, youtube_video_id) VALUES ($1, 'https://youtu.be/xxxxxxxxxxx', 'xxxxxxxxxxx') RETURNING id`, [title])).rows[0].id;
+    const ten = await mk('[ad5] ten questions');
+    const nine = await mk('[ad5] nine questions');
+    const stu = (await query<{ id: string }>(`INSERT INTO users (name, email, password_hash, is_verified, role) VALUES ('AD5', $1, 'x', TRUE, 'STUDENT') RETURNING id`, [`ad5-${Date.now()}@example.test`])).rows[0].id;
+    // Ten questions in one hour of the day, nine in another.
+    await query(`INSERT INTO student_questions (student_id, lecture_id, question, created_at)
+                 SELECT $1, $2, 'q' || g, date_trunc('day', NOW()) - INTERVAL '1 day' + INTERVAL '3 hours' FROM generate_series(1, 10) g`, [stu, ten]);
+    await query(`INSERT INTO student_questions (student_id, lecture_id, question, created_at)
+                 SELECT $1, $2, 'q' || g, date_trunc('day', NOW()) - INTERVAL '1 day' + INTERVAL '5 hours' FROM generate_series(1, 9) g`, [stu, nine]);
+    const tenHour = Number((await query<{ h: string }>(`SELECT EXTRACT(HOUR FROM date_trunc('day', NOW()) - INTERVAL '1 day' + INTERVAL '3 hours')::text AS h`)).rows[0].h);
+    const stats = await getMyStats(stu);
+    check('AD5-1. A lecture with 10 questions ranks above one with 9 (most-asked topic, lecture breakdown, peak hour)',
+      stats.mostAskedTopic === '[ad5] ten questions' && stats.lectureBreakdown[0]?.lectureId === ten
+        && stats.lectureBreakdown[0]?.count === 10 && stats.peakHour === tenHour,
+      `mostAsked=${stats.mostAskedTopic} breakdown=${stats.lectureBreakdown.map(b => b.count).join(',')} peakHour=${stats.peakHour} (want ${tenHour})`);
+  }
+
+  // ── AD6: admin lists are paged (limit clamped to 100, totals exact) ───
+  {
+    const lec = (await query<{ id: number }>(`INSERT INTO lectures (title, youtube_url, youtube_video_id) VALUES ('[ad6] paging', 'https://youtu.be/xxxxxxxxxxx', 'xxxxxxxxxxx') RETURNING id`)).rows[0].id;
+    const ver = (await query<{ id: number }>(
+      `INSERT INTO dataset_versions (lecture_id, version_no, status, mode, embedding_model_version, chunking_config_version, stats)
+       VALUES ($1, 1, 'ACTIVE', 'MERGE', 'm', 'c', '{}'::jsonb) RETURNING id`, [lec])).rows[0].id;
+    await query(`WITH c AS (
+                   INSERT INTO lecture_qna_chunks (lecture_id, question, answer, chunk_text)
+                   SELECT $1, 'question ' || g, CASE WHEN g = 77 THEN 'the needle_100% answer' ELSE 'answer ' || g END, 'q' || g
+                   FROM generate_series(1, 120) g RETURNING id)
+                 INSERT INTO dataset_version_chunks (version_id, chunk_id, qa_id, chunk_index) SELECT $2, id, 'ad6-' || id, 0 FROM c`, [lec, ver]);
+    await query('UPDATE lectures SET active_version_id = $2 WHERE id = $1', [lec, ver]);
+    const pager = `AD6 Pager ${Date.now()}`; // unique per run: the suite may reuse a database
+    const stu = (await query<{ id: string }>(`INSERT INTO users (name, email, password_hash, is_verified, role) VALUES ($2, $1, 'x', TRUE, 'STUDENT') RETURNING id`, [`ad6-${Date.now()}@example.test`, pager])).rows[0].id;
+    await query(`INSERT INTO student_questions (student_id, lecture_id, question, created_at)
+                 SELECT $1, $2, 'journey q' || g, NOW() - g * INTERVAL '1 minute' FROM generate_series(1, 120) g`, [stu, lec]);
+
+    const chunks = await getLectureChunks(lec, { limit: 1000, offset: 0 });
+    const lastPage = await getLectureChunks(lec, { limit: 50, offset: 100 });
+    const found = await getLectureChunks(lec, { search: 'needle_100%' });
+    const literal = await getLectureChunks(lec, { search: '%' });
+    const studentsTotal = Number((await query<{ n: string }>(`SELECT COUNT(*) AS n FROM users WHERE role = 'STUDENT'`)).rows[0].n);
+    const usersTotal = Number((await query<{ n: string }>(`SELECT COUNT(*) AS n FROM users`)).rows[0].n);
+    const students = await getRegisteredStudents({ limit: 1000 });
+    const oneStudent = await getRegisteredStudents({ search: pager, status: 'ACTIVE' });
+    const users = await getAllUsers({ limit: 1000 });
+    const journey = await getStudentJourney(stu, { limit: 1000 });
+    check('AD6-1. lectureChunks/registeredStudents/allUsers/studentJourney: limit=1000 is clamped to 100 and total is exact',
+      chunks.items.length === 100 && chunks.total === 120 && chunks.hasMore && lastPage.items.length === 20 && !lastPage.hasMore
+        && students.items.length === Math.min(100, studentsTotal) && students.totalStudents === studentsTotal
+        && users.items.length === Math.min(100, usersTotal) && users.totalUsers === usersTotal
+        && journey.questions.length === 100 && journey.questionCount === 120 && journey.hasMoreQuestions
+        && journey.byLecture.length === 1 && journey.byLecture[0].questionCount === 120,
+      `chunks=${chunks.items.length}/${chunks.total} students=${students.items.length}/${students.total} users=${users.items.length}/${users.total} journey=${journey.questions.length}/${journey.questionCount}`);
+    check('AD6-2. Search runs on the server (answers included, LIKE wildcards literal); a status filter narrows the total',
+      found.total === 1 && found.items[0]?.answer === 'the needle_100% answer' && literal.total === 1
+        && oneStudent.total === 1 && oneStudent.items[0]?.id === stu,
+      `needle=${found.total} literal%=${literal.total} student=${oneStudent.total}`);
+  }
+
+  // ── S14: numeric settings fail fast at boot ───────────────────────────
+  {
+    const tsNode = join(__dirname, '..', '..', 'node_modules', '.bin', 'ts-node');
+    const load = (overrides: Record<string, string>) => {
+      const r = spawnSync(tsNode, ['--transpile-only', '-e',
+        `const { env } = require('./src/config/env'); console.log('ENV:' + JSON.stringify({ chars: env.INPUT_GUARDRAIL.MAX_CHARS, iters: env.ADAPTIVE_RETRIEVAL.MAX_ITERATIONS, rate: env.OBSERVABILITY.SAMPLE_RATE }))`],
+        { cwd: join(__dirname, '..', '..'), env: { ...process.env, INPUT_GUARDRAIL_MAX_CHARS: '', ADAPTIVE_RETRIEVAL_MAX_ITERATIONS: '', OBSERVABILITY_SAMPLE_RATE: '', ...overrides }, encoding: 'utf8' });
+      const m = /ENV:(\{.*\})/.exec(r.stdout ?? '');
+      return { status: r.status, err: r.stderr ?? '', val: m ? JSON.parse(m[1]) as { chars: number; iters: number; rate: number } : null };
+    };
+    const abc = load({ INPUT_GUARDRAIL_MAX_CHARS: 'abc' });
+    const eightK = load({ INPUT_GUARDRAIL_MAX_CHARS: '8k' });
+    const unset = load({});
+    const zeroIters = load({ ADAPTIVE_RETRIEVAL_MAX_ITERATIONS: '0' });
+    const badRate = load({ OBSERVABILITY_SAMPLE_RATE: 'half' });
+    check('S14-1. INPUT_GUARDRAIL_MAX_CHARS=abc (or 8k) stops env load with a clear message; unset gives the default; 0 is allowed where it means "off"',
+      abc.status !== 0 && /INPUT_GUARDRAIL_MAX_CHARS must be a positive integer \(got "abc"\)/.test(abc.err)
+        && eightK.status !== 0 && /got "8k"/.test(eightK.err)
+        && unset.status === 0 && unset.val?.chars === 8000 && unset.val?.iters === 1
+        && zeroIters.status === 0 && zeroIters.val?.iters === 0
+        && badRate.status !== 0 && /OBSERVABILITY_SAMPLE_RATE must be a number \(got "half"\)/.test(badRate.err),
+      `abc=${abc.status} 8k=${eightK.status} unset=${JSON.stringify(unset.val)} iters0=${zeroIters.val?.iters} rate=${badRate.status}`);
+  }
+
+  // ── S16: the SSE heartbeat stops when the client goes away ───────────
+  {
+    const stu = (await query<{ id: string }>(`INSERT INTO users (name, email, password_hash, is_verified, role) VALUES ('S16', $1, 'x', TRUE, 'STUDENT') RETURNING id`, [`s16-${Date.now()}@example.test`])).rows[0].id;
+    const chat = env.CHAT as { RATE_LIMIT_PER_MINUTE: number; DAILY_QUESTION_LIMIT: number };
+    const savedChat = { ...chat };
+    chat.RATE_LIMIT_PER_MINUTE = 0; chat.DAILY_QUESTION_LIMIT = 0;
+    const realSet = global.setInterval, realClear = global.clearInterval, realQuery = pool.query;
+    let heartbeat: unknown = null;
+    const clearedAt: number[] = [];
+    let pipelineResumedAt = 0;
+    (global as { setInterval: unknown }).setInterval = ((fn: () => void, ms?: number) => {
+      const h = realSet(fn, ms); if (ms === 15000 && heartbeat === null) heartbeat = h; return h;
+    }) as unknown;
+    (global as { clearInterval: unknown }).clearInterval = ((h: NodeJS.Timeout) => { if (h === heartbeat) clearedAt.push(Date.now()); return realClear(h); }) as unknown;
+    // A slow pipeline: the lecture lookup takes 1.5 s.
+    (pool as unknown as { query: unknown }).query = async (text: string, params?: unknown[]) => {
+      if (/^SELECT \* FROM lectures WHERE id = \$1/.test(text)) { await new Promise(r => setTimeout(r, 1500)); pipelineResumedAt = Date.now(); }
+      return (realQuery as unknown as (t: string, p?: unknown[]) => Promise<unknown>).call(pool, text, params);
+    };
+    const app = express(); app.use(express.json()); app.use('/chat', chatRoutes);
+    const srv = app.listen(0, '127.0.0.1');
+    await new Promise<void>(r => srv.once('listening', () => r()));
+    try {
+      const ac = new AbortController();
+      const started = Date.now();
+      const res = await fetch(`http://127.0.0.1:${(srv.address() as AddressInfo).port}/chat/ask-stream`, {
+        method: 'POST', signal: ac.signal,
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${generateAccessToken(stu, 'STUDENT')}` },
+        body: JSON.stringify({ lectureId: 999999, question: 'slow question?', sessionId: 1 }),
+      });
+      await new Promise(r => setTimeout(r, 300));
+      ac.abort(); // the student closes the tab
+      await new Promise(r => setTimeout(r, 2000)); // let the pipeline finish
+      const first = clearedAt[0] ?? 0;
+      check('S16-1. Client disconnects mid-answer → the heartbeat is cleared at once (before the slow pipeline finishes), not only in finally',
+        res.status === 200 && heartbeat !== null && first > 0 && pipelineResumedAt > 0 && first < pipelineResumedAt && first - started < 1200,
+        `stream=${res.status} clearedAfter=${first ? first - started : 'never'}ms pipelineResumedAfter=${pipelineResumedAt ? pipelineResumedAt - started : 'n/a'}ms clears=${clearedAt.length}`);
+    } finally {
+      srv.close();
+      (global as { setInterval: unknown }).setInterval = realSet;
+      (global as { clearInterval: unknown }).clearInterval = realClear;
+      (pool as unknown as { query: unknown }).query = realQuery;
+      Object.assign(chat, savedChat);
+    }
+  }
+
+  // ── AD7: the S3 pointer is written only for an accepted build ────────
+  {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const s3 = require('../services/s3-storage.service') as { isS3Configured: () => boolean; uploadRawDataset: (...a: unknown[]) => Promise<{ bucket: string; key: string }> };
+    const realS3 = { cfg: s3.isS3Configured, up: s3.uploadRawDataset };
+    const uploads: string[] = [];
+    s3.isS3Configured = () => true;
+    s3.uploadRawDataset = async (lectureId: unknown, _buf: unknown, name: unknown) => {
+      const key = `raw/${String(lectureId)}/${Date.now()}-${String(name)}`; uploads.push(key); return { bucket: 'test-bucket', key };
+    };
+    const admin = (await query<{ id: string }>(`INSERT INTO users (name, email, password_hash, is_verified, role) VALUES ('AD7 Admin', $1, 'x', TRUE, 'ADMIN') RETURNING id`, [`ad7-${Date.now()}@example.test`])).rows[0].id;
+    const mkLecture = async (t: string) => (await query<{ id: number }>(`INSERT INTO lectures (title, youtube_url, youtube_video_id) VALUES ($1, 'https://youtu.be/xxxxxxxxxxx', 'xxxxxxxxxxx') RETURNING id`, [t])).rows[0].id;
+    const busy = await mkLecture('[ad7] build in flight');
+    const free = await mkLecture('[ad7] free');
+    // Another update is already building for `busy`: a new build is refused with 409.
+    await query(`INSERT INTO dataset_versions (lecture_id, version_no, status, mode, embedding_model_version, chunking_config_version, stats)
+                 VALUES ($1, 1, 'BUILDING', 'MERGE', 'm', 'c', '{}'::jsonb)`, [busy]);
+    const app = express(); app.use(express.json()); app.use('/datasets', datasetRoutes); app.use(errorHandler);
+    const srv = app.listen(0, '127.0.0.1');
+    await new Promise<void>(r => srv.once('listening', () => r()));
+    const base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+    const post = async (lec: number) => {
+      const fd = new FormData();
+      fd.append('file', new Blob([workbook([['question', 'answer'], ['What is AD7?', 'A pointer test.']])], { type: 'application/octet-stream' }), 'ad7.xlsx');
+      const r = await fetch(`${base}/datasets/upload/${lec}`, { method: 'POST', headers: { Authorization: `Bearer ${generateAccessToken(admin, 'ADMIN')}` }, body: fd });
+      return r.status;
+    };
+    const keyOf = async (lec: number) => (await query<{ k: string | null }>('SELECT dataset_s3_key AS k FROM lectures WHERE id = $1', [lec])).rows[0].k;
+    try {
+      const refused = await post(busy);
+      const refusedKey = await keyOf(busy);
+      const accepted = await post(free);
+      const acceptedKey = await keyOf(free);
+      // Stop the background build of the accepted upload (no embedding server here).
+      await query(`UPDATE dataset_versions SET status = 'FAILED', last_error = 'test' WHERE lecture_id = $1 AND status = 'BUILDING'`, [free]);
+      check('AD7-1. A 409 build (another update in flight) leaves dataset_s3_key unchanged although the raw file was archived; an accepted build records it',
+        refused === 409 && refusedKey === null && uploads.length === 2 && accepted === 200 && acceptedKey === uploads[1],
+        `refused=${refused} key=${refusedKey} accepted=${accepted} key=${acceptedKey} archived=${uploads.length}`);
+    } finally {
+      srv.close();
+      s3.isS3Configured = realS3.cfg; s3.uploadRawDataset = realS3.up;
+    }
+  }
+
+  // ── AD8: RETENTION_DAYS=0 can never wipe the request log ─────────────
+  {
+    const tsNode = join(__dirname, '..', '..', 'node_modules', '.bin', 'ts-node');
+    const boot = (v: string) => spawnSync(tsNode, ['--transpile-only', '-e', `require('./src/config/env'); console.log('ENV_OK')`],
+      { cwd: join(__dirname, '..', '..'), env: { ...process.env, OBSERVABILITY_RETENTION_DAYS: v }, encoding: 'utf8' });
+    const zero = boot('0');
+    const word = boot('ninety');
+    // Even if 0 reached runRetention some other way, the floor keeps today's rows.
+    const obs = env.OBSERVABILITY as { RETENTION_DAYS: number };
+    const saved = obs.RETENTION_DAYS;
+    const traceId = Date.now().toString(16).padStart(32, 'a');
+    await query(`INSERT INTO rag_request_log (trace_id, status, response_status, total_ms) VALUES ($1, 'SUCCESS', 'ANSWERED', 5)`, [traceId]);
+    let kept = -1;
+    try {
+      obs.RETENTION_DAYS = 0;
+      await runRetention();
+      kept = Number((await query<{ n: string }>(`SELECT COUNT(*) AS n FROM rag_request_log WHERE created_at > NOW() - INTERVAL '1 hour'`)).rows[0].n);
+    } finally {
+      obs.RETENTION_DAYS = saved;
+      await query('DELETE FROM rag_request_log WHERE trace_id = $1', [traceId]);
+    }
+    check('AD8-1. OBSERVABILITY_RETENTION_DAYS=0 (or a non-number) stops boot; with 0 forced in, retention still keeps recent rows (floor of 1 day)',
+      zero.status !== 0 && /OBSERVABILITY_RETENTION_DAYS must be a positive integer \(got "0"\)/.test(zero.stderr ?? '')
+        && word.status !== 0 && /got "ninety"/.test(word.stderr ?? '') && kept > 0,
+      `zero=${zero.status} word=${word.status} recentRowsKept=${kept}`);
+  }
+
+  // ── AD9: rollback validates inside its own transaction ───────────────
+  {
+    const lec = (await query<{ id: number }>(`INSERT INTO lectures (title, youtube_url, youtube_video_id) VALUES ('[ad9] rollback', 'https://youtu.be/xxxxxxxxxxx', 'xxxxxxxxxxx') RETURNING id`)).rows[0].id;
+    const mkVersion = async (no: number, status: string) => (await query<{ id: number }>(
+      `INSERT INTO dataset_versions (lecture_id, version_no, status, mode, embedding_model_version, chunking_config_version, stats)
+       VALUES ($1, $2, $3, 'MERGE', $4, 'c', '{}'::jsonb) RETURNING id`, [lec, no, status, EMBEDDING_MODEL_VERSION])).rows[0].id;
+    const previous = await mkVersion(1, 'SUPERSEDED');
+    const current = await mkVersion(2, 'ACTIVE');
+    // Two embedded chunks per version, each with its own (distinct) vector.
+    for (const [v, base] of [[previous, 1], [current, 3]] as const) {
+      for (let i = 0; i < 2; i++) {
+        const vec = `[${Array.from({ length: 1024 }, (_, j) => (j === base + i ? 1 : 0.001 * ((j * (base + i)) % 7))).join(',')}]`;
+        const c = (await query<{ id: number }>(
+          `INSERT INTO lecture_qna_chunks (lecture_id, question, answer, chunk_text, local_embedding, embedding_model_version)
+           VALUES ($1, $2, 'a', $2, $3::vector, $4) RETURNING id`, [lec, `ad9 q${base}-${i}`, vec, EMBEDDING_MODEL_VERSION])).rows[0].id;
+        await query('INSERT INTO dataset_version_chunks (version_id, chunk_id, qa_id, chunk_index) VALUES ($1, $2, $3, 0)', [v, c, `ad9-${v}-${i}`]);
+      }
+    }
+    await query(`UPDATE lectures SET active_version_id = $1, status = 'READY' WHERE id = $2`, [current, lec]);
+    // While rolling back, the module query helper (a second pool connection) is off limits.
+    const realQuery = pool.query;
+    let poolQueries = 0;
+    (pool as unknown as { query: unknown }).query = async () => { poolQueries++; throw new Error('pool.query used during rollback'); };
+    let result: { activeVersionId: number } | Error;
+    try {
+      result = await rollbackDataset(lec).catch(e => e as Error);
+    } finally {
+      (pool as unknown as { query: unknown }).query = realQuery;
+    }
+    const after = (await query<{ active_version_id: number }>('SELECT active_version_id FROM lectures WHERE id = $1', [lec])).rows[0];
+    check('AD9-1. Rollback validates the target inside its own transaction (no second pool connection) and still switches the pointer',
+      !(result instanceof Error) && result.activeVersionId === previous && after.active_version_id === previous && poolQueries === 0,
+      `result=${result instanceof Error ? result.message : result.activeVersionId} active=${after.active_version_id} poolQueries=${poolQueries}`);
+  }
+
+  // ── AD10: readiness never claims an unprobed answer LLM is healthy ───
+  {
+    const rag = env.LLM.RAG_ANSWER as { PROVIDER: string };
+    const saved = rag.PROVIDER;
+    try {
+      rag.PROVIDER = 'groq';
+      const direct = await checkAnswerLlm();
+      const r = await checkReadiness();
+      check('AD10-1. RAG_LLM_PROVIDER=groq: readiness is not healthy and answerLlm.errorCode = UNVERIFIED_PROVIDER (it used to probe no LLM at all)',
+        direct.status === 'degraded' && direct.errorCode === 'UNVERIFIED_PROVIDER'
+          && r.status !== 'healthy' && r.components.answerLlm.errorCode === 'UNVERIFIED_PROVIDER' && !('gemini' in r.components),
+        `direct=${JSON.stringify(direct)} overall=${r.status} answerLlm=${JSON.stringify(r.components.answerLlm)}`);
+    } finally {
+      rag.PROVIDER = saved;
+    }
+  }
+
+  // ── AD11: an unknown student is a 404 with its own message ──────────
+  {
+    const server = new ApolloServer({
+      typeDefs, resolvers: { Query: analyticsResolvers.Query } as never,
+      formatError: (err, original) => formatGraphQLError(err, original),
+    });
+    await server.start();
+    const res = await server.executeOperation(
+      { query: 'query($id: String!) { studentJourney(id: $id) { studentId } }', variables: { id: '00000000-0000-4000-8000-00000000dead' } },
+      { contextValue: { req: { user: { id: 'admin', email: 'admin@example.test', role: 'ADMIN' } } } as never }
+    );
+    await server.stop();
+    const errs = res.body.kind === 'single' ? res.body.singleResult.errors ?? [] : [];
+    const direct = await getStudentJourney('00000000-0000-4000-8000-00000000dead').catch(e => e as AppError);
+    check('AD11-1. studentJourney for an unknown id → "Student not found" (AppError 404), not "Internal server error"',
+      errs[0]?.message === 'Student not found' && direct instanceof AppError && direct.statusCode === 404,
+      `graphql="${errs[0]?.message}" status=${(direct as AppError).statusCode}`);
   }
 
 };

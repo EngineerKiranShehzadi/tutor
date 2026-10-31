@@ -55,6 +55,12 @@ export function createLocalHttpRerankProvider(retry: RetryOptions = DEFAULT_RETR
         seen.add(id);
         return { id, score: r.score };
       });
+      // A short or empty reply silently dropped candidates — and an empty one
+      // ended as "not in this lecture" (SUCCESS). It is an infrastructure fault:
+      // throwing maps it to RERANKER_FAILURE / ERROR, like the embedding adapters.
+      if (scores.length !== candidates.length) {
+        throw new Error(`Rerank returned ${scores.length} scores for ${candidates.length} candidates`);
+      }
       return scores.sort((a, b) => b.score - a.score);
     },
   };

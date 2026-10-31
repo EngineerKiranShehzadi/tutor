@@ -43,23 +43,33 @@ export default function LectureDetailPage({ params }: Props) {
 
   const lecture: DBLecture | undefined = data?.lecture;
 
-  const [chunkSearch, setChunkSearch] = useState('');
-  const [chunkPage,   setChunkPage]   = useState(1);
+  const [chunkSearchInput, setChunkSearchInput] = useState('');
+  const [chunkSearch,      setChunkSearch]      = useState('');
+  const [chunkPage,        setChunkPage]        = useState(1);
   const CHUNK_PAGE_SIZE = 10;
 
-  const { data: chunksData, loading: chunksLoading, refetch: refetchChunks } = useQuery(GET_LECTURE_CHUNKS, {
-    variables: { lectureId: parseInt(params.id, 10) },
+  // Search runs on the server (question, answer, topic); wait for a pause in typing.
+  useEffect(() => {
+    const t = setTimeout(() => { setChunkSearch(chunkSearchInput.trim()); setChunkPage(1); }, 300);
+    return () => clearTimeout(t);
+  }, [chunkSearchInput]);
+
+  // One page at a time (AD6) — the whole dataset with full answers is never downloaded.
+  const { data: chunksData, loading: chunksLoading, refetch: refetchChunks } = useQuery<{
+    lectureChunks: { items: QnaChunk[]; total: number; hasMore: boolean };
+  }>(GET_LECTURE_CHUNKS, {
+    variables: {
+      lectureId: parseInt(params.id, 10),
+      limit: CHUNK_PAGE_SIZE,
+      offset: (chunkPage - 1) * CHUNK_PAGE_SIZE,
+      search: chunkSearch || null,
+    },
     fetchPolicy: 'network-only',
     skip: !data?.lecture || data.lecture.status !== 'READY',
   });
-  const allChunks: QnaChunk[] = chunksData?.lectureChunks ?? [];
-  const filteredChunks = allChunks.filter(c =>
-    !chunkSearch ||
-    c.question.toLowerCase().includes(chunkSearch.toLowerCase()) ||
-    (c.topic ?? '').toLowerCase().includes(chunkSearch.toLowerCase())
-  );
-  const chunkPages = Math.max(1, Math.ceil(filteredChunks.length / CHUNK_PAGE_SIZE));
-  const pagedChunks = filteredChunks.slice((chunkPage - 1) * CHUNK_PAGE_SIZE, chunkPage * CHUNK_PAGE_SIZE);
+  const pagedChunks: QnaChunk[] = chunksData?.lectureChunks.items ?? [];
+  const chunkTotal = chunksData?.lectureChunks.total ?? 0;
+  const chunkPages = Math.max(1, Math.ceil(chunkTotal / CHUNK_PAGE_SIZE));
 
   const [editMode,    setEditMode]    = useState(false);
   const [editForm,    setEditForm]    = useState({ title: '', description: '', youtubeUrl: '' });
@@ -424,9 +434,9 @@ export default function LectureDetailPage({ params }: Props) {
                 <i className="fas fa-list-check text-white text-[17px]" />
               </div>
               <span className="text-[16px] font-semibold text-slate-700">Dataset Preview</span>
-              {allChunks.length > 0 && (
+              {chunkTotal > 0 && (
                 <span className="text-[17px] font-semibold text-indigo-600 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-full">
-                  {allChunks.length} Q&A pairs
+                  {chunkTotal} Q&A pairs{chunkSearch ? ' match' : ''}
                 </span>
               )}
             </div>
@@ -436,15 +446,15 @@ export default function LectureDetailPage({ params }: Props) {
             <div className="relative">
               <i className="fas fa-search absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-[17px]" />
               <input
-                value={chunkSearch}
-                onChange={e => { setChunkSearch(e.target.value); setChunkPage(1); }}
-                placeholder="Search questions or topics…"
+                value={chunkSearchInput}
+                onChange={e => setChunkSearchInput(e.target.value)}
+                placeholder="Search questions, answers or topics…"
                 className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-[17px] text-slate-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all"
               />
             </div>
           </div>
 
-          {chunksLoading ? (
+          {chunksLoading && !chunksData ? (
             <div className="px-6 py-4 space-y-3">
               {[1,2,3].map(i => <div key={i} className="h-16 bg-slate-100 rounded-xl animate-pulse" />)}
             </div>
@@ -478,7 +488,7 @@ export default function LectureDetailPage({ params }: Props) {
 
           {chunkPages > 1 && (
             <div className="px-6 py-3 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between">
-              <span className="text-[17px] text-slate-400">{filteredChunks.length} pair{filteredChunks.length !== 1 ? 's' : ''}</span>
+              <span className="text-[17px] text-slate-400">{chunkTotal} pair{chunkTotal !== 1 ? 's' : ''}</span>
               <div className="flex items-center gap-1.5">
                 <button onClick={() => setChunkPage(p => Math.max(1, p - 1))} disabled={chunkPage === 1}
                   className="w-7 h-7 rounded-lg border border-slate-200 flex items-center justify-center text-slate-500 hover:bg-slate-100 disabled:opacity-30 text-[17px]">

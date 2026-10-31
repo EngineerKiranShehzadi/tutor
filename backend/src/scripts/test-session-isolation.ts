@@ -144,13 +144,13 @@ function makeDeps(route: 'FACT_QUESTION' | 'GREETING' | 'LECTURE_SUMMARY' | 'CON
     generateAnswer: async (_q, _c, _t, history) => { spies.generate.push({ history: (history ?? []) as { question: string; answer: string }[] }); return 'ANSWER'; },
     runOutputGuardrail: async p => { spies.output++; return {
       finalAnswer: p.draftAnswer, verified: true, decision: 'VERIFIED', reason: 'VERIFIED', revisionAttempted: false, revisionSucceeded: false,
-      unsupportedClaimCount: 0, missingAspectCount: 0, expectedFormat: 'NATURAL_TEXT', formatValidationRequired: false, formatValid: true,
-      formatRepairAttempted: false, formatRepairSucceeded: false, piiDetected: false, piiCategories: [] }; },
+      verificationUnavailable: false, unsupportedClaimCount: 0, missingAspectCount: 0, expectedFormat: 'NATURAL_TEXT', formatValidationRequired: false, formatValid: true,
+      formatRepairAttempted: false, formatRepairSucceeded: false, formatRepairRejected: null, piiDetected: false, piiCategories: [] }; },
     lookupAnswerMemory: async () => { spies.memLookup++; return { hit: null, embedding: [0.1, 0.2], datasetVersionId: 1, lookupFailed: false }; },
     writeAnswerMemory: async () => { spies.memWrite++; },
     generateGreeting: async () => { spies.greeting++; return 'hello'; },
     getAllLectureChunks: async l => { spies.summaryChunks++; return [chunk(1, l)]; },
-    generateLectureSummary: async () => { spies.summaryGen++; return 'SUMMARY'; },
+    generateLectureSummary: async () => { spies.summaryGen++; return { summary: 'SUMMARY', batchesAttempted: 1, batchesSucceeded: 1 }; },
     onTraceComplete: t => { spies.traces.push(t); },
   };
   return { deps, spies };

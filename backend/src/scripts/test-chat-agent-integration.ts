@@ -197,11 +197,11 @@ const fakeChunk = (id: number, lectureId: number, text = `Q: q${id}\nA: a${id}`)
 
 const verifiedResult = (finalAnswer: string): OutputGuardrailResult => ({
   finalAnswer, verified: true, decision: 'VERIFIED', reason: 'VERIFIED', revisionAttempted: false, revisionSucceeded: false,
-  unsupportedClaimCount: 0, missingAspectCount: 0, expectedFormat: 'NATURAL_TEXT', formatValidationRequired: false,
-  formatValid: true, formatRepairAttempted: false, formatRepairSucceeded: false, piiDetected: false, piiCategories: [],
+  verificationUnavailable: false, unsupportedClaimCount: 0, missingAspectCount: 0, expectedFormat: 'NATURAL_TEXT', formatValidationRequired: false,
+  formatValid: true, formatRepairAttempted: false, formatRepairSucceeded: false, formatRepairRejected: null, piiDetected: false, piiCategories: [],
 });
 const fallbackResult = (finalAnswer: string): OutputGuardrailResult => ({
-  ...verifiedResult(finalAnswer), verified: false, decision: null, reason: 'VERIFIER_PROVIDER_ERROR',
+  ...verifiedResult(finalAnswer), verified: false, decision: 'INSUFFICIENT_EVIDENCE', reason: 'INSUFFICIENT_EVIDENCE',
 });
 
 interface Spies {
@@ -250,7 +250,7 @@ function makeDeps(opts: {
     },
     generateGreeting: async (...args: unknown[]) => { spies.order.push('greeting'); spies.greeting.push(args); return 'Hello from the tutor'; },
     getAllLectureChunks: async lectureId => { spies.summaryChunksFor.push(lectureId); return [fakeChunk(1, lectureId), fakeChunk(2, lectureId)]; },
-    generateLectureSummary: async () => { spies.summaryCalls++; return 'LECTURE SUMMARY TEXT'; },
+    generateLectureSummary: async () => { spies.summaryCalls++; return { summary: 'LECTURE SUMMARY TEXT', batchesAttempted: 1, batchesSucceeded: 1 }; },
     onTraceComplete: t => { spies.traces.push(t); },
     ...(opts.extra ?? {}),
   };

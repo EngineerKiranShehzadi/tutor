@@ -4,6 +4,7 @@ import { AuthenticatedRequest } from '../../types';
 import { AppError } from '../../middleware/errorHandler';
 import { getAllUsers, deleteUser, updateUserRole, updateAdminProfile } from '../../services/user.service';
 import { logger } from '../../utils/logger';
+import { REFRESH_COOKIE } from '../../utils/auth-cookies';
 
 function requireAdmin(ctx: GraphQLContext) {
   const user = (ctx.req as AuthenticatedRequest).user;
@@ -22,11 +23,15 @@ function wrap(fn: () => Promise<unknown>) {
 
 export const userResolvers = {
   Query: {
-    allUsers: (_: unknown, __: unknown, ctx: GraphQLContext) =>
+    allUsers: (
+      _: unknown,
+      args: { limit?: number | null; offset?: number | null; search?: string | null; role?: string | null },
+      ctx: GraphQLContext
+    ) =>
       wrap(async () => {
         const admin = requireAdmin(ctx);
-        logger.info(`[GRAPHQL] allUsers query by admin "${admin.email}"`);
-        return getAllUsers();
+        logger.info(`[GRAPHQL] allUsers(limit=${args.limit}, offset=${args.offset}) query by admin "${admin.email}"`);
+        return getAllUsers(args);
       }),
   },
 
@@ -53,7 +58,8 @@ export const userResolvers = {
       wrap(async () => {
         const admin = requireAdmin(ctx);
         logger.info(`[GRAPHQL] updateAdminProfile: admin "${admin.email}"`);
-        return updateAdminProfile(admin.id, name, currentPassword, newPassword);
+        // A password change keeps this session (its refresh cookie) and ends the others.
+        return updateAdminProfile(admin.id, name, currentPassword, newPassword, ctx.req.cookies?.[REFRESH_COOKIE]);
       }),
   },
 };

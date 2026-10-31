@@ -75,13 +75,14 @@ const stubOutputGuardrail = async (params: OutputGuardrailParams): Promise<Outpu
   reason: 'VERIFIED',
   revisionAttempted: false,
   revisionSucceeded: false,
+  verificationUnavailable: false,
   unsupportedClaimCount: 0,
   missingAspectCount: 0,
   expectedFormat: 'NATURAL_TEXT',
   formatValidationRequired: false,
   formatValid: true,
   formatRepairAttempted: false,
-  formatRepairSucceeded: false,
+  formatRepairSucceeded: false, formatRepairRejected: null,
   piiDetected: false,
   piiCategories: [],
 });
@@ -175,7 +176,7 @@ async function runTracingChecks(): Promise<Record<string, CaseResult>> {
       const { trace } = await withTrace('Summarize this lecture.', {
         classifyRoute: async () => ({ route: 'LECTURE_SUMMARY', source: 'rule' }),
         getAllLectureChunks: async () => [fakeChunk(2, lectureId)],
-        generateLectureSummary: async () => 'A fixture summary.',
+        generateLectureSummary: async () => ({ summary: 'A fixture summary.', batchesAttempted: 1, batchesSucceeded: 1 }),
       }, ctx);
       const names = spanNames(trace);
       results['4'] = { pass: names.includes('fetch-all-lecture-chunks') && names.includes('summarize-lecture-content'), detail: `spans=${JSON.stringify(names)}` };
@@ -382,7 +383,7 @@ cases.push({
     const r = await checkReadiness();
     const shapeOk = ['healthy', 'degraded', 'unhealthy'].includes(r.status)
       && typeof r.checkedAt === 'string'
-      && r.components.database && r.components.pgvector && r.components.embeddingServer && r.components.reranker && r.components.gemini;
+      && r.components.database && r.components.pgvector && r.components.embeddingServer && r.components.reranker && r.components.answerLlm;
     const dbHealthy = r.components.database.status === 'healthy';
     const pgvectorHealthy = r.components.pgvector.status === 'healthy';
     // Required-dependency (embeddingServer) down in this environment ->

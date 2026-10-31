@@ -20,4 +20,10 @@ export const REFRESH_COOKIE_OPTS: CookieOptions = { ...base, maxAge: 7 * 24 * 60
 // resend still works a while later.
 export const VERIFY_TICKET_COOKIE_OPTS: CookieOptions = { ...base, maxAge: 30 * 60 * 1000 };
 
+// Ties a verified password-reset code to the browser that verified it: only
+// the holder of this cookie can set the new password (see verifyOtp /
+// resetPasswordWithOtp in auth.service.ts). Outlives the 5-minute code a little.
+export const RESET_TICKET_COOKIE = 'reset_ticket';
+export const RESET_TICKET_COOKIE_OPTS: CookieOptions = { ...base, maxAge: 10 * 60 * 1000 };
+
 export const CLEAR_COOKIE_OPTS: CookieOptions = base;

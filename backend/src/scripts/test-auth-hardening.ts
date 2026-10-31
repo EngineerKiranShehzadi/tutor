@@ -38,6 +38,7 @@ import { updateUserRole, updateAdminProfile } from '../services/user.service';
 import { generateAccessToken, generateRefreshToken, verifyAccessToken, verifyRefreshToken } from '../utils/jwt';
 import { hashToken } from '../utils/password';
 import { createApp } from '../app';
+import { readFileSync } from 'fs';
 
 const DOMAIN = '@auth-hardening.test';
 const PW = 'GoodPass1';
@@ -119,9 +120,9 @@ test('#9 a verified reset token past expires_at cannot reset the password', asyn
   const id = await insertUser(email);
   await Auth.requestPasswordReset(email);
   await setCode('password_reset_tokens', id, '222222');
-  await Auth.verifyOtp(email, '222222');
+  const ticket = await Auth.verifyOtp(email, '222222');
   await query(`UPDATE password_reset_tokens SET expires_at = NOW() - INTERVAL '1 hour' WHERE user_id = $1`, [id]);
-  const e = await errOf(Auth.resetPasswordWithOtp(email, 'NewPass12', 'NewPass12'));
+  const e = await errOf(Auth.resetPasswordWithOtp(email, 'NewPass12', 'NewPass12', ticket));
   const u = await userByEmail(email);
   return { pass: !!e && await bcrypt.compare(PW, u.password_hash!), detail: e?.message };
 });
@@ -132,9 +133,9 @@ test('#9 an unexpired verified token resets once, revokes sessions, then is spen
   await login(email);
   await Auth.requestPasswordReset(email);
   await setCode('password_reset_tokens', id, '333333');
-  await Auth.verifyOtp(email, '333333');
-  await Auth.resetPasswordWithOtp(email, 'NewPass12', 'NewPass12');
-  const again = await errOf(Auth.resetPasswordWithOtp(email, 'Other123', 'Other123'));
+  const ticket = await Auth.verifyOtp(email, '333333');
+  await Auth.resetPasswordWithOtp(email, 'NewPass12', 'NewPass12', ticket);
+  const again = await errOf(Auth.resetPasswordWithOtp(email, 'Other123', 'Other123', ticket));
   const u = await userByEmail(email);
   const sessions = await count('SELECT COUNT(*) n FROM refresh_tokens WHERE user_id = $1', [id]);
   return { pass: await bcrypt.compare('NewPass12', u.password_hash!) && !!again && sessions === 0, detail: `second=${again?.message} sessions=${sessions}` };
@@ -145,10 +146,10 @@ test('#9 two concurrent resets with one verified token: exactly one succeeds', a
   const id = await insertUser(email);
   await Auth.requestPasswordReset(email);
   await setCode('password_reset_tokens', id, '444444');
-  await Auth.verifyOtp(email, '444444');
+  const ticket = await Auth.verifyOtp(email, '444444');
   const results = await Promise.allSettled([
-    Auth.resetPasswordWithOtp(email, 'RaceAaa11', 'RaceAaa11'),
-    Auth.resetPasswordWithOtp(email, 'RaceBbb22', 'RaceBbb22'),
+    Auth.resetPasswordWithOtp(email, 'RaceAaa11', 'RaceAaa11', ticket),
+    Auth.resetPasswordWithOtp(email, 'RaceBbb22', 'RaceBbb22', ticket),
   ]);
   const ok = results.filter(r => r.status === 'fulfilled').length;
   return { pass: ok === 1, detail: `fulfilled=${ok}` };
@@ -159,8 +160,8 @@ test('R3 a reset on a squatted unverified account verifies it in one step', asyn
   const s = await pendingSignup(email);               // squatter's unverified account + pending code
   await Auth.requestPasswordReset(email);             // the inbox owner
   await setCode('password_reset_tokens', s.id, '777777');
-  await Auth.verifyOtp(email, '777777');
-  await Auth.resetPasswordWithOtp(email, 'OwnerPass9', 'OwnerPass9');
+  const ticket = await Auth.verifyOtp(email, '777777');
+  await Auth.resetPasswordWithOtp(email, 'OwnerPass9', 'OwnerPass9', ticket);
   const u = await userByEmail(email);
   const pending = await count('SELECT COUNT(*) n FROM email_verification_tokens WHERE user_id = $1 AND used = FALSE', [s.id]);
   const r = await Auth.loginUser(email, 'OwnerPass9');
@@ -208,10 +209,10 @@ test('#10 reset rejects a weak password and one over 72 bytes', async () => {
   const id = await insertUser(email);
   await Auth.requestPasswordReset(email);
   await setCode('password_reset_tokens', id, '555555');
-  await Auth.verifyOtp(email, '555555');
-  const weak = await errOf(Auth.resetPasswordWithOtp(email, 'a', 'a'));
+  const ticket = await Auth.verifyOtp(email, '555555');
+  const weak = await errOf(Auth.resetPasswordWithOtp(email, 'a', 'a', ticket));
   const long = 'Aa1' + 'x'.repeat(70);
-  const tooLong = await errOf(Auth.resetPasswordWithOtp(email, long, long));
+  const tooLong = await errOf(Auth.resetPasswordWithOtp(email, long, long, ticket));
   const u = await userByEmail(email);
   return { pass: !!weak && !!tooLong && await bcrypt.compare(PW, u.password_hash!), detail: `${weak?.message} | ${tooLong?.message}` };
 });
@@ -270,7 +271,7 @@ test('#2 every OTP failure returns one message (unknown email, wrong, expired)',
   const wrong = await errOf(Auth.verifyOtp(email, '000000'));
   await query(`UPDATE password_reset_tokens SET expires_at = NOW() - INTERVAL '1 minute' WHERE user_id = $1`, [id]);
   const expired = await errOf(Auth.verifyOtp(email, '000000'));
-  const resetUnknown = await errOf(Auth.resetPasswordWithOtp(addr('nobody'), 'NewPass12', 'NewPass12'));
+  const resetUnknown = await errOf(Auth.resetPasswordWithOtp(addr('nobody'), 'NewPass12', 'NewPass12', 'some-ticket'));
   const msgs = new Set([unknown?.message, wrong?.message, expired?.message, resetUnknown?.message]);
   return { pass: msgs.size === 1 && !msgs.has(undefined), detail: [...msgs].join(' | ') };
 });
@@ -547,6 +548,214 @@ test('POST /login for an unverified account sets verify_ticket as httpOnly and o
   const body = await res.json() as { data?: Record<string, unknown> };
   const raw = (res.headers.getSetCookie?.() ?? []).find(c => c.startsWith('verify_ticket=')) ?? '';
   return { pass: res.status === 200 && body.data?.status === 'EMAIL_VERIFICATION_REQUIRED' && !('verificationTicket' in (body.data ?? {})) && /HttpOnly/i.test(raw), detail: raw };
+});
+
+
+// ── AU1: the reset step needs the ticket of the browser that verified the code ──
+test('AU1 reset without a ticket, or with the wrong one, fails; the verifying browser\'s ticket succeeds', async () => {
+  const email = addr('reset-ticket');
+  const id = await insertUser(email);
+  await Auth.requestPasswordReset(email);
+  await setCode('password_reset_tokens', id, '121212');
+  const ticket = await Auth.verifyOtp(email, '121212');
+  const none = await errOf(Auth.resetPasswordWithOtp(email, 'Attacker99', 'Attacker99', undefined));
+  const wrong = await errOf(Auth.resetPasswordWithOtp(email, 'Attacker99', 'Attacker99', 'not-the-ticket'));
+  const stillOld = await bcrypt.compare(PW, (await userByEmail(email)).password_hash!);
+  const ok = await errOf(Auth.resetPasswordWithOtp(email, 'OwnerNew77', 'OwnerNew77', ticket));
+  const u = await userByEmail(email);
+  const stored = await latestCode('password_reset_tokens', id) as { ticket_hash?: string | null };
+  return {
+    pass: none instanceof AppError && wrong instanceof AppError && stillOld && ok === null
+      && await bcrypt.compare('OwnerNew77', u.password_hash!) && stored.ticket_hash === hashToken(ticket) && ticket.length >= 40,
+    detail: `none=${none?.message} wrong=${wrong?.message} ok=${ok?.message ?? 'ok'}`,
+  };
+});
+
+test('AU1/AU9 a second verifyOtp on an already-verified code fails (never "verified" again)', async () => {
+  const email = addr('reverify');
+  const id = await insertUser(email);
+  await Auth.requestPasswordReset(email);
+  await setCode('password_reset_tokens', id, '131313');
+  const first = await Auth.verifyOtp(email, '131313');
+  const second = await errOf(Auth.verifyOtp(email, '131313'));
+  const parallelEmail = addr('reverify-race');
+  const pid = await insertUser(parallelEmail);
+  await Auth.requestPasswordReset(parallelEmail);
+  await setCode('password_reset_tokens', pid, '141414');
+  const race = await Promise.allSettled([Auth.verifyOtp(parallelEmail, '141414'), Auth.verifyOtp(parallelEmail, '141414')]);
+  const won = race.filter(r => r.status === 'fulfilled').length;
+  return { pass: typeof first === 'string' && second instanceof AppError && second.statusCode === 400 && won === 1,
+    detail: `second=${second?.message} raceWinners=${won}` };
+});
+
+test('AU1 GraphQL: verifyOtp sets reset_ticket (httpOnly, not in the body); resetPassword needs that cookie and clears it', async (base) => {
+  const email = addr('gql-reset');
+  const id = await insertUser(email);
+  await Auth.requestPasswordReset(email);
+  await setCode('password_reset_tokens', id, '151515');
+  const gql = (q: string, variables: unknown, cookie?: string) => fetch(`${base}/graphql`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}) },
+    body: JSON.stringify({ query: q, variables }),
+  });
+  const verify = await gql('mutation($i: VerifyOtpInput!) { verifyOtp(input: $i) { success message } }', { i: { email, code: '151515' } });
+  const vBody = await verify.text();
+  const rawCookie = (verify.headers.getSetCookie?.() ?? []).find(c => c.startsWith('reset_ticket=')) ?? '';
+  const ticket = cookieValue(verify, 'reset_ticket');
+  const RESET = 'mutation($i: ResetPasswordInput!) { resetPassword(input: $i) { success } }';
+  const input = { i: { email, newPassword: 'ViaGraph88', confirmPassword: 'ViaGraph88' } };
+  const noCookie = await (await gql(RESET, input)).json() as { errors?: unknown[] };
+  const withCookie = await gql(RESET, input, `reset_ticket=${ticket}`);
+  const wBody = await withCookie.json() as { data?: { resetPassword?: { success: boolean } } };
+  const cleared = (withCookie.headers.getSetCookie?.() ?? []).find(c => c.startsWith('reset_ticket=')) ?? '';
+  const u = await userByEmail(email);
+  return {
+    pass: !!ticket && /HttpOnly/i.test(rawCookie) && !vBody.includes(ticket) && !!noCookie.errors
+      && wBody.data?.resetPassword?.success === true && /Expires=Thu, 01 Jan 1970/i.test(cleared)
+      && await bcrypt.compare('ViaGraph88', u.password_hash!),
+    detail: `cookie=${rawCookie.slice(0, 60)} noCookieErr=${!!noCookie.errors} cleared=${cleared.slice(0, 40)}`,
+  };
+});
+
+// ── AU2: the refresh token never appears in a response body ────────────
+test('AU2 POST /login: the body has no refreshToken (anywhere), the httpOnly refreshToken cookie is set', async (base) => {
+  const email = addr('rest-login');
+  await insertUser(email);
+  const res = await fetch(`${base}/api/v1/auth/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password: PW }),
+  });
+  const text = await res.text();
+  const body = JSON.parse(text) as { data?: Record<string, unknown> };
+  const raw = (res.headers.getSetCookie?.() ?? []).find(c => c.startsWith('refreshToken=')) ?? '';
+  const cookie = cookieValue(res, 'refreshToken') ?? '';
+  return {
+    pass: res.status === 200 && body.data?.status === 'AUTHENTICATED' && !!body.data?.accessToken
+      && !('refreshToken' in (body.data ?? {})) && !/refreshToken/.test(text) && cookie.length > 20 && !text.includes(cookie)
+      && /HttpOnly/i.test(raw),
+    detail: `keys=${Object.keys(body.data ?? {}).join(',')} cookie=${raw.slice(0, 30)}…`,
+  };
+});
+
+// ── AU3: a password change ends every other session, keeps the current one ──
+test('AU3 updateProfile / updateAdminProfile password change: session A stays refreshable, session B gets 401', async () => {
+  const run = async (change: (id: string, keep: string) => Promise<unknown>, role: string) => {
+    const email = addr(`pw-change-${role}`);
+    const id = await insertUser(email, { role });
+    const a = await login(email);
+    const b = await login(email);
+    await change(id, a.refreshToken);
+    const aRefresh = await errOf(Auth.refreshAccessToken(a.refreshToken));
+    const bRefresh = await errOf(Auth.refreshAccessToken(b.refreshToken));
+    return { ok: aRefresh === null && bRefresh instanceof AppError && bRefresh.statusCode === 401, detail: `${role}: A=${aRefresh?.message ?? 'ok'} B=${(bRefresh as AppError)?.statusCode}` };
+  };
+  const student = await run((id, keep) => Auth.updateProfile(id, { currentPassword: PW, newPassword: 'Changed123' }, keep), 'STUDENT');
+  const admin = await run((id, keep) => updateAdminProfile(id, undefined, PW, 'Changed123', keep), 'ADMIN');
+  // A name-only update ends nothing.
+  const email = addr('name-only');
+  const id = await insertUser(email);
+  const a = await login(email); const b = await login(email);
+  await Auth.updateProfile(id, { name: 'New Name' }, a.refreshToken);
+  const untouched = (await errOf(Auth.refreshAccessToken(b.refreshToken))) === null;
+  return { pass: student.ok && admin.ok && untouched, detail: `${student.detail} | ${admin.detail} | nameOnlyKeepsB=${untouched}` };
+});
+
+test('AU3 REST PATCH /auth/me with a new password: the calling browser keeps refreshing, the other browser is logged out', async (base) => {
+  const email = addr('rest-pw');
+  await insertUser(email);
+  const loginRest = async () => {
+    const r = await fetch(`${base}/api/v1/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password: PW }) });
+    const body = await r.json() as { data: { accessToken: string } };
+    return { access: body.data.accessToken, cookie: `refreshToken=${cookieValue(r, 'refreshToken')}` };
+  };
+  const a = await loginRest(); const b = await loginRest();
+  const patch = await fetch(`${base}/api/v1/auth/me`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${a.access}`, Cookie: a.cookie },
+    body: JSON.stringify({ currentPassword: PW, newPassword: 'RestChange9' }),
+  });
+  const refresh = (cookie: string) => fetch(`${base}/api/v1/auth/refresh-token`, { method: 'POST', headers: { Cookie: cookie } });
+  const ra = await refresh(a.cookie); const rb = await refresh(b.cookie);
+  return { pass: patch.status === 200 && ra.status === 200 && rb.status === 401, detail: `patch=${patch.status} A=${ra.status} B=${rb.status}` };
+});
+
+// ── AU4: signup takes as long for a taken address as for a fresh one ─────
+// Timing-based: medians over 10 runs each must be within 50 ms. On a slow or
+// noisy machine set AUTH_TIMING_TESTS=skip to skip it (it then reports PASS
+// with "skipped" in the detail).
+test('AU4 signup: a taken address is not measurably faster than a fresh one (median gap < 50 ms over 10 runs)', async () => {
+  if (process.env.AUTH_TIMING_TESTS === 'skip') return { pass: true, detail: 'skipped (AUTH_TIMING_TESTS=skip)' };
+  const taken = addr('signup-taken');
+  await insertUser(taken);
+  const time = async (email: string) => { const t = process.hrtime.bigint(); await Auth.signupUser('Timing User', email, PW); return Number(process.hrtime.bigint() - t) / 1e6; };
+  await time(addr('signup-warmup'));
+  const fresh: number[] = [], existing: number[] = [];
+  for (let i = 0; i < 10; i++) { fresh.push(await time(addr('signup-fresh'))); existing.push(await time(taken)); }
+  const med = (a: number[]) => { const x = [...a].sort((p, q) => p - q); return (x[4] + x[5]) / 2; };
+  const gap = Math.abs(med(fresh) - med(existing));
+  return { pass: gap < 50, detail: `fresh≈${med(fresh).toFixed(0)}ms taken≈${med(existing).toFixed(0)}ms gap=${gap.toFixed(0)}ms` };
+});
+
+// ── AU5: a Google-only admin changing a password gets a clear 400 ──────
+test('AU5 updateAdminProfile on a Google-only admin (no password) → 400 with the Google sign-in message, not a 500', async () => {
+  const id = await insertUser(addr('g-admin'), { role: 'ADMIN', password: null, googleId: `g-${Date.now()}-adm` });
+  const e = await errOf(updateAdminProfile(id, undefined, 'Whatever1', 'NewPass123'));
+  return {
+    pass: e instanceof AppError && e.statusCode === 400 && e.message === 'This account uses Google sign-in and has no password to change.',
+    detail: `${(e as AppError)?.statusCode} ${e?.message}`,
+  };
+});
+
+// ── AU6: a dead refresh cookie is cleared (401 only, never on 409) ──────
+test('AU6 POST /auth/refresh-token: a revoked token → 401 and the refreshToken cookie is cleared; a 409 (concurrent refresh) keeps it', async (base) => {
+  const refresh = (token: string) => fetch(`${base}/api/v1/auth/refresh-token`, { method: 'POST', headers: { Cookie: `refreshToken=${token}` } });
+  const clearing = (res: Response) => (res.headers.getSetCookie?.() ?? []).find(c => /^refreshToken=;/.test(c) && /Expires=Thu, 01 Jan 1970/i.test(c));
+  const email = addr('dead-cookie');
+  const id = await insertUser(email);
+  const a = await login(email);
+  await Auth.revokeAllSessions(id);
+  const revoked = await refresh(a.refreshToken);
+  const b = await login(email);
+  const first = await refresh(b.refreshToken);           // rotates b
+  const raced = await refresh(b.refreshToken);           // same token again inside the grace window → 409
+  return {
+    pass: revoked.status === 401 && !!clearing(revoked) && first.status === 200 && raced.status === 409 && !clearing(raced),
+    detail: `revoked=${revoked.status} cleared=${!!clearing(revoked)} first=${first.status} raced=${raced.status} clearedOn409=${!!clearing(raced)}`,
+  };
+});
+
+// ── AU7: lookups match the case-insensitive unique index ───────────────
+test('AU7 a user stored as "Admin@…" logs in as "admin@…" (and " ADMIN@… "); migration 017 lowercases stored emails, twice safely', async () => {
+  const stamp = `${Date.now()}-${++seq}`;
+  const stored = `Admin-${stamp}@AUTH-HARDENING.test`;
+  await query(`INSERT INTO users (name, email, password_hash, is_verified, role) VALUES ('Mixed Case', $1, $2, TRUE, 'ADMIN')`,
+    [stored, await bcrypt.hash(PW, 4)]);
+  const lower = await Auth.loginUser(stored.toLowerCase(), PW);
+  const padded = await Auth.loginUser(`  ${stored.toUpperCase()}  `, PW);
+  const sql = readFileSync(path.join(__dirname, '../db/migrations/017_users_email_lowercase.sql'), 'utf8');
+  await pool.query(sql); await pool.query(sql);
+  const after = (await query<{ email: string }>('SELECT email FROM users WHERE lower(email) = $1', [stored.toLowerCase()])).rows;
+  return {
+    pass: lower.status === 'AUTHENTICATED' && padded.status === 'AUTHENTICATED' && after.length === 1 && after[0].email === stored.toLowerCase(),
+    detail: `lower=${lower.status} padded=${padded.status} stored-after=${after[0]?.email}`,
+  };
+});
+
+// ── AU8: PATCH /auth/me validates name and avatar ──────────────────────
+test('AU8 updateProfile: a 150-char name or a javascript:/oversized avatar → 400; a normal name, https and data:image avatars pass', async () => {
+  const id = await insertUser(addr('profile-validate'));
+  const longName = await errOf(Auth.updateProfile(id, { name: 'x'.repeat(150) }));
+  const oneChar = await errOf(Auth.updateProfile(id, { name: ' a ' }));
+  const jsAvatar = await errOf(Auth.updateProfile(id, { avatarUrl: 'javascript:alert(1)' }));
+  const svg = await errOf(Auth.updateProfile(id, { avatarUrl: 'data:image/svg+xml;base64,PHN2Zz4=' }));
+  const huge = await errOf(Auth.updateProfile(id, { avatarUrl: `data:image/png;base64,${'A'.repeat(3_000_001)}` }));
+  const okName = await errOf(Auth.updateProfile(id, { name: '  Valid Name  ' }));
+  const okHttps = await errOf(Auth.updateProfile(id, { avatarUrl: 'https://lh3.googleusercontent.com/a/photo.jpg' }));
+  const okData = await errOf(Auth.updateProfile(id, { avatarUrl: 'data:image/png;base64,iVBORw0KGgo=' }));
+  const is400 = (e: unknown) => e instanceof AppError && e.statusCode === 400;
+  return {
+    pass: is400(longName) && is400(oneChar) && is400(jsAvatar) && is400(svg) && is400(huge)
+      && (jsAvatar as AppError).message === 'Invalid avatar image' && okName === null && okHttps === null && okData === null,
+    detail: `long=${(longName as AppError)?.statusCode} js=${jsAvatar?.message} svg=${(svg as AppError)?.statusCode} huge=${(huge as AppError)?.statusCode} ok=${[okName, okHttps, okData].every(e => e === null)}`,
+  };
 });
 
 // ── runner ───────────────────────────────────────────────────────────────

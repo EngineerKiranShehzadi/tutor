@@ -106,11 +106,22 @@ async function runOneIteration(
   attemptedQueries.add(normalizedQuery);
 
   // Match the planner's echoed targetAspect back to the uncovered subquery
-  // it targets; falls back to the first uncovered aspect so a slightly
-  // reworded echo still resolves to a real target instead of silently
-  // discarding the iteration.
-  const targetIndex =
-    uncoveredIndexes.find(i => normalize(subqueries[i]) === normalize(plan.targetAspect ?? '')) ?? uncoveredIndexes[0];
+  // it targets. Only when exactly one aspect is uncovered can a missing or
+  // reworded echo safely fall back to it; with two or more, guessing would
+  // credit evidence fetched for aspect B to aspect A, which then drops out of
+  // uncoveredAspects and gets answered from the model's own knowledge.
+  const matched = uncoveredIndexes.find(i => normalize(subqueries[i]) === normalize(plan.targetAspect ?? ''));
+  const targetIndex = matched ?? (uncoveredIndexes.length === 1 ? uncoveredIndexes[0] : undefined);
+  if (targetIndex === undefined) {
+    return {
+      ok: false,
+      stopReason: 'INVALID_PLAN',
+      record: {
+        iteration, action: 'FAILED', targetAspect: plan.targetAspect, retrievalQuery, newChunkCount: 0,
+        reason: 'Planner targetAspect did not match any uncovered aspect.',
+      },
+    };
+  }
 
   const retrievalOutcome: SubqueryRetrievalOutcome = await retrieveForSubquery(targetIndex, retrievalQuery, lectureId, deps);
 

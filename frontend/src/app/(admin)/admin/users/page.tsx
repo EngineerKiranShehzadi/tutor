@@ -1,7 +1,7 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { downloadCsv } from '@/lib/csv';
-import { useQuery, useMutation } from '@apollo/client';
+import { useApolloClient, useQuery, useMutation } from '@apollo/client';
 import { GET_ALL_USERS } from '@/graphql/admin.queries';
 import { DELETE_USER_MUTATION, UPDATE_USER_ROLE_MUTATION } from '@/graphql/admin.mutations';
 import { AdminPageHero } from '@/components/admin/AdminPageHero';
@@ -10,6 +10,14 @@ import { useAuth } from '@/hooks/useAuth';
 interface User { id: string; name: string; email: string; role: string; isVerified: boolean; createdAt: string }
 
 const PAGE_SIZE = 10;
+// Export pages through the same server API, 100 rows at a time (AD6).
+const EXPORT_PAGE = 100;
+const EXPORT_MAX = 20_000;
+
+interface UserPage {
+  items: User[]; total: number; hasMore: boolean;
+  totalUsers: number; studentCount: number; adminCount: number;
+}
 
 type RoleFilter = 'ALL' | 'STUDENT' | 'ADMIN';
 
@@ -27,35 +35,65 @@ function exportCSV(users: User[]) {
 
 export default function AdminUsersPage() {
   const { user: currentUser } = useAuth();
-  const { data, loading, refetch } = useQuery(GET_ALL_USERS, { fetchPolicy: 'network-only' });
+  const client = useApolloClient();
   const [deleteUser]     = useMutation(DELETE_USER_MUTATION);
   const [updateUserRole] = useMutation(UPDATE_USER_ROLE_MUTATION);
 
-  const [search,     setSearch]     = useState('');
-  const [roleFilter, setRoleFilter] = useState<RoleFilter>('ALL');
-  const [page,       setPage]       = useState(1);
-  const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [searchInput, setSearchInput] = useState('');
+  const [search,      setSearch]      = useState('');
+  const [roleFilter,  setRoleFilter]  = useState<RoleFilter>('ALL');
+  const [page,        setPage]        = useState(1);
+  const [updatingId,  setUpdatingId]  = useState<string | null>(null);
+  const [exporting,   setExporting]   = useState(false);
 
-  // Every user, both roles. Admins used to be filtered out right here, which
-  // made them impossible to see, demote or delete from this screen — a
-  // one-way door: you could promote someone and then never undo it.
-  const allUsers: User[] = data?.allUsers ?? [];
+  // Search and the role filter run on the server; wait for a pause in typing.
+  useEffect(() => {
+    const t = setTimeout(() => { setSearch(searchInput.trim()); setPage(1); }, 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
 
-  const studentCount = allUsers.filter(u => u.role === 'STUDENT').length;
-  const adminCount   = allUsers.filter(u => u.role === 'ADMIN').length;
-
-  const filtered = allUsers.filter(u => {
-    if (roleFilter !== 'ALL' && u.role !== roleFilter) return false;
-    if (!search) return true;
-    const q = search.toLowerCase();
-    return u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
+  // Both roles. Admins used to be filtered out of this screen, which made them
+  // impossible to see, demote or delete — a one-way door: you could promote
+  // someone and then never undo it.
+  const filters = { search: search || null, role: roleFilter === 'ALL' ? null : roleFilter };
+  const { data, loading, refetch } = useQuery<{ allUsers: UserPage }>(GET_ALL_USERS, {
+    variables: { limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE, ...filters },
+    fetchPolicy: 'network-only',
   });
+  const result       = data?.allUsers;
+  const paged        = result?.items ?? [];
+  const total        = result?.total ?? 0;
+  const totalUsers   = result?.totalUsers ?? 0;
+  const studentCount = result?.studentCount ?? 0;
+  const adminCount   = result?.adminCount ?? 0;
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   // Clamped rather than trusted: deleting the only row on the last page, or
   // narrowing the filter, can leave `page` pointing past the end of the list.
   const safePage = Math.min(page, totalPages);
-  const paged    = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  useEffect(() => { if (result && page > totalPages) setPage(totalPages); }, [result, page, totalPages]);
+
+  // Every user matching the current filters, fetched page by page.
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const all: User[] = [];
+      for (let offset = 0; offset < EXPORT_MAX; offset += EXPORT_PAGE) {
+        const { data: d } = await client.query<{ allUsers: UserPage }>({
+          query: GET_ALL_USERS,
+          variables: { limit: EXPORT_PAGE, offset, ...filters },
+          fetchPolicy: 'network-only',
+        });
+        all.push(...d.allUsers.items);
+        if (!d.allUsers.hasMore) break;
+      }
+      exportCSV(all);
+    } catch {
+      alert('Export failed. Please try again.');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const isSelf = (u: User) => !!currentUser && u.id === currentUser.id;
 
@@ -93,14 +131,14 @@ export default function AdminUsersPage() {
   };
 
   const tabs: { key: RoleFilter; label: string; count: number }[] = [
-    { key: 'ALL',     label: 'All',      count: allUsers.length },
+    { key: 'ALL',     label: 'All',      count: totalUsers },
     { key: 'STUDENT', label: 'Students', count: studentCount },
     { key: 'ADMIN',   label: 'Admins',   count: adminCount },
   ];
 
-  const subtitle = loading
+  const subtitle = loading && !data
     ? 'Loading…'
-    : `${allUsers.length} user${allUsers.length !== 1 ? 's' : ''} · ${studentCount} student${studentCount !== 1 ? 's' : ''} · ${adminCount} admin${adminCount !== 1 ? 's' : ''}`;
+    : `${totalUsers} user${totalUsers !== 1 ? 's' : ''} · ${studentCount} student${studentCount !== 1 ? 's' : ''} · ${adminCount} admin${adminCount !== 1 ? 's' : ''}`;
 
   return (
     <div className="max-w-[1500px]">
@@ -111,10 +149,11 @@ export default function AdminUsersPage() {
         subtitle={subtitle}
         action={
           <button
-            onClick={() => exportCSV(filtered)}
-            className="flex items-center gap-2 px-4 py-2.5 bg-white/15 text-white border border-white/25 backdrop-blur-sm rounded-xl text-[14px] font-semibold hover:bg-white/25 transition-all"
+            onClick={() => { void handleExport(); }}
+            disabled={loading || exporting || total === 0}
+            className="flex items-center gap-2 px-4 py-2.5 bg-white/15 text-white border border-white/25 backdrop-blur-sm rounded-xl text-[14px] font-semibold hover:bg-white/25 transition-all disabled:opacity-40"
           >
-            <i className="fas fa-download text-[12px]" /> Export CSV
+            <i className={`fas ${exporting ? 'fa-spinner fa-spin' : 'fa-download'} text-[12px]`} /> {exporting ? 'Exporting…' : 'Export CSV'}
           </button>
         }
       />
@@ -124,8 +163,8 @@ export default function AdminUsersPage() {
         <div className="flex-1 relative">
           <i className="fas fa-search absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-[13px]" />
           <input
-            value={search}
-            onChange={e => { setSearch(e.target.value); setPage(1); }}
+            value={searchInput}
+            onChange={e => setSearchInput(e.target.value)}
             placeholder="Search by name or email…"
             className="w-full pl-9 pr-4 py-3 bg-white border border-slate-200 rounded-xl text-[14px] text-slate-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all"
           />
@@ -150,7 +189,7 @@ export default function AdminUsersPage() {
         </div>
       </div>
 
-      {loading ? (
+      {loading && !data ? (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
           {[1,2,3,4,5].map(i => (
             <div key={i} className="flex items-center gap-4 px-6 py-4 border-b border-slate-100 last:border-0">
@@ -161,7 +200,7 @@ export default function AdminUsersPage() {
             </div>
           ))}
         </div>
-      ) : filtered.length === 0 ? (
+      ) : paged.length === 0 ? (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col items-center justify-center py-20 text-slate-400">
           <i className="fas fa-users text-3xl mb-3" />
           <p className="text-[17px] font-semibold text-slate-600">No users found</p>
@@ -275,7 +314,7 @@ export default function AdminUsersPage() {
 
           {/* Footer */}
           <div className="px-6 py-3.5 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between">
-            <span className="text-[13px] text-slate-400">{filtered.length} user{filtered.length !== 1 ? 's' : ''}</span>
+            <span className="text-[13px] text-slate-400">{total} user{total !== 1 ? 's' : ''}</span>
             {totalPages > 1 && (
               <div className="flex items-center gap-1.5">
                 <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={safePage === 1}

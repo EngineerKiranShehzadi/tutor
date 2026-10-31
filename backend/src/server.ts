@@ -76,7 +76,9 @@ const start = async () => {
       logger.info(`AskAITutor backend running on port ${env.PORT} [${env.NODE_ENV}]`);
       logger.info(`GraphQL endpoint: http://localhost:${env.PORT}/graphql`);
 
-      if (env.OBSERVABILITY.ALERTS_ENABLED && env.NODE_ENV !== 'test') {
+      // Request-log retention always runs; the email alert check inside it
+      // only when OBSERVABILITY_ALERTS_ENABLED.
+      if (env.NODE_ENV !== 'test') {
         startMaintenanceScheduler();
       }
 

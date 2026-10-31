@@ -1,6 +1,8 @@
 import { query } from '../config/database';
 import { logger } from '../utils/logger';
+import { AppError } from '../middleware/errorHandler';
 import { getAllLectureReadiness } from './dataset-version.service';
+import { clampInt, likePattern, pageArgs } from '../utils/paging';
 
 export const getAnalyticsSummary = async () => {
   const [students, lectures, questions, readyAgents] = await Promise.all([
@@ -59,11 +61,6 @@ export const getQuestionsPerLecture = async () => {
 export const RECENT_QUESTIONS_MAX = 100;
 export const RECENT_QUESTIONS_PAGE_MAX = 200;
 
-const clampInt = (v: unknown, def: number, min: number, max: number): number => {
-  const n = typeof v === 'number' && Number.isFinite(v) ? Math.trunc(v) : def;
-  return Math.min(max, Math.max(min, n));
-};
-
 export interface RecentQuestionsFilter { limit?: number | null; offset?: number | null; search?: string | null; lectureId?: number | null }
 
 export const getRecentQuestionsPage = async (f: RecentQuestionsFilter) => {
@@ -74,7 +71,7 @@ export const getRecentQuestionsPage = async (f: RecentQuestionsFilter) => {
   const params: unknown[] = [];
   if (search) {
     // LIKE wildcards in the search text are matched literally.
-    params.push(`%${search.replace(/[\\%_]/g, '\\$&')}%`);
+    params.push(likePattern(search));
     where.push(`(sq.question ILIKE $${params.length} OR u.name ILIKE $${params.length})`);
   }
   if (typeof f.lectureId === 'number') {
@@ -125,30 +122,52 @@ export const getLectureStatusList = async () => {
   return rows;
 };
 
-export const getLectureChunks = async (lectureId: number) => {
-  logger.info(`[ANALYTICS] getLectureChunks: lecture #${lectureId}`);
-  const { rows } = await query<{
-    id: number; topic: string | null; question: string; answer: string;
-    start_time: string | null; end_time: string | null; keywords: string | null;
-  }>(
-    `SELECT id, topic, question, answer, start_time, end_time, keywords
-     FROM lecture_qna_chunks
-     WHERE lecture_id = $1
+// One page of the active version's chunks (full answers) for a lecture, with
+// server-side search over question, answer and topic.
+export const getLectureChunks = async (
+  lectureId: number,
+  f: { limit?: number | null; offset?: number | null; search?: string | null } = {}
+) => {
+  const { limit, offset, search } = pageArgs(f);
+  const params: unknown[] = [lectureId];
+  let searchSql = '';
+  if (search) {
+    params.push(likePattern(search));
+    searchSql = `AND (question ILIKE $2 OR answer ILIKE $2 OR topic ILIKE $2)`;
+  }
+  const where = `WHERE lecture_id = $1
        AND id IN (SELECT chunk_id FROM dataset_version_chunks
                   WHERE version_id = (SELECT active_version_id FROM lectures WHERE id = $1))
-     ORDER BY id`,
-    [lectureId]
-  );
-  logger.info(`[ANALYTICS] lectureChunks: ${rows.length} chunk(s) for lecture #${lectureId}`);
-  return rows.map(r => ({
-    id:        r.id,
-    topic:     r.topic ?? null,
-    question:  r.question,
-    answer:    r.answer,
-    startTime: r.start_time ?? null,
-    endTime:   r.end_time ?? null,
-    keywords:  r.keywords ?? null,
-  }));
+       ${searchSql}`;
+  const [{ rows }, { rows: cnt }] = await Promise.all([
+    query<{
+      id: number; topic: string | null; question: string; answer: string;
+      start_time: string | null; end_time: string | null; keywords: string | null;
+    }>(
+      `SELECT id, topic, question, answer, start_time, end_time, keywords
+       FROM lecture_qna_chunks
+       ${where}
+       ORDER BY id
+       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, limit, offset]
+    ),
+    query<{ n: string }>(`SELECT COUNT(*) AS n FROM lecture_qna_chunks ${where}`, params),
+  ]);
+  const total = Number(cnt[0]?.n ?? 0);
+  logger.info(`[ANALYTICS] lectureChunks: ${rows.length} of ${total} chunk(s) for lecture #${lectureId} (offset ${offset}${search ? ', search' : ''})`);
+  return {
+    items: rows.map(r => ({
+      id:        r.id,
+      topic:     r.topic ?? null,
+      question:  r.question,
+      answer:    r.answer,
+      startTime: r.start_time ?? null,
+      endTime:   r.end_time ?? null,
+      keywords:  r.keywords ?? null,
+    })),
+    total,
+    hasMore: offset + rows.length < total,
+  };
 };
 
 export const getLectureAgentDetails = async () => {
@@ -191,37 +210,73 @@ export const getLectureAgentDetails = async () => {
   }));
 };
 
-export const getRegisteredStudents = async () => {
-  logger.info('[ANALYTICS] getRegisteredStudents: fetching all registered students');
-  const { rows } = await query<{
-    id: string; name: string; email: string; created_at: Date; question_count: string;
-  }>(
-    `SELECT u.id, u.name, u.email, u.created_at,
-            COUNT(sq.id)::int AS question_count
-     FROM users u
-     LEFT JOIN student_questions sq ON sq.student_id = u.id
-     WHERE u.role = 'STUDENT'
-     GROUP BY u.id, u.name, u.email, u.created_at
-     ORDER BY u.created_at DESC`
-  );
-  logger.info(`[ANALYTICS] registeredStudents: ${rows.length} student(s)`);
-  return rows.map(r => {
-    const qCount = Number(r.question_count);
-    return {
-      id:            r.id,
-      name:          r.name,
-      email:         r.email,
-      createdAt:     r.created_at.toISOString(),
-      questionCount: qCount,
-      status:        qCount > 0 ? 'ACTIVE' : 'INACTIVE',
-    };
-  });
+// One page of students (names and e-mails — never the whole table), with
+// server-side search over name/e-mail and an ACTIVE (asked at least one
+// question) / INACTIVE filter. The summary counts cover every student.
+export const getRegisteredStudents = async (
+  f: { limit?: number | null; offset?: number | null; search?: string | null; status?: string | null } = {}
+) => {
+  const { limit, offset, search } = pageArgs(f);
+  const where = [`u.role = 'STUDENT'`];
+  const params: unknown[] = [];
+  if (search) {
+    params.push(likePattern(search));
+    where.push(`(u.name ILIKE $${params.length} OR u.email ILIKE $${params.length})`);
+  }
+  const asked = `EXISTS (SELECT 1 FROM student_questions sq WHERE sq.student_id = u.id)`;
+  if (f.status === 'ACTIVE') where.push(asked);
+  if (f.status === 'INACTIVE') where.push(`NOT ${asked}`);
+  const whereSql = `WHERE ${where.join(' AND ')}`;
+
+  const [{ rows }, { rows: cnt }, { rows: summary }] = await Promise.all([
+    query<{ id: string; name: string; email: string; created_at: Date; question_count: string }>(
+      `SELECT u.id, u.name, u.email, u.created_at,
+              (SELECT COUNT(*) FROM student_questions sq WHERE sq.student_id = u.id)::int AS question_count
+       FROM users u ${whereSql}
+       ORDER BY u.created_at DESC, u.id
+       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, limit, offset]
+    ),
+    query<{ n: string }>(`SELECT COUNT(*) AS n FROM users u ${whereSql}`, params),
+    query<{ total: string; active: string }>(
+      `SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE ${asked}) AS active FROM users u WHERE u.role = 'STUDENT'`
+    ),
+  ]);
+  const total = Number(cnt[0]?.n ?? 0);
+  const totalStudents = Number(summary[0]?.total ?? 0);
+  const activeCount = Number(summary[0]?.active ?? 0);
+  logger.info(`[ANALYTICS] registeredStudents: ${rows.length} of ${total} (offset ${offset}${search ? ', search' : ''}${f.status ? `, ${f.status}` : ''})`);
+  return {
+    items: rows.map(r => {
+      const qCount = Number(r.question_count);
+      return {
+        id:            r.id,
+        name:          r.name,
+        email:         r.email,
+        createdAt:     r.created_at.toISOString(),
+        questionCount: qCount,
+        status:        qCount > 0 ? 'ACTIVE' : 'INACTIVE',
+      };
+    }),
+    total,
+    hasMore: offset + rows.length < total,
+    totalStudents,
+    activeCount,
+    inactiveCount: totalStudents - activeCount,
+  };
 };
 
-export const getStudentJourney = async (studentId: string) => {
+// A student's profile plus ONE page of their questions (newest first). The
+// totals, first/last activity and per-lecture breakdown come from aggregates,
+// so they stay exact whatever page is shown.
+export const getStudentJourney = async (
+  studentId: string,
+  f: { limit?: number | null; offset?: number | null } = {}
+) => {
   logger.info(`[ANALYTICS] getStudentJourney: ${studentId}`);
+  const { limit, offset } = pageArgs(f);
 
-  const [userRes, questionsRes] = await Promise.all([
+  const [userRes, questionsRes, totalsRes, byLectureRes] = await Promise.all([
     query<{ id: string; name: string; email: string; created_at: Date }>(
       `SELECT id, name, email, created_at FROM users WHERE id = $1 AND role = 'STUDENT'`,
       [studentId]
@@ -231,13 +286,30 @@ export const getStudentJourney = async (studentId: string) => {
        FROM student_questions sq
        JOIN lectures l ON l.id = sq.lecture_id
        WHERE sq.student_id = $1
-       ORDER BY sq.created_at DESC`,
+       ORDER BY sq.created_at DESC, sq.id DESC
+       LIMIT $2 OFFSET $3`,
+      [studentId, limit, offset]
+    ),
+    query<{ n: string; first: Date | null; last: Date | null }>(
+      `SELECT COUNT(*) AS n, MIN(sq.created_at) AS first, MAX(sq.created_at) AS last
+       FROM student_questions sq JOIN lectures l ON l.id = sq.lecture_id
+       WHERE sq.student_id = $1`,
+      [studentId]
+    ),
+    query<{ lecture_id: number; title: string; n: string; first: Date; last: Date }>(
+      `SELECT l.id AS lecture_id, l.title, COUNT(*) AS n, MIN(sq.created_at) AS first, MAX(sq.created_at) AS last
+       FROM student_questions sq JOIN lectures l ON l.id = sq.lecture_id
+       WHERE sq.student_id = $1
+       GROUP BY l.id, l.title
+       ORDER BY MAX(sq.created_at) DESC`,
       [studentId]
     ),
   ]);
 
   const user = userRes.rows[0];
-  if (!user) throw new Error('Student not found');
+  // An expected outcome, not a crash: a plain Error was masked as "Internal
+  // server error" and logged as one.
+  if (!user) throw new AppError('Student not found', 404);
 
   const questions = questionsRes.rows.map(r => ({
     id:           r.id,
@@ -246,37 +318,28 @@ export const getStudentJourney = async (studentId: string) => {
     lectureId:    r.lecture_id,
     createdAt:    r.created_at.toISOString(),
   }));
+  const byLecture = byLectureRes.rows.map(r => ({
+    lectureId:     r.lecture_id,
+    lectureTitle:  r.title,
+    questionCount: Number(r.n),
+    firstAsked:    r.first.toISOString(),
+    lastAsked:     r.last.toISOString(),
+  }));
 
-  // Group by lecture
-  const lectureMap = new Map<number, { title: string; questions: typeof questions }>();
-  for (const q of questions) {
-    if (!lectureMap.has(q.lectureId)) lectureMap.set(q.lectureId, { title: q.lectureTitle, questions: [] });
-    lectureMap.get(q.lectureId)!.questions.push(q);
-  }
-
-  const byLecture = Array.from(lectureMap.entries()).map(([lectureId, v]) => {
-    const sorted = v.questions.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-    return {
-      lectureId,
-      lectureTitle:  v.title,
-      questionCount: v.questions.length,
-      firstAsked:    sorted[0].createdAt,
-      lastAsked:     sorted[sorted.length - 1].createdAt,
-    };
-  });
-
-  const qCount = questions.length;
+  const qCount = Number(totalsRes.rows[0]?.n ?? 0);
   return {
     studentId:       user.id,
     studentName:     user.name,
     studentEmail:    user.email,
     status:          qCount > 0 ? 'ACTIVE' : 'INACTIVE',
+    // Total questions (all pages); `questions` holds only the requested page.
     questionCount:   qCount,
-    lecturesEngaged: lectureMap.size,
+    lecturesEngaged: byLecture.length,
     joinedAt:        user.created_at.toISOString(),
-    firstActivity:   questions.length ? questions[questions.length - 1].createdAt : null,
-    lastActivity:    questions.length ? questions[0].createdAt : null,
+    firstActivity:   totalsRes.rows[0]?.first?.toISOString() ?? null,
+    lastActivity:    totalsRes.rows[0]?.last?.toISOString() ?? null,
     questions,
+    hasMoreQuestions: offset + questions.length < qCount,
     byLecture,
   };
 };
@@ -305,22 +368,45 @@ function tokenize(text: string): Set<string> {
   );
 }
 
+// Content Gaps is bounded: it reads at most the newest CONTENT_GAPS_MAX_QUESTIONS
+// questions from the last CONTENT_GAPS_WINDOW_DAYS days and at most
+// CONTENT_GAPS_MAX_CHUNKS chunks, and tokenises them one by one — it used to load
+// every question ever asked plus every active chunk and tokenise one giant joined
+// string, stalling the shared event loop (and every student's chat) as both grew.
+export const CONTENT_GAPS_WINDOW_DAYS = 90;
+export const CONTENT_GAPS_MAX_QUESTIONS = 20_000;
+export const CONTENT_GAPS_MAX_CHUNKS = 20_000;
+
 export const getContentGaps = async () => {
   logger.info('[ANALYTICS] getContentGaps: comparing student questions vs AI training data');
 
-  // Only analyse lectures that have a trained AI agent (READY status)
-  const { rows: studentQs } = await query<{
-    lecture_id: number; lecture_title: string; question: string;
-  }>(
-    `SELECT sq.lecture_id, l.title AS lecture_title, sq.question
+  // Exact per-lecture counts for the window — the headline number never
+  // depends on the sample below. Only lectures with a trained AI agent (READY).
+  const { rows: askedRows } = await query<{ lecture_id: number; lecture_title: string; asked: string }>(
+    `SELECT sq.lecture_id, l.title AS lecture_title, COUNT(*) AS asked
      FROM student_questions sq
      JOIN lectures l ON l.id = sq.lecture_id
-     WHERE l.status = 'READY'`
+     WHERE l.status = 'READY'
+       AND sq.created_at >= NOW() - make_interval(days => $1)
+     GROUP BY sq.lecture_id, l.title`,
+    [CONTENT_GAPS_WINDOW_DAYS]
   );
+  if (askedRows.length === 0) return [];
+  const totalInWindow = askedRows.reduce((n, r) => n + Number(r.asked), 0);
 
-  if (studentQs.length === 0) return [];
+  const { rows: studentQs } = await query<{ lecture_id: number; question: string }>(
+    `SELECT sq.lecture_id, sq.question
+     FROM student_questions sq
+     JOIN lectures l ON l.id = sq.lecture_id
+     WHERE l.status = 'READY'
+       AND sq.created_at >= NOW() - make_interval(days => $1)
+     ORDER BY sq.created_at DESC
+     LIMIT $2`,
+    [CONTENT_GAPS_WINDOW_DAYS, CONTENT_GAPS_MAX_QUESTIONS]
+  );
+  const sampled = totalInWindow > studentQs.length;
 
-  const lectureIds = [...new Set(studentQs.map(q => q.lecture_id))];
+  const lectureIds = askedRows.map(r => r.lecture_id);
 
   // Get training data (QNA chunks) for those lectures
   const { rows: chunks } = await query<{
@@ -329,8 +415,9 @@ export const getContentGaps = async () => {
     `SELECT lecture_id, topic, question, keywords
      FROM lecture_qna_chunks c
      WHERE lecture_id = ANY($1::int[])
-       AND c.id IN (SELECT d.chunk_id FROM dataset_version_chunks d JOIN lectures l ON l.active_version_id = d.version_id WHERE l.id = c.lecture_id)`,
-    [lectureIds]
+       AND c.id IN (SELECT d.chunk_id FROM dataset_version_chunks d JOIN lectures l ON l.active_version_id = d.version_id WHERE l.id = c.lecture_id)
+     LIMIT $2`,
+    [lectureIds, CONTENT_GAPS_MAX_CHUNKS]
   );
 
   // Get chunk counts per lecture
@@ -344,12 +431,11 @@ export const getContentGaps = async () => {
   );
   const chunkCountMap = new Map(countRows.map(r => [r.lecture_id, Number(r.count)]));
 
-  // Build per-lecture maps
-  const lectureStudentQs = new Map<number, { title: string; questions: string[] }>();
+  // Per-lecture sampled questions
+  const lectureStudentQs = new Map<number, string[]>();
   for (const q of studentQs) {
-    if (!lectureStudentQs.has(q.lecture_id))
-      lectureStudentQs.set(q.lecture_id, { title: q.lecture_title, questions: [] });
-    lectureStudentQs.get(q.lecture_id)!.questions.push(q.question);
+    if (!lectureStudentQs.has(q.lecture_id)) lectureStudentQs.set(q.lecture_id, []);
+    lectureStudentQs.get(q.lecture_id)!.push(q.question);
   }
 
   // Build chunk vocabulary per lecture
@@ -367,12 +453,27 @@ export const getContentGaps = async () => {
 
   const results = [];
 
-  for (const [lectureId, { title, questions }] of lectureStudentQs.entries()) {
+  for (const { lecture_id: lectureId, lecture_title: title, asked } of askedRows) {
+    const questions = lectureStudentQs.get(lectureId) ?? [];
     const chunkVocab = chunkVocabMap.get(lectureId) ?? new Set<string>();
     const chunkCount = chunkCountMap.get(lectureId) ?? 0;
 
-    // Extract all keywords from student questions for this lecture
-    const studentKeywords = tokenize(questions.join(' '));
+    // Each question is tokenised once: its keywords go into the lecture-wide
+    // set, and it counts as "answered from lecture" if ANY of them appears in
+    // the chunk vocabulary (otherwise it was unanswerable from lecture content).
+    const studentKeywords = new Set<string>();
+    let answeredFromLecture = 0;
+    let notInLecture = 0;
+    for (const q of questions) {
+      const qKeywords = tokenize(q);
+      let hasMatch = false;
+      for (const kw of qKeywords) {
+        studentKeywords.add(kw);
+        if (chunkVocab.has(kw)) hasMatch = true;
+      }
+      if (hasMatch) answeredFromLecture++;
+      else notInLecture++;
+    }
 
     // Partition: covered vs gap
     const covered: string[] = [];
@@ -385,21 +486,10 @@ export const getContentGaps = async () => {
     const coverageScore = total > 0 ? Math.round((covered.length / total) * 100) : 100;
     const status = coverageScore >= 70 ? 'GOOD' : coverageScore >= 40 ? 'MODERATE' : 'POOR';
 
-    // Per-question coverage: a question is "answered from lecture" if ANY of its keywords
-    // appear in the chunk vocabulary, otherwise it was unanswerable from lecture content
-    let answeredFromLecture = 0;
-    let notInLecture = 0;
-    for (const q of questions) {
-      const qKeywords = tokenize(q);
-      const hasMatch = [...qKeywords].some(kw => chunkVocab.has(kw));
-      if (hasMatch) answeredFromLecture++;
-      else notInLecture++;
-    }
-
     results.push({
       lectureId,
       lectureTitle:        title,
-      questionsAsked:      questions.length,
+      questionsAsked:      Number(asked),
       chunkCount,
       coverageScore,
       gapTopics:           gaps.slice(0, 20),
@@ -407,6 +497,10 @@ export const getContentGaps = async () => {
       status,
       answeredFromLecture,
       notInLecture,
+      // True when the window held more questions than were analysed (the
+      // newest CONTENT_GAPS_MAX_QUESTIONS were used).
+      sampled,
+      windowDays:          CONTENT_GAPS_WINDOW_DAYS,
     });
   }
 
@@ -414,6 +508,8 @@ export const getContentGaps = async () => {
   return results.sort((a, b) => a.coverageScore - b.coverageScore);
 };
 
+// Rankings below order by the numeric aggregate: the ::text aliases (kept for
+// the row types) sorted alphabetically, so "9" ranked above "10".
 export const getMyStats = async (studentId: string) => {
   const [
     totalQs, totalSessions, lecturesEngaged, totalAvailableLectures,
@@ -452,7 +548,7 @@ export const getMyStats = async (studentId: string) => {
        FROM student_questions sq
        JOIN lectures l ON l.id = sq.lecture_id
        WHERE sq.student_id = $1
-       GROUP BY l.title ORDER BY cnt DESC LIMIT 1`, [studentId]
+       GROUP BY l.title ORDER BY COUNT(sq.id) DESC LIMIT 1`, [studentId]
     ),
     query<{ day: string }>(
       `SELECT DISTINCT DATE(created_at) AS day
@@ -470,12 +566,12 @@ export const getMyStats = async (studentId: string) => {
        FROM student_questions sq
        JOIN lectures l ON l.id = sq.lecture_id
        WHERE sq.student_id = $1
-       GROUP BY l.id, l.title ORDER BY cnt DESC LIMIT 6`, [studentId]
+       GROUP BY l.id, l.title ORDER BY COUNT(sq.id) DESC LIMIT 6`, [studentId]
     ),
     query<{ hour: string; count: string }>(
       `SELECT EXTRACT(HOUR FROM created_at)::text AS hour, COUNT(*)::text AS count
        FROM student_questions WHERE student_id = $1
-       GROUP BY hour ORDER BY count DESC LIMIT 1`, [studentId]
+       GROUP BY hour ORDER BY COUNT(*) DESC LIMIT 1`, [studentId]
     ),
   ]);
 

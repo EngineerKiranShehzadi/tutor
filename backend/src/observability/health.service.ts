@@ -23,22 +23,30 @@ export interface ReadinessResult {
     pgvector: ComponentHealth;
     embeddingServer: ComponentHealth;
     reranker: ComponentHealth;
-    gemini: ComponentHealth;
+    // The model that writes the answers (RAG_LLM_PROVIDER), whichever it is.
+    answerLlm: ComponentHealth;
   };
 }
 
 // Every component a lecture question needs is REQUIRED: if one is unhealthy no
 // question can be answered, so readiness is `unhealthy` (HTTP 503) and a load
 // balancer / uptime monitor sees it. That is the database, pgvector, the
-// embedding provider, the reranker (a rerank failure fails the question) and —
-// when it generates the answers — Gemini. `degraded` (HTTP 200) is left for
+// embedding provider, the reranker (a rerank failure fails the question) and
+// the answer LLM, whichever provider it is. `degraded` (HTTP 200) is left for
 // what is uncertain rather than down: a check that only verified config (e.g.
-// HEALTH_GEMINI_CHECK_ENABLED=false), or Gemini when another provider answers.
+// HEALTH_GEMINI_CHECK_ENABLED=false), or an answer provider with no probe
+// (UNVERIFIED_PROVIDER) — never `healthy` for something that wasn't checked.
 type ComponentName = keyof ReadinessResult['components'];
-export const requiredComponents = (answerProvider = env.LLM.RAG_ANSWER.PROVIDER): ComponentName[] => [
-  'database', 'pgvector', 'embeddingServer', 'reranker',
-  ...(answerProvider === 'gemini' ? ['gemini' as const] : []),
+export const requiredComponents = (): ComponentName[] => [
+  'database', 'pgvector', 'embeddingServer', 'reranker', 'answerLlm',
 ];
+
+// Probes the provider that answers questions. Only Gemini has a probe; for any
+// other provider readiness must not claim it is healthy.
+export async function checkAnswerLlm(provider = env.LLM.RAG_ANSWER.PROVIDER): Promise<ComponentHealth> {
+  if (provider === 'gemini') return checkGemini();
+  return { status: 'degraded', latencyMs: 0, errorCode: 'UNVERIFIED_PROVIDER' };
+}
 
 interface CacheEntry { result: ComponentHealth; checkedAtMs: number; }
 const cache = new Map<string, CacheEntry>();
@@ -177,15 +185,15 @@ export function checkLiveness(): { status: 'ok'; timestamp: string } {
 export async function checkReadiness(): Promise<ReadinessResult> {
   const ttl = env.HEALTH.CACHE_TTL_MS;
 
-  const [database, pgvector, embeddingServer, reranker, gemini] = await Promise.all([
+  const [database, pgvector, embeddingServer, reranker, answerLlm] = await Promise.all([
     cached('database', ttl, checkDatabase),
     cached('pgvector', ttl, checkPgvector),
     cached('embeddingServer', ttl, () => checkProviderHealth(resolveEmbeddingProvider(env.RETRIEVAL.EMBEDDING_PROVIDER), 'embeddingServer')),
     cached('reranker', ttl, () => checkProviderHealth(resolveRerankProvider(env.RETRIEVAL.RERANK_PROVIDER), 'reranker')),
-    cached('gemini', ttl, checkGemini),
+    cached(`answerLlm:${env.LLM.RAG_ANSWER.PROVIDER}`, ttl, () => checkAnswerLlm()),
   ]);
 
-  const components = { database, pgvector, embeddingServer, reranker, gemini };
+  const components = { database, pgvector, embeddingServer, reranker, answerLlm };
 
   const status = overallStatus(components, requiredComponents());
 

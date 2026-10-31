@@ -23,6 +23,9 @@ export interface PasswordResetToken {
   used: boolean;
   verified: boolean;
   attempts: number;
+  // sha256 of the reset ticket issued to the browser that verified the code
+  // (migration 016). NULL until verified.
+  ticket_hash: string | null;
   created_at: Date;
 }
 

@@ -4,7 +4,7 @@ import * as https from 'https';
 import crypto from 'crypto';
 import * as AuthService from '../services/auth.service';
 import { sendSuccess, sendError } from '../utils/response';
-import { asyncHandler } from '../middleware/errorHandler';
+import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { AuthenticatedRequest } from '../types';
 import { env } from '../config/env';
 import { logger } from '../utils/logger';
@@ -80,9 +80,12 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
   const result = await AuthService.loginUser(email, password);
 
   if (result.status === 'AUTHENTICATED') {
-    res.cookie(REFRESH_COOKIE, result.refreshToken, REFRESH_COOKIE_OPTS);
+    // The refresh token goes only in the httpOnly cookie, never in the body —
+    // no script on the page (or body logger) may ever see it.
+    const { refreshToken: refresh, ...body } = result;
+    res.cookie(REFRESH_COOKIE, refresh, REFRESH_COOKIE_OPTS);
     logger.info(`[AUTH] ✅ Login success: "${email}" role=${result.user.role}`);
-    sendSuccess(res, 'Logged in successfully', result);
+    sendSuccess(res, 'Logged in successfully', body);
   } else {
     // The ticket goes in an httpOnly cookie, never in the body.
     const { verificationTicket, ...body } = result;
@@ -100,7 +103,17 @@ export const refreshToken = asyncHandler(async (req: Request, res: Response) => 
     return;
   }
   logger.info('[AUTH] Token refresh requested');
-  const tokens = await AuthService.refreshAccessToken(token);
+  let tokens: Awaited<ReturnType<typeof AuthService.refreshAccessToken>>;
+  try {
+    tokens = await AuthService.refreshAccessToken(token);
+  } catch (err) {
+    // A dead session (revoked family, deleted user, expired): drop the cookie,
+    // or the frontend middleware — which gates on its presence — keeps opening
+    // protected pages for up to 7 days and bouncing client-side. Never on 409
+    // (a concurrent refresh): the browser already holds the winner's cookie.
+    if (err instanceof AppError && err.statusCode === 401) res.clearCookie(REFRESH_COOKIE, CLEAR_COOKIE_OPTS);
+    throw err;
+  }
   res.cookie(REFRESH_COOKIE, tokens.refreshToken, REFRESH_COOKIE_OPTS);
   logger.info('[AUTH] ✅ Access token refreshed');
   sendSuccess(res, 'Token refreshed', { accessToken: tokens.accessToken });
@@ -133,7 +146,9 @@ export const getMe = asyncHandler(async (req: AuthenticatedRequest, res: Respons
 export const updateMe = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   const { name, currentPassword, newPassword, avatarUrl } = req.body;
   logger.info(`[AUTH] UpdateMe: "${req.user?.email}"`);
-  const updated = await AuthService.updateProfile(req.user!.id, { name, currentPassword, newPassword, avatarUrl });
+  // The refresh cookie has no path, so it reaches /auth/me: a password change
+  // keeps this session and ends the others.
+  const updated = await AuthService.updateProfile(req.user!.id, { name, currentPassword, newPassword, avatarUrl }, req.cookies?.[REFRESH_COOKIE]);
   sendSuccess(res, 'Profile updated', updated);
 });
 

@@ -4,9 +4,9 @@ import type { ReadinessResult } from './monitor-api';
 
 type Level = 'ok' | 'warn' | 'down' | 'unknown';
 
-// Mirrors health.service.ts: only these three being unhealthy stops
-// students from getting answers; reranker / gemini failing is "degraded".
-const REQUIRED = ['database', 'pgvector', 'embeddingServer'];
+// Mirrors health.service.ts requiredComponents(): any of these being unhealthy
+// stops students from getting answers.
+const REQUIRED = ['database', 'pgvector', 'embeddingServer', 'reranker', 'answerLlm'];
 
 const joinNames = (names: string[]) => names.join(' and ');
 

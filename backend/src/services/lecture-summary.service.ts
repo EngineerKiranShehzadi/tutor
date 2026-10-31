@@ -8,6 +8,23 @@ import { logger } from '../utils/logger';
 export const LECTURE_SUMMARY_UNAVAILABLE_MESSAGE =
   'I could not generate a summary for this lecture right now.';
 
+// Chunks exist but no summary could be produced (every batch failed, or the
+// combine step failed): an outage, never "the lecture is empty".
+export const LECTURE_SUMMARY_FAILED_MESSAGE =
+  "I couldn't generate a summary of this lecture right now. Please try again in a moment.";
+
+// Appended when only some batches were summarised, so a partial summary is
+// never presented as the whole lecture.
+export const PARTIAL_SUMMARY_NOTE =
+  "\n\n_Part of this lecture couldn't be summarised right now — ask again for a complete summary._";
+
+export interface LectureSummaryResult {
+  // null when there was no content, or nothing could be summarised.
+  summary: string | null;
+  batchesAttempted: number;
+  batchesSucceeded: number;
+}
+
 // Fetches one row per source Q&A for the lecture, in stored/insertion order
 // (chunks are inserted row-by-row in dataset order during processing — see
 // chunk.service.ts — which mirrors the lecture's logical/topic order).
@@ -37,21 +54,41 @@ export const getAllLectureChunks = async (lectureId: number, datasetVersionId?: 
 // and comfortably within context limits regardless of lecture length.
 export const MAX_CHARS_PER_BATCH = 12000;
 
-// Pure — safe to unit-test without hitting the network or DB.
+// The exact text one chunk contributes to a summary prompt. Batches are sized
+// on this, not on chunk_text: only chunk_index = 0 rows are summarised, and for
+// a split row chunk_text holds just its first piece while answer holds the
+// whole answer, so sizing on chunk_text let a batch run ~20x over budget.
+export const summaryEntryText = (c: Pick<QnaChunk, 'topic' | 'question' | 'answer'>): string =>
+  `Topic: ${c.topic ?? 'General'}\nQ: ${c.question}\nA: ${c.answer}`;
+const ENTRY_SEPARATOR = '\n\n';
+const entryCost = (c: QnaChunk): number => summaryEntryText(c).length + ENTRY_SEPARATOR.length;
+
+// An entry that is over budget on its own gets its answer cut (with an
+// ellipsis) so that it fits; it then always travels in a batch by itself.
+const fitToBudget = (c: QnaChunk, maxChars: number): QnaChunk => {
+  if (entryCost(c) <= maxChars) return c;
+  const overhead = entryCost({ ...c, answer: '' });
+  const keep = Math.max(0, maxChars - overhead - 1);
+  return { ...c, answer: `${c.answer.slice(0, keep)}…` };
+};
+
+// Pure — safe to unit-test without hitting the network or DB. No batch's
+// summed entryCost exceeds maxChars.
 export const buildSummaryBatches = (chunks: QnaChunk[], maxChars = MAX_CHARS_PER_BATCH): QnaChunk[][] => {
   const batches: QnaChunk[][] = [];
   let current: QnaChunk[] = [];
   let currentChars = 0;
 
-  for (const chunk of chunks) {
-    const len = chunk.chunk_text.length;
-    if (current.length > 0 && currentChars + len > maxChars) {
+  for (const original of chunks) {
+    const chunk = fitToBudget(original, maxChars);
+    const cost = entryCost(chunk);
+    if (current.length > 0 && currentChars + cost > maxChars) {
       batches.push(current);
       current = [];
       currentChars = 0;
     }
     current.push(chunk);
-    currentChars += len;
+    currentChars += cost;
   }
   if (current.length > 0) batches.push(current);
 
@@ -70,7 +107,7 @@ const summarizeBatchWithGemini = async (
   timeoutMs: number
 ): Promise<string | null> => {
   try {
-    const content = chunks.map(c => `Topic: ${c.topic ?? 'General'}\nQ: ${c.question}\nA: ${c.answer}`).join('\n\n');
+    const content = chunks.map(summaryEntryText).join(ENTRY_SEPARATOR);
     const prompt = `Lecture: "${lectureTitle}"\n\nContent:\n${content}`;
 
     const provider = resolveLlmProvider(env.LLM.LECTURE_SUMMARY.PROVIDER);
@@ -154,15 +191,16 @@ export interface SummarizeDeps {
 // Hierarchical summarization: batches that fit a single request are
 // summarized directly; multiple batches are summarized independently
 // (grounded only in their own content) and then combined into one final,
-// still strictly-grounded summary. Returns null if there's no content or
-// every batch failed — caller is responsible for the user-facing fallback.
+// still strictly-grounded summary. summary is null if there's no content or
+// nothing could be summarised; batchesAttempted/batchesSucceeded let the
+// caller tell an empty lecture, an outage and a partial summary apart.
 export const generateLectureSummary = async (
   chunks: QnaChunk[],
   lectureTitle: string,
   deps: SummarizeDeps = {},
   opts: { timeoutMs?: number; maxCharsPerBatch?: number } = {}
-): Promise<string | null> => {
-  if (chunks.length === 0) return null;
+): Promise<LectureSummaryResult> => {
+  if (chunks.length === 0) return { summary: null, batchesAttempted: 0, batchesSucceeded: 0 };
 
   const summarizeBatch   = deps.summarizeBatch   ?? summarizeBatchWithGemini;
   const combineSummaries = deps.combineSummaries ?? combineSummariesWithGemini;
@@ -171,18 +209,18 @@ export const generateLectureSummary = async (
   const batches = buildSummaryBatches(chunks, opts.maxCharsPerBatch ?? MAX_CHARS_PER_BATCH);
   logger.info(`[LECTURE-SUMMARY] 📚 Summarizing ${chunks.length} chunk(s) in ${batches.length} batch(es)`);
 
-  if (batches.length === 1) {
-    return summarizeBatch(batches[0], lectureTitle, timeoutMs);
-  }
-
   const partials: string[] = [];
   for (const batch of batches) {
     const partial = await summarizeBatch(batch, lectureTitle, timeoutMs);
     if (partial) partials.push(partial);
   }
+  const counts = { batchesAttempted: batches.length, batchesSucceeded: partials.length };
+  if (partials.length < batches.length) {
+    logger.warn(`[LECTURE-SUMMARY] ⚠️  ${batches.length - partials.length}/${batches.length} batch(es) failed`);
+  }
 
-  if (partials.length === 0) return null;
-  if (partials.length === 1) return partials[0];
+  if (partials.length === 0) return { summary: null, ...counts };
+  if (partials.length === 1) return { summary: partials[0], ...counts };
 
-  return combineSummaries(partials, lectureTitle, timeoutMs);
+  return { summary: await combineSummaries(partials, lectureTitle, timeoutMs), ...counts };
 };

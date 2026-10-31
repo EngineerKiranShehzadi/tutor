@@ -13,13 +13,16 @@ interface Props {
   recSeconds:          number;
   interimText?:        string;
   isSpeechSupported?:  boolean;
+  // An answer is still being produced: sending is blocked (one question at a
+  // time, so a student can't stack several pipelines), typing is not.
+  isAnswerPending?:    boolean;
 }
 
-export const ChatInput = ({ onSend, value, onChange, isRecording, onToggleRecord, recSeconds, interimText = '', isSpeechSupported = true }: Props) => {
+export const ChatInput = ({ onSend, value, onChange, isRecording, onToggleRecord, recSeconds, interimText = '', isSpeechSupported = true, isAnswerPending = false }: Props) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const handleSend = () => {
-    if (!value.trim()) return;
+    if (isAnswerPending || !value.trim()) return;
     onSend(value.trim());
     onChange('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
@@ -102,7 +105,8 @@ export const ChatInput = ({ onSend, value, onChange, isRecording, onToggleRecord
 
           <button
             onClick={handleSend}
-            disabled={isRecording || !value.trim()}
+            disabled={isRecording || isAnswerPending || !value.trim()}
+            title={isAnswerPending ? 'Wait for the current answer to finish' : undefined}
             aria-label="Send message"
             className="w-9 h-9 rounded-full bg-indigo-600 text-white flex items-center justify-center hover:bg-indigo-700 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-indigo-600"
           >

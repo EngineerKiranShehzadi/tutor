@@ -16,6 +16,8 @@ interface LectureGap {
   status:              'GOOD' | 'MODERATE' | 'POOR';
   answeredFromLecture: number;
   notInLecture:        number;
+  sampled:             boolean;
+  windowDays:          number;
 }
 
 const STATUS_CONFIG = {
@@ -97,7 +99,9 @@ export default function ContentGapsPage() {
       <div className="bg-indigo-50 border border-indigo-100 rounded-2xl px-5 py-4 mb-5 flex items-start gap-3">
         <i className="fas fa-circle-info text-indigo-400 text-[16px] mt-0.5 shrink-0" />
         <p className="text-[14px] text-indigo-700 leading-relaxed">
-          <strong>How this works:</strong> For each AI-ready lecture, we extract keywords from student questions and compare them against the lecture's Q&A training chunks.
+          <strong>How this works:</strong> For each AI-ready lecture, we extract keywords from student questions
+          {gaps[0] ? ` asked in the last ${gaps[0].windowDays} days` : ''} and compare them against the lecture&apos;s Q&A training chunks.
+          {gaps.some(g => g.sampled) && <span className="font-semibold"> Only the most recent questions in that window were analysed.</span>}
           <span className="text-red-600 font-semibold"> Red topics</span> = students are asking about these but the AI has no training data for them →
           add more Q&A pairs to that lecture's dataset.
           <span className="text-emerald-600 font-semibold"> Green topics</span> = well covered by training data.

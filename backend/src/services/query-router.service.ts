@@ -68,13 +68,29 @@ const isGreeting = (trimmed: string): boolean => {
   return sawFragment;
 };
 
+// A summary request must ask for a summary-type output AND target the whole
+// lecture. "What are the key points of few-shot prompting?" or "summarize what
+// the lecture says about tokenization" are topic questions: they go through
+// retrieval, both relevance floors, answer memory and the verifier, which the
+// summary path skips.
+const SUMMARY_SIGNAL = /\b(?:summar(?:y|ize|ise|izing|ising|ies)|key\s+(?:points|takeaways|ideas)|main\s+(?:points|topics|ideas)|overview|recap|tl;?dr)\b/gi;
+const WHOLE_LECTURE = /\b(?:this|the|whole|entire|full|today'?s)\s+(?:lecture|video|class|session|lesson)\b/gi;
+const SUMMARY_FILLER = /\b(?:give|me|a|an|the|please|can|could|you|of|it|this|quick|short|brief|lecture|what|are|is)\b/gi;
+// "about X", "on X", "of X", "in X", "for X", "regarding X" — unless X is the
+// whole lecture itself ("of this lecture") or only shapes the answer
+// ("for me", "in 5 bullet points", "in simple words", "in detail").
+const TOPIC_QUALIFIER = /\b(?:about|regarding|concerning)\b|\b(?:of|on|in|for)\s+(?!(?:this|the|whole|entire|full|today'?s)\s+(?:lecture|video|class|session|lesson)\b)(?!(?:me|us|\d+|a\s+few|simple|short|brief|bullets?|points?|detail|one|two|three|five|english|urdu)\b)[a-z0-9]/i;
+
 const isLectureSummaryRequest = (trimmed: string): boolean => {
   const lower = trimmed.toLowerCase();
-  if (/\bsummar(y|ize|ise|izing|ising|ies)\b/.test(lower) && /\blecture\b|\bthis\b|\bit\b/.test(lower)) return true;
-  if (lower.includes('key points')) return true;
-  if (/\bmain\s+topics\b/.test(lower)) return true;
-  if (/\boverview\b/.test(lower) && /\blecture\b/.test(lower)) return true;
-  return false;
+  if (!new RegExp(SUMMARY_SIGNAL.source, 'i').test(lower)) return false;
+  // Nothing left once the summary words, whole-lecture phrases and filler are
+  // removed: "summarize", "summary please", "summarize it", "give me the key points".
+  const rest = lower.replace(SUMMARY_SIGNAL, ' ').replace(WHOLE_LECTURE, ' ').replace(SUMMARY_FILLER, ' ')
+    .replace(/[^a-z0-9]+/g, '');
+  if (rest === '') return true;
+  // Otherwise the whole lecture must be named, with no narrower topic.
+  return new RegExp(WHOLE_LECTURE.source, 'i').test(lower) && !TOPIC_QUALIFIER.test(lower);
 };
 
 // A message "reads as" a well-formed question/request when it ends with '?'
