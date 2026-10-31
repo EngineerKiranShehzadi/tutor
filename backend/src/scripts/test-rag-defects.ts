@@ -27,6 +27,7 @@ import { decomposedContextBudget, splitUncoveredAspects } from '../rag/query-pro
 import { runInputGuardrails } from '../rag/guardrails/input/input-guardrail.service';
 import { classifyRoute } from '../services/query-router.service';
 import { detectExpectedResponseFormat } from '../rag/guardrails/output/format/response-format.detector';
+import { runAdaptiveRetrieval } from '../rag/query-processing/adaptive-retrieval/adaptive-retrieval.service';
 import pool from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { askLectureAgent, LECTURE_NOT_FOUND_MESSAGE, type AskLectureAgentDeps } from '../services/chat.service';
@@ -734,6 +735,51 @@ cases.push({
     ];
     const wrong = rows.filter(([q, want]) => detectExpectedResponseFormat(q) !== want);
     return { pass: wrong.length === 0, detail: wrong.map(([q, want]) => `"${q}"→${detectExpectedResponseFormat(q)} (want ${want})`).join(' | ') || `${rows.length} inputs ok` };
+  },
+});
+
+// ── S10: adaptive retrieval never credits evidence to a guessed aspect ──
+async function adaptiveWith(uncovered: number[], targetAspect: string) {
+  const ar = env.ADAPTIVE_RETRIEVAL as { ENABLED: boolean; MAX_ITERATIONS: number };
+  const saved = { en: ar.ENABLED, max: ar.MAX_ITERATIONS };
+  ar.ENABLED = true; ar.MAX_ITERATIONS = 1;
+  const subqueries = ['What is zero-shot prompting?', 'What is few-shot prompting?', 'What is chain-of-thought prompting?'];
+  const perSubquery = subqueries.map((subquery, index) => ({
+    index, subquery, candidateCount: uncovered.includes(index) ? 0 : 1, covered: !uncovered.includes(index),
+    reranked: uncovered.includes(index) ? [] : [{ ...chunk(10 + index, `Q: ${subquery}`), rerankScore: 0.9 }],
+    ...(uncovered.includes(index) ? { failureReason: 'NO_VECTOR_CANDIDATES' as const } : {}),
+  }));
+  const plan = JSON.stringify({ action: 'RETRIEVE', retrievalQuery: 'prompting with worked examples', targetAspect, reason: 'gap' });
+  try {
+    const { value } = await withFakeLlm(env.LLM.ADAPTIVE_RETRIEVAL.PROVIDER, [plan], () => runAdaptiveRetrieval(
+      { effectiveQuery: subqueries.join(' '), lectureId: 4, subqueries, perSubquery,
+        coveredSubqueryIndexes: [0, 1, 2].filter(i => !uncovered.includes(i)), uncoveredSubqueryIndexes: uncovered },
+      { generateEmbedding: async () => [0.1], searchChunks: async () => [chunk(50, 'Q: new evidence')],
+        rerankChunks: async (_q, c) => c.map(x => ({ ...x, rerankScore: 0.9 })) }));
+    return value;
+  } finally {
+    ar.ENABLED = saved.en; ar.MAX_ITERATIONS = saved.max;
+  }
+}
+
+cases.push({
+  label: 'S10a. Two uncovered aspects and a planner targetAspect matching neither → INVALID_PLAN, both stay uncovered',
+  run: async () => {
+    const r = await adaptiveWith([1, 2], 'something the planner reworded');
+    const pass = r.stopReason === 'INVALID_PLAN' && r.uncoveredSubqueryIndexes.join() === '1,2' && r.coveredSubqueryIndexes.join() === '0'
+      && r.iterations[0]?.action === 'FAILED';
+    return { pass, detail: `stop=${r.stopReason}, uncovered=${r.uncoveredSubqueryIndexes.join()}` };
+  },
+});
+
+cases.push({
+  label: 'S10b. One uncovered aspect → a non-matching targetAspect still falls back to it; an exact match among two covers only that one',
+  run: async () => {
+    const single = await adaptiveWith([1], 'reworded few-shot');
+    const exact = await adaptiveWith([1, 2], 'what is chain-of-thought prompting?');
+    const pass = single.stopReason === 'SUFFICIENT_EVIDENCE' && single.uncoveredSubqueryIndexes.length === 0
+      && exact.coveredSubqueryIndexes.includes(2) && exact.uncoveredSubqueryIndexes.join() === '1';
+    return { pass, detail: `single=${single.stopReason}/${single.uncoveredSubqueryIndexes.join()}, exact uncovered=${exact.uncoveredSubqueryIndexes.join()}` };
   },
 });
 
