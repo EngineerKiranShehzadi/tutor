@@ -831,6 +831,50 @@ const run = async () => {
     }
   }
 
+  // ── AD7: the S3 pointer is written only for an accepted build ────────
+  {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const s3 = require('../services/s3-storage.service') as { isS3Configured: () => boolean; uploadRawDataset: (...a: unknown[]) => Promise<{ bucket: string; key: string }> };
+    const realS3 = { cfg: s3.isS3Configured, up: s3.uploadRawDataset };
+    const uploads: string[] = [];
+    s3.isS3Configured = () => true;
+    s3.uploadRawDataset = async (lectureId: unknown, _buf: unknown, name: unknown) => {
+      const key = `raw/${String(lectureId)}/${Date.now()}-${String(name)}`; uploads.push(key); return { bucket: 'test-bucket', key };
+    };
+    const admin = (await query<{ id: string }>(`INSERT INTO users (name, email, password_hash, is_verified, role) VALUES ('AD7 Admin', $1, 'x', TRUE, 'ADMIN') RETURNING id`, [`ad7-${Date.now()}@example.test`])).rows[0].id;
+    const mkLecture = async (t: string) => (await query<{ id: number }>(`INSERT INTO lectures (title, youtube_url, youtube_video_id) VALUES ($1, 'https://youtu.be/xxxxxxxxxxx', 'xxxxxxxxxxx') RETURNING id`, [t])).rows[0].id;
+    const busy = await mkLecture('[ad7] build in flight');
+    const free = await mkLecture('[ad7] free');
+    // Another update is already building for `busy`: a new build is refused with 409.
+    await query(`INSERT INTO dataset_versions (lecture_id, version_no, status, mode, embedding_model_version, chunking_config_version, stats)
+                 VALUES ($1, 1, 'BUILDING', 'MERGE', 'm', 'c', '{}'::jsonb)`, [busy]);
+    const app = express(); app.use(express.json()); app.use('/datasets', datasetRoutes); app.use(errorHandler);
+    const srv = app.listen(0, '127.0.0.1');
+    await new Promise<void>(r => srv.once('listening', () => r()));
+    const base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+    const post = async (lec: number) => {
+      const fd = new FormData();
+      fd.append('file', new Blob([workbook([['question', 'answer'], ['What is AD7?', 'A pointer test.']])], { type: 'application/octet-stream' }), 'ad7.xlsx');
+      const r = await fetch(`${base}/datasets/upload/${lec}`, { method: 'POST', headers: { Authorization: `Bearer ${generateAccessToken(admin, 'ADMIN')}` }, body: fd });
+      return r.status;
+    };
+    const keyOf = async (lec: number) => (await query<{ k: string | null }>('SELECT dataset_s3_key AS k FROM lectures WHERE id = $1', [lec])).rows[0].k;
+    try {
+      const refused = await post(busy);
+      const refusedKey = await keyOf(busy);
+      const accepted = await post(free);
+      const acceptedKey = await keyOf(free);
+      // Stop the background build of the accepted upload (no embedding server here).
+      await query(`UPDATE dataset_versions SET status = 'FAILED', last_error = 'test' WHERE lecture_id = $1 AND status = 'BUILDING'`, [free]);
+      check('AD7-1. A 409 build (another update in flight) leaves dataset_s3_key unchanged although the raw file was archived; an accepted build records it',
+        refused === 409 && refusedKey === null && uploads.length === 2 && accepted === 200 && acceptedKey === uploads[1],
+        `refused=${refused} key=${refusedKey} accepted=${accepted} key=${acceptedKey} archived=${uploads.length}`);
+    } finally {
+      srv.close();
+      s3.isS3Configured = realS3.cfg; s3.uploadRawDataset = realS3.up;
+    }
+  }
+
 };
 
 (async () => {

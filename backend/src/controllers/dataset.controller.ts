@@ -58,6 +58,11 @@ export const uploadDataset = async (
     // Verify lecture exists
     const lecture = await getLectureById(lectureId);
     const file = req.file;
+    // Where the raw file was archived. The lecture only points at it once the
+    // build has actually been accepted (CREATED): a refused build (409 —
+    // concurrent change, or another update in flight) must not leave the
+    // lecture naming a file that was never applied.
+    const archive: { location: { bucket: string; key: string; originalFilename: string } | null } = { location: null };
 
     logger.info(`[UPLOAD] Admin "${req.user?.email}" uploading dataset for lecture #${lectureId} "${lecture.title}" (mode=${mode}${dryRun ? ', dry run' : ''})`);
 
@@ -72,7 +77,7 @@ export const uploadDataset = async (
       beforeBuild: async ({ firstVersion }) => {
         if (isS3Configured()) {
           const { bucket, key } = await uploadRawDataset(lectureId, file.buffer, file.originalname);
-          await updateLectureDatasetLocation(lectureId, { bucket, key, originalFilename: file.originalname });
+          archive.location = { bucket, key, originalFilename: file.originalname };
         } else {
           logger.warn(`[UPLOAD] S3 not configured — skipping raw dataset archive for lecture #${lectureId}`);
         }
@@ -93,6 +98,7 @@ export const uploadDataset = async (
       return;
     }
 
+    if (archive.location) await updateLectureDatasetLocation(lectureId, archive.location);
     sendSuccess(res, 'Dataset uploaded. Building the new version in the background; the current dataset stays live until it is complete.', {
       lectureId, status: 'PROCESSING', versionId: result.versionId, versionNo: result.versionNo, preview: result.preview,
     });
