@@ -510,12 +510,16 @@ const failVersion = async (v: VersionRow, message: string): Promise<FinishResult
   let currentStatus = v.status;
   try {
     await client.query('BEGIN');
-    // Same lock order as activateVersion: the version row, then the lecture.
-    const { rows: vr } = await client.query<{ status: string }>(
-      'SELECT status FROM dataset_versions WHERE id = $1 FOR UPDATE', [v.id]
-    );
+    // LOCK ORDER — every transaction in this file locks the lecture row
+    // first, then its dataset_versions rows (buildVersion, activateVersion,
+    // cleanupOldVersions, rollbackDataset). Taking them the other way round
+    // here deadlocked an admin Cancel against the cleanup that follows a
+    // failed build (40P01 → a 500 for the Cancel, or a skipped purge).
     const { rows: lec } = await client.query<{ active_version_id: number | null }>(
       'SELECT active_version_id FROM lectures WHERE id = $1 FOR UPDATE', [v.lecture_id]
+    );
+    const { rows: vr } = await client.query<{ status: string }>(
+      'SELECT status FROM dataset_versions WHERE id = $1 FOR UPDATE', [v.id]
     );
     currentStatus = vr[0]?.status ?? 'MISSING';
     const isLive = lec[0]?.active_version_id === v.id;
@@ -640,11 +644,17 @@ const activateVersion = async (versionId: number): Promise<{ activated: boolean;
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    // Lecture first, then the version (see LOCK ORDER in failVersion). A
+    // version never changes lecture, so its lecture_id can be read unlocked.
+    const { rows: owner } = await client.query<{ lecture_id: number }>(
+      'SELECT lecture_id FROM dataset_versions WHERE id = $1', [versionId]
+    );
+    if (!owner[0]) throw new AppError(`Dataset version ${versionId} not found`, 404);
+    await client.query('SELECT id FROM lectures WHERE id = $1 FOR UPDATE', [owner[0].lecture_id]);
     const { rows: v } = await client.query<{ lecture_id: number; status: string }>(
       'SELECT lecture_id, status FROM dataset_versions WHERE id = $1 FOR UPDATE', [versionId]
     );
     if (!v[0]) throw new AppError(`Dataset version ${versionId} not found`, 404);
-    await client.query('SELECT id FROM lectures WHERE id = $1 FOR UPDATE', [v[0].lecture_id]);
     if (v[0].status !== 'READY_TO_ACTIVATE') {
       await client.query('ROLLBACK');
       return { activated: false, status: v[0].status };

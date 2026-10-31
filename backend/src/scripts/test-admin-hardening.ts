@@ -52,7 +52,7 @@ import { rateLimitStore } from '../graphql/resolvers/auth.resolver';
 import { ExpiringMap } from '../utils/expiring-map';
 import { globalLimiter, userLimiter } from '../middleware/rateLimiter';
 import { startMaintenanceScheduler, stopMaintenanceScheduler, maintenanceSchedulerState, runRetention } from '../observability/maintenance.scheduler';
-import { finishDatasetVersion, rollbackDataset } from '../services/dataset-version.service';
+import { finishDatasetVersion, rollbackDataset, failDatasetVersion } from '../services/dataset-version.service';
 import { EMBEDDING_MODEL_VERSION } from '../services/embedding.service';
 import observabilityRoutes from '../routes/observability.routes';
 import { STAGE_SPAN_KIND, OpenInferenceSpanKind } from '../observability/otel-semconv';
@@ -975,6 +975,62 @@ const run = async () => {
     check('AD11-1. studentJourney for an unknown id → "Student not found" (AppError 404), not "Internal server error"',
       errs[0]?.message === 'Student not found' && direct instanceof AppError && direct.statusCode === 404,
       `graphql="${errs[0]?.message}" status=${(direct as AppError).statusCode}`);
+  }
+
+  // ── AD-N1: one lock order (lecture, then version) — Cancel/activate never deadlock with cleanup ──
+  {
+    // One in-flight version per lecture, so each race gets its own lecture.
+    const mkLecture = async () => (await query<{ id: number }>(`INSERT INTO lectures (title, youtube_url, youtube_video_id) VALUES ('[adn1] locks', 'https://youtu.be/xxxxxxxxxxx', 'xxxxxxxxxxx') RETURNING id`)).rows[0].id;
+    const mkVersion = async (lec: number, status: string) => (await query<{ id: number }>(
+      `INSERT INTO dataset_versions (lecture_id, version_no, status, mode, embedding_model_version, chunking_config_version, stats)
+       VALUES ($1, 1, $2, 'MERGE', $3, 'c', '{}'::jsonb) RETURNING id`, [lec, status, EMBEDDING_MODEL_VERSION])).rows[0].id;
+    const cancelLec = await mkLecture();
+    const activateLec = await mkLecture();
+    const building = await mkVersion(cancelLec, 'BUILDING');
+    const ready = await mkVersion(activateLec, 'READY_TO_ACTIVATE');
+    for (let i = 0; i < 2; i++) {
+      const vec = `[${Array.from({ length: 1024 }, (_, j) => (j === 7 + i ? 1 : 0.001 * ((j * (7 + i)) % 7))).join(',')}]`;
+      const c = (await query<{ id: number }>(
+        `INSERT INTO lecture_qna_chunks (lecture_id, question, answer, chunk_text, local_embedding, embedding_model_version)
+         VALUES ($1, $2, 'a', $2, $3::vector, $4) RETURNING id`, [activateLec, `adn1 q${i}`, vec, EMBEDDING_MODEL_VERSION])).rows[0].id;
+      await query('INSERT INTO dataset_version_chunks (version_id, chunk_id, qa_id, chunk_index) VALUES ($1, $2, $3, 0)', [ready, c, `adn1-${i}`]);
+    }
+
+    // A second connection takes cleanupOldVersions' order — the lecture, then
+    // a version row — while `work` runs. With the old order (version, then
+    // lecture) `work` held the version and waited for the lecture: a deadlock.
+    const raceAgainstCleanupOrder = async <T>(lec: number, versionId: number, work: () => Promise<T>) => {
+      const other = await pool.connect();
+      let lockError: string | null = null;
+      try {
+        await other.query('BEGIN');
+        await other.query("SET LOCAL lock_timeout = '5s'");
+        await other.query('SELECT id FROM lectures WHERE id = $1 FOR UPDATE', [lec]);
+        const pending = work().catch(e => e as Error);
+        // Wait until `work` is blocked behind our lecture lock.
+        for (let i = 0; i < 100; i++) {
+          const { rows } = await other.query<{ n: number }>(
+            `SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND pid <> pg_backend_pid()`);
+          if (rows[0].n > 0) break;
+          await new Promise(r => setTimeout(r, 20));
+        }
+        await other.query('SELECT id FROM dataset_versions WHERE id = $1 FOR UPDATE', [versionId]).catch(e => { lockError = (e as { code?: string }).code ?? (e as Error).message; });
+        await other.query(lockError ? 'ROLLBACK' : 'COMMIT');
+        return { result: await pending, lockError };
+      } finally {
+        other.release();
+      }
+    };
+
+    const cancel = await raceAgainstCleanupOrder(cancelLec, building, () => failDatasetVersion(building, 'Cancelled by an admin.'));
+    const activate = await raceAgainstCleanupOrder(activateLec, ready, () => finishDatasetVersion(ready));
+    const row = (await query<{ status: string; active_version_id: number | null }>(
+      'SELECT v.status, l.active_version_id FROM dataset_versions v JOIN lectures l ON l.id = v.lecture_id WHERE v.id = $1', [ready])).rows[0];
+    const outcome = (r: unknown) => (r instanceof Error ? `error ${(r as { code?: string }).code ?? r.message}` : (r as { outcome: string }).outcome);
+    check('AD-N1-1. Cancel (failVersion) and activation run while another transaction holds the lecture and then locks the version: no deadlock (40P01), both finish',
+      cancel.lockError === null && outcome(cancel.result) === 'FAILED'
+        && activate.lockError === null && outcome(activate.result) === 'ACTIVATED' && row.status === 'ACTIVE' && row.active_version_id === ready,
+      `cancel=${outcome(cancel.result)} (other side: ${cancel.lockError ?? 'ok'}), activate=${outcome(activate.result)} (other side: ${activate.lockError ?? 'ok'}), status=${row.status}`);
   }
 
   // ── X1/X2: trace-list query params reach the service as their real types ──
