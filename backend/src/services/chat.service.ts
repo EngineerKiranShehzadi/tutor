@@ -369,7 +369,7 @@ export const askLectureAgent = async (
     // database failure propagates (it is never reported as NOT_FOUND).
     currentStage = 'load-agent-profile';
     const getAgentProfile = deps.getAgentProfile ?? (await import('./lecture-agent-profile.service')).getAgentProfileByLectureId;
-    const agentLookup = await getAgentProfile(lectureId);
+    const agentLookup = await trace.span('load-agent-profile', () => getAgentProfile(lectureId), r => ({ agentProfileStatus: r.status }));
     if (agentLookup.status !== 'FOUND') {
       logger.warn(`[CHAT] ⚠️  Lecture #${lectureId} has no usable agent profile (status=${agentLookup.status})`);
       finishTrace('ERROR', { responseStatus: 'ERROR', failedStage: currentStage });
@@ -401,10 +401,10 @@ export const askLectureAgent = async (
     // not reveal whether a session id exists or who owns it. A database
     // failure here propagates (it is never treated as a valid session).
     currentStage = 'validate-chat-session';
-    const { rows: sessionRows } = await query<{ ok: number }>(
+    const { rows: sessionRows } = await trace.span('validate-chat-session', () => query<{ ok: number }>(
       `SELECT 1 AS ok FROM chat_sessions WHERE id = $1 AND student_id = $2 AND lecture_id = $3`,
       [sessionId, studentId, lectureId]
-    );
+    ), r => ({ sessionValid: r.rows.length > 0 }));
     if (sessionRows.length === 0) {
       logger.warn(`[CHAT] ⚠️  Rejected session #${sessionId}: not found for student/lecture #${lectureId}`);
       finishTrace('ERROR', { responseStatus: 'ERROR', failedStage: currentStage });

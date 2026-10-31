@@ -88,7 +88,7 @@ export type PrepareResult =
   // can switch MERGE/REPLACE without uploading and parsing the file again.
   | { kind: 'DRY_RUN'; preview: UpdatePreview; previews: Record<DatasetMode, UpdatePreview> }
   | { kind: 'NOOP'; preview: UpdatePreview }
-  | { kind: 'CREATED'; versionId: number; versionNo: number; preview: UpdatePreview };
+  | { kind: 'CREATED'; versionId: number; versionNo: number; versionStatus: string; preview: UpdatePreview };
 
 export class RemovalConfirmationRequired extends AppError {
   constructor(public preview: UpdatePreview) {
@@ -324,7 +324,7 @@ const planUpdates = async (
 
 // ── Building a version ──────────────────────────────────────────────────
 
-const buildVersion = async (plan: Plan): Promise<{ versionId: number; versionNo: number }> => {
+const buildVersion = async (plan: Plan): Promise<{ versionId: number; versionNo: number; versionStatus: string }> => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -343,16 +343,18 @@ const buildVersion = async (plan: Plan): Promise<{ versionId: number; versionNo:
     const versionNo = vn[0].n;
 
     let versionId: number;
+    let versionStatus: string;
     try {
-      const { rows } = await client.query<{ id: number }>(
+      const { rows } = await client.query<{ id: number; status: string }>(
         `INSERT INTO dataset_versions
            (lecture_id, version_no, status, mode, source_filename, file_hash, embedding_model_version, chunking_config_version, stats)
          VALUES ($1, $2, 'BUILDING', $3, $4, $5, $6, $7, $8::jsonb)
-         RETURNING id`,
+         RETURNING id, status`,
         [plan.lectureId, versionNo, plan.mode, plan.filename, plan.fileHash,
          EMBEDDING_MODEL_VERSION, CHUNKING_CONFIG_VERSION, JSON.stringify(plan.preview)]
       );
       versionId = rows[0].id;
+      versionStatus = rows[0].status;
     } catch (err) {
       if ((err as { code?: string }).code === '23505') {
         throw new AppError('Another dataset update for this lecture is still in progress. Wait for it to finish, then upload again.', 409);
@@ -440,7 +442,7 @@ const buildVersion = async (plan: Plan): Promise<{ versionId: number; versionNo:
       `${plan.preview.carriedOver} carried over, ${plan.preview.removed} removed; ` +
       `${plan.preview.chunksToEmbed} chunk(s) to embed, ${plan.preview.chunksCopied} vector(s) copied, ${plan.preview.chunksReused} reused`
     );
-    return { versionId, versionNo };
+    return { versionId, versionNo, versionStatus };
   } catch (err) {
     await client.query('ROLLBACK').catch(() => undefined);
     throw err;
@@ -485,8 +487,8 @@ export async function prepareDatasetVersion(
   // Every lecture status change of an upload happens inside buildVersion's
   // transaction, under the lecture lock and after the "dataset changed
   // meanwhile" check — so a refused build changes nothing at all.
-  const { versionId, versionNo } = await buildVersion(plan);
-  return { kind: 'CREATED', versionId, versionNo, preview: p };
+  const { versionId, versionNo, versionStatus } = await buildVersion(plan);
+  return { kind: 'CREATED', versionId, versionNo, versionStatus, preview: p };
 }
 
 // ── Embedding, validation, publishing ──────────────────────────────────

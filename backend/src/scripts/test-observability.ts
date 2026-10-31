@@ -147,7 +147,7 @@ async function runTracingChecks(): Promise<Record<string, CaseResult>> {
     {
       const { trace } = await withTrace('OBSTEST DISTINCTIVE_QUESTION_TOKEN_XY9 fact question', factDeps, ctx);
       const names = spanNames(trace);
-      const expected = ['input-guardrail', 'load-session-history', 'classify-query-route', 'exact-memory-lookup', 'decompose-query', 'vector-search', 'rerank-candidates', 'generate-grounded-answer', 'save-chat-entry', 'write-answer-memory'];
+      const expected = ['load-agent-profile', 'validate-chat-session', 'input-guardrail', 'load-session-history', 'classify-query-route', 'exact-memory-lookup', 'decompose-query', 'vector-search', 'rerank-candidates', 'generate-grounded-answer', 'save-chat-entry', 'write-answer-memory'];
       results['1'] = { pass: trace.rootName === 'ask-lecture-agent' && typeof trace.traceId === 'string' && trace.traceId.length > 0 && trace.status === 'SUCCESS', detail: `root="${trace.rootName}" status=${trace.status}` };
       results['2'] = { pass: JSON.stringify(names) === JSON.stringify(expected), detail: `spans=${JSON.stringify(names)}` };
     }

@@ -99,10 +99,11 @@ export const uploadDataset = async (
     }
 
     if (archive.location) await updateLectureDatasetLocation(lectureId, archive.location);
-    // The new version's real state; the lecture's own status is not reported
-    // (it stays READY when a dataset is live, EMBEDDING for a first upload).
+    // The new version's real state, as the build wrote it (finishDatasetVersion
+    // only starts below); the lecture's own status is not reported (it stays
+    // READY when a dataset is live, EMBEDDING for a first upload).
     sendSuccess(res, 'Dataset uploaded. Building the new version in the background; the current dataset stays live until it is complete.', {
-      lectureId, versionStatus: 'BUILDING', versionId: result.versionId, versionNo: result.versionNo, preview: result.preview,
+      lectureId, versionStatus: result.versionStatus, versionId: result.versionId, versionNo: result.versionNo, preview: result.preview,
     });
 
     // Embed + validate + publish asynchronously so the HTTP response is already sent
@@ -117,13 +118,15 @@ export const uploadDataset = async (
       return;
     }
     if (err instanceof AppError) {
-      logger.error(`[UPLOAD] ❌ ${err.message}`);
+      logger.error(`[UPLOAD] ❌ Lecture #${lectureId}: ${err.message}`);
       sendError(res, err.message, err.statusCode);
       return;
     }
     // Every problem with the file itself is an AppError (400/409/413). Anything
     // else — the database, S3, a bug — is the server failing, not a bad file:
-    // the shared handler answers 500 and logs it content-safely (A18).
+    // the shared handler answers 500 and logs it content-safely (A18). This
+    // line only names the lecture and the error type, never the message.
+    logger.error(`[UPLOAD] ❌ Lecture #${lectureId}: server fault during upload (${(err as Error)?.name ?? 'Error'}) — see the error log entry that follows`);
     next(err);
   }
 };

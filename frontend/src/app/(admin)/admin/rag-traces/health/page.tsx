@@ -78,9 +78,10 @@ export default function SystemHealthPage() {
           </div>
 
           <p className="text-[12px] font-bold text-slate-400 uppercase tracking-wide mb-3">Core dependencies</p>
-          <div className="grid grid-cols-4 gap-5 mb-6">
+          <div className="grid grid-cols-3 gap-5 mb-6">
             <HealthCard name="Backend" icon="fa-server" health={{ status: 'healthy', latencyMs: 0 }} critical />
             <HealthCard name="PostgreSQL" icon="fa-database" health={readiness?.components.database} critical />
+            <HealthCard name="pgvector extension" icon="fa-cubes" health={readiness?.components.pgvector} critical />
             <HealthCard name="Embedding service" icon="fa-vector-square" health={readiness?.components.embeddingServer} critical />
             <HealthCard name="Reranker service" icon="fa-sort" health={readiness?.components.reranker} critical />
             <HealthCard name="Answer LLM" icon="fa-brain" health={readiness?.components.answerLlm} critical />

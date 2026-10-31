@@ -38,7 +38,6 @@ export const ERROR_CODE_LABELS: Record<string, string> = {
 // (*_call) are never keys — request-log.service.ts leaves them out of stage_ms.
 export const STAGE_LABELS: Record<string, string> = {
   'validate-chat-session': 'Session check',
-  'validate-request': 'Checking the request',
   'load-agent-profile': 'Loading lecture settings',
   'load-session-history': 'Loading earlier conversation',
   'input-guardrail': 'Checking the question',
@@ -58,7 +57,6 @@ export const STAGE_LABELS: Record<string, string> = {
   'generate-greeting-response': 'Writing the greeting',
   'summarize-lecture-content': 'Summarizing the lecture',
   'ask-lecture-agent': 'Asking the lecture agent',
-  'llm-fallback': 'Switching to backup AI model',
   'output-guardrail': 'Checking the answer',
   'record-memory-hit': 'Recording memory use',
   'write-answer-memory': 'Saving answer to memory',

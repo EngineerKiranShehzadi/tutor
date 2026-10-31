@@ -177,14 +177,16 @@ export function parseExcel(buffer: Buffer): RawRow[] {
   const sheet = workbook.Sheets[sheetName];
   if (!sheet || !sheet['!ref']) throw new AppError('Excel file is empty', 400);
 
-  // Only the first MAX_COLUMNS columns are read; the importer uses ten at most.
-  // (A stray cell far to the right would otherwise make every row that wide.)
+  // Only the first MAX_COLUMNS columns become row fields; the importer uses ten
+  // at most. (A stray cell far to the right would otherwise make every row that
+  // wide.) The parser above still reads the sheet's cells; sheetRows is what
+  // bounds that work.
   const ref = XLSX.utils.decode_range(sheet['!ref']);
   ref.e.c = Math.min(ref.e.c, ref.s.c + lim.MAX_COLUMNS - 1);
   const rawRows  = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '', range: ref });
   // Blank rows are not counted, so empty formatted rows below the data never trip this.
   if (rawRows.length > lim.MAX_ROWS) {
-    throw new AppError(`The sheet "${sheetName}" has more than ${lim.MAX_ROWS.toLocaleString()} rows of data (the limit). Split it into smaller files.`, 400);
+    throw new AppError(`The sheet "${sheetName}" has more than ${lim.MAX_ROWS.toLocaleString()} rows of data (the limit). Split it into smaller files, or raise DATASET_MAX_ROWS on the server.`, 400);
   }
 
   if (rawRows.length === 0) throw new AppError('Excel file is empty', 400);

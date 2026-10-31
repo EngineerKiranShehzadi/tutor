@@ -74,7 +74,8 @@ export const ATTR = {
 // lives in exactly one place.
 export const STAGE_SPAN_KIND: Record<string, OpenInferenceSpanKind> = {
   'ask-lecture-agent': OpenInferenceSpanKind.CHAIN,
-  'validate-request': OpenInferenceSpanKind.CHAIN,
+  'load-agent-profile': OpenInferenceSpanKind.CHAIN,
+  'validate-chat-session': OpenInferenceSpanKind.CHAIN,
   'input-guardrail': OpenInferenceSpanKind.CHAIN,
   'load-session-history': OpenInferenceSpanKind.CHAIN,
   'classify-query-route': OpenInferenceSpanKind.CHAIN,

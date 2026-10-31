@@ -26,6 +26,8 @@ const MODEL = 'seed-model';
 // Stage names are the ones recordTrace writes into stage_ms (see chat.service.ts).
 // Typical duration per stage; anything not listed is a small local step.
 const STAGE_MS: Record<string, [number, number]> = {
+  'load-agent-profile': [2, 15],
+  'validate-chat-session': [1, 8],
   'input-guardrail': [150, 500],
   'load-session-history': [10, 60],
   'classify-query-route': [1, 15],
@@ -50,7 +52,7 @@ const LLM_STAGES = new Set([
 const stageMs = (names: string[]): Record<string, number> =>
   Object.fromEntries(names.map(n => [n, between(...STAGE_MS[n])]));
 
-const RAG_HEAD = ['input-guardrail', 'load-session-history', 'classify-query-route'];
+const RAG_HEAD = ['load-agent-profile', 'validate-chat-session', 'input-guardrail', 'load-session-history', 'classify-query-route'];
 
 function ragStages(followUp: boolean, upTo: string): string[] {
   const full = [

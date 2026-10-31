@@ -1488,6 +1488,13 @@ const run = async () => {
     const wrong = labels.attentionDetailLabels({ responseStatus: 'ANSWERED', errorCode: null, answerVerificationReason: 'UNSUPPORTED_CLAIMS' });
     check('X3-1. Every non-LLM span name in STAGE_SPAN_KIND has a "Slowest pipeline steps" label (subquery-retrieval, adaptive-retrieval-iteration were "Other step")',
       missingStages.length === 0, `missing=[${missingStages.join(', ')}]`);
+    // ...and every label belongs to a span the pipeline really opens: no dead keys,
+    // and the two stages that had a label but no span (so no latency) now have one.
+    const chatSrc = readFileSync(join(__dirname, '../services/chat.service.ts'), 'utf8');
+    const deadLabels = Object.keys(labels.STAGE_LABELS).filter(k => !Object.prototype.hasOwnProperty.call(STAGE_SPAN_KIND, k));
+    check('X3-2. No stage label without a span (validate-request, llm-fallback removed); load-agent-profile and validate-chat-session are spans, so their latency reaches the chart',
+      deadLabels.length === 0 && chatSrc.includes("trace.span('load-agent-profile'") && chatSrc.includes("trace.span('validate-chat-session'"),
+      `dead=[${deadLabels.join(', ')}]`);
     check('X4-1. Verifier label maps are keyed by OUTPUT_GUARDRAIL_REASONS; a verifier timeout reads as an outage, not as a wrong answer or "Check result unknown"',
       verifierKeysOk && attentionKeysOk && outage.some(l => /outage/.test(l)) && !wrong.some(l => /outage|unknown/i.test(l))
         && !outage.includes('Check result unknown'),
