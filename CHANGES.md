@@ -7,6 +7,79 @@ Newest entry at the top.
 
 ---
 
+## 2026-11-01 — Integration audit round 2: R1–R11, Voyage embedding (V1–V5), sweep
+
+**Changed by:** Kiran
+**Files:** PII detector (`rag/guardrails/shared/pii/`), output guardrail and format guard,
+`chat.service.ts`, `llm-gemini.service.ts`, `dataset-version.service.ts`, `dataset.controller.ts`,
+`chunk.service.ts`, `analytics.service.ts`, `reembed.service.ts` (new), `health.service.ts`,
+`request-log.service.ts`, `sampling.ts`, `otel-semconv.ts`, observability traces/monitor services,
+routes and validation, Voyage adapters (`embedding/providers/voyage-embedding.provider.ts` new,
+`rerank/providers/voyage-rerank.provider.ts`, `utils/voyage-api.ts` new), resolver, `config/env.ts`,
+`.env.example`, migration `018_request_log_quality_signals.sql` (new), `scripts/reembed-all.ts` (new),
+GraphQL `typeDefs.ts`; frontend Errors, Traces, Health, Monitor and agents pages, monitor labels,
+DatasetManager; `docs/VOYAGE_SWITCH.md` (new), `START_HERE.md`; tests in `backend/src/scripts/`
+
+**Deploy note:** run `npm run db:setup` (migration `018`: two nullable columns on
+`rag_request_log`) with the backend. A backend started before it still logs every request
+without the new columns, and needs a restart after `db:setup`. Deploy backend and frontend
+together (`lectureAgentDetails.qaCount`, the dry run's `previews`, monitor fields). No
+re-embedding is needed until the switch to Voyage (`docs/VOYAGE_SWITCH.md`).
+
+**Student answers**
+- **R1 — real phone numbers and IPs were no longer masked (regression from ST1).** A bare
+  10–13 digit run with a dialled shape is a phone again (4155552671, 923001234567,
+  447911123456), unless it reads as a quantity (a run of zeros, a power of two ±1, one
+  repeated digit, binary). A dotted quad is a section number only when "Chapter",
+  "Section", "version", "Fig.", "§"… comes before it, so 8.8.8.8 is masked and
+  "Chapter 10.2.3.4" is not.
+- **R3 — "in a table" almost always came back as prose.** A table's header row (cells of
+  up to 4 words) no longer counts as new content: 10 of 10 header pairs pass, 0 before.
+- **R4 — the lost-content check rejected faithful reflows and missed real cuts.** It
+  ignores framing words and the question's own words, adds a limit on lost mentions, and
+  counts negations on their own: a repair that loses or adds a "not" is refused.
+
+**Operators**
+- **R2 — "No failed traces" under a non-zero error count.** Filtered trace lists read up to
+  500 traces (the overview's window) for matches, use Phoenix's own error filter, and say
+  "none among the latest N" when the window runs out. The Errors page's code drill-down is
+  a server filter.
+- **R5 — readiness stayed 503 for a minute after a provider recovered.** Only the probes
+  are cached; the real-call signal is applied after the cache. A failed probe is
+  re-checked after 5 s. One question retried on 503 now counts as one failure.
+- **R6 — with verification switched off, every answer was a "Failed answer check"** and
+  every trace was force-exported. `VERIFICATION_DISABLED` is not a problem anywhere.
+- **R10 / R11 — skipped answer memory and refused list/table reformats were invisible.**
+  Both are recorded in `rag_request_log` and shown on the monitor ("Answer cache skipped",
+  "List/table not delivered"). A refused reformat is also an attention row, and its trace
+  is always exported.
+- **R9** — the agents page counts Q&A pairs where it says Q&A pairs (`qaCount`).
+
+**Admin and datasets**
+- **R7 — reconcile could deadlock and overlap itself.** Its locking query has `ORDER BY id`,
+  and the 60 s resume tick skips while a run is still going.
+- **R8** — switching MERGE/REPLACE no longer re-uploads the file: one dry run returns both
+  previews.
+
+**Voyage (decided stack: Voyage embedding + rerank, Gemini answers)**
+- **V1** — new Voyage embedding adapter (`input_type` query/document, 1024 dims checked,
+  quota vs rate-limit 429s told apart). `EMBEDDING_PROVIDER=voyage` used to stop the server
+  at startup. A blank `EMBEDDING_MODEL` is the provider's own default.
+- **V5** — both Voyage adapters have a readiness probe that spends no tokens
+  (`GET /v1/batches`); before, readiness only checked that a key was set. Every Voyage 5xx
+  now counts towards the readiness signal.
+- **V2** — `npm run reembed:all` rebuilds every lecture under the current model through
+  the normal pipeline (dry run first; `--apply`). Dev data: 7 lectures, 2,828 pieces.
+- **V3 / V4** — `.env.example` describes the Voyage stack and that one key gates both
+  stages. `docs/VOYAGE_SWITCH.md` gives the order: re-embed, tune the thresholds, then
+  cut over. Not run yet: it needs a Voyage key.
+
+**Sweep** — two real pipeline stages now have spans (their latency reaches the chart), dead
+stage labels removed, upload logs name the lecture, `versionStatus` is read back, the health
+page shows pgvector, the row-limit message names `DATASET_MAX_ROWS`.
+
+---
+
 ## 2026-10-31 — Post-merge audit of feature/integration: open items after PR #1 (ST1–ST6, AD-N1–AD-N8, X1–X5)
 
 **Changed by:** Kiran
