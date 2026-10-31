@@ -835,7 +835,7 @@ export async function finishDatasetVersion(versionId: number, deps: FinishDeps =
           const { rows: o } = await query<{ outage_ms: string | null }>(
             `UPDATE dataset_versions
              SET outage_since = CASE WHEN $2 THEN NOW() ELSE COALESCE(outage_since, NOW()) END, updated_at = NOW()
-             WHERE id = $1
+             WHERE id = $1 AND status = 'BUILDING'
              RETURNING EXTRACT(EPOCH FROM (NOW() - outage_since)) * 1000 AS outage_ms`,
             [versionId, done > 0]
           );
@@ -847,11 +847,11 @@ export async function finishDatasetVersion(versionId: number, deps: FinishDeps =
           }
           note = `${cause} — ${remaining} chunk(s) waiting; retrying automatically every ${Math.round(retryDelay / 1000)}s` +
             (outageMaxMs > 0 ? ` (gives up after ${fmtDuration(outageMaxMs)} without progress)` : '');
-          await query('UPDATE dataset_versions SET last_error = $2 WHERE id = $1', [versionId, note]);
+          await query(`UPDATE dataset_versions SET last_error = $2 WHERE id = $1 AND status = 'BUILDING'`, [versionId, note]);
         } else {
           const attempts = v.attempts + 1;
           note = `${remaining} chunk(s) could not be embedded (attempt ${attempts}/${maxAttempts})`;
-          await query('UPDATE dataset_versions SET attempts = $2, last_error = $3, outage_since = NULL, updated_at = NOW() WHERE id = $1', [versionId, attempts, note]);
+          await query(`UPDATE dataset_versions SET attempts = $2, last_error = $3, outage_since = NULL, updated_at = NOW() WHERE id = $1 AND status = 'BUILDING'`, [versionId, attempts, note]);
           if (attempts >= maxAttempts) {
             return failVersion(v, `Embedding did not complete after ${attempts} attempts; ${remaining} chunk(s) have no embedding`);
           }
@@ -869,7 +869,10 @@ export async function finishDatasetVersion(versionId: number, deps: FinishDeps =
       }
 
       // Past the embedding step: any recorded outage note no longer applies.
-      await query('UPDATE dataset_versions SET last_error = NULL, outage_since = NULL WHERE id = $1', [versionId]);
+      // Only while still BUILDING: the loop re-checks its status only every
+      // few seconds, and a cancel that landed in between must keep its
+      // "Cancelled by an admin." reason (the UI showed "failed: unknown error").
+      await query(`UPDATE dataset_versions SET last_error = NULL, outage_since = NULL WHERE id = $1 AND status = 'BUILDING'`, [versionId]);
 
       const problems = await validateVersion(versionId);
       if (problems.length > 0) return failVersion(v, `Validation failed: ${problems.join('; ')}`);

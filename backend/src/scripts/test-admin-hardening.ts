@@ -49,6 +49,7 @@ import { rateLimitStore } from '../graphql/resolvers/auth.resolver';
 import { ExpiringMap } from '../utils/expiring-map';
 import { globalLimiter, userLimiter } from '../middleware/rateLimiter';
 import { startMaintenanceScheduler, stopMaintenanceScheduler, maintenanceSchedulerState } from '../observability/maintenance.scheduler';
+import { finishDatasetVersion } from '../services/dataset-version.service';
 
 const results: { name: string; pass: boolean; detail: string }[] = [];
 const check = (name: string, pass: boolean, detail: string) => {
@@ -643,6 +644,37 @@ const run = async () => {
       stopMaintenanceScheduler();
       obs.ALERTS_ENABLED = saved;
     }
+  }
+
+  // ── AD3: a cancel that lands during the embedding pass keeps its reason ──
+  {
+    const lec = (await query<{ id: number }>(`INSERT INTO lectures (title, youtube_url, youtube_video_id) VALUES ('[ad3] cancel', 'https://youtu.be/xxxxxxxxxxx', 'xxxxxxxxxxx') RETURNING id`)).rows[0].id;
+    const chunkIds: number[] = [];
+    for (const q of ['q1', 'q2']) {
+      chunkIds.push((await query<{ id: number }>(`INSERT INTO lecture_qna_chunks (lecture_id, question, answer, chunk_text) VALUES ($1, $2, 'a', $2) RETURNING id`, [lec, q])).rows[0].id);
+    }
+    const ver = (await query<{ id: number }>(
+      `INSERT INTO dataset_versions (lecture_id, version_no, status, mode, embedding_model_version, chunking_config_version, stats)
+       VALUES ($1, 1, 'BUILDING', 'MERGE', 'm', 'c', '{"chunksToEmbed": 2}'::jsonb) RETURNING id`, [lec])).rows[0].id;
+    for (const [i, c] of chunkIds.entries()) {
+      await query('INSERT INTO dataset_version_chunks (version_id, chunk_id, qa_id, chunk_index) VALUES ($1, $2, $3, 0)', [ver, c, `ad3-${i}`]);
+    }
+    const CANCEL = 'Cancelled by an admin.';
+    let calls = 0;
+    // The admin cancels while the last chunk is being embedded; the loop's
+    // status re-check (every statusCheckMs) has not run since.
+    const r = await finishDatasetVersion(ver, {
+      embedBatchSize: 1, statusCheckMs: 60_000, maxAttempts: 1,
+      embed: async () => {
+        calls++;
+        if (calls === 2) await query(`UPDATE dataset_versions SET status = 'FAILED', last_error = $2 WHERE id = $1`, [ver, CANCEL]);
+        return new Array(1024).fill(0.01);
+      },
+    });
+    const row = (await query<{ status: string; last_error: string | null }>('SELECT status, last_error FROM dataset_versions WHERE id = $1', [ver])).rows[0];
+    check('AD3-1. A cancel during the embedding pass: the post-embed step leaves status FAILED and last_error "Cancelled by an admin." unchanged',
+      row.status === 'FAILED' && row.last_error === CANCEL && r.outcome !== 'ACTIVATED',
+      `outcome=${r.outcome} status=${row.status} last_error=${JSON.stringify(row.last_error)} embedCalls=${calls}`);
   }
 
 };
