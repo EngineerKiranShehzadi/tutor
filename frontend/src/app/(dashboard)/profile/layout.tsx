@@ -13,7 +13,7 @@ const NAV = [
 ];
 
 export default function ProfileLayout({ children }: { children: React.ReactNode }) {
-  const { user, logout } = useAuth();
+  const { user, logout, logoutAll } = useAuth();
   const pathname = usePathname();
   const [userMenuOpen, setUserMenuOpen] = useState(false);
 
@@ -83,6 +83,15 @@ export default function ProfileLayout({ children }: { children: React.ReactNode 
                       <i className="fas fa-right-from-bracket text-red-500 text-[11px]" />
                     </div>
                     Sign Out
+                  </button>
+                  <button
+                    onClick={() => { setUserMenuOpen(false); logoutAll(); }}
+                    className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-red-600 hover:bg-red-50 transition-colors"
+                  >
+                    <div className="w-7 h-7 rounded-lg bg-red-50 flex items-center justify-center shrink-0">
+                      <i className="fas fa-power-off text-red-500 text-[11px]" />
+                    </div>
+                    Sign out of all devices
                   </button>
                 </div>
               </div>
