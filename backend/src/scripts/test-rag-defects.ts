@@ -914,12 +914,18 @@ const PII_FLAGGED: [string, string][] = [
   ['0300 1234567', 'PHONE'], ['03001234567', 'PHONE'], ['555-123-4567', 'PHONE'], ['555.123.4567', 'PHONE'],
   ['555 123 4567', 'PHONE'], ['020 7946 0958', 'PHONE'], ['042-35761234', 'PHONE'],
   ['my IP is 203.45.67.89', 'IP_ADDRESS'], ['4111 1111 1111 1111', 'CREDIT_CARD'], ['35202-1234567-1', 'IDENTIFIER'],
+  // R1: bare runs with no "+" or trunk 0, and public addresses with one-digit parts.
+  ['call 4155552671', 'PHONE'], ['923001234567', 'PHONE'], ['447911123456', 'PHONE'], ['14155552671', 'PHONE'],
+  ['3001234567', 'PHONE'], ['my DNS is 8.8.8.8', 'IP_ADDRESS'], ['1.1.1.1', 'IP_ADDRESS'], ['4.2.2.2', 'IP_ADDRESS'],
 ];
 const PII_CLEAN = [
   'GPT-3 has 175000000000 parameters', 'A 32-bit int holds 4294967296 values', 'INT_MAX is 2147483647', 'mod 1000000007',
   'c = 299792458 m/s', '1 000 000 000 tokens', 'pi = 3.14159265358979', 'the bits 0110100001', 'Chapter 10.2.3.4',
   'version 1.2.3.4', 'the router at 192.168.1.1', '10.0.0.1', '127.0.0.1', 'netmask 255.255.255.0', 'ISBN 0-13-468599-1',
   '12345678901234567890', 'see 7:09', '2024-01-15',
+  'A 32-bit unsigned int tops out at 4294967295', 'INT_MIN is -2147483648', '1 TiB is 1099511627776 bytes',
+  'Unix time 1609459200', '1698765432123 ms since the epoch', 'about 7800000000 people', 'mod 998244353',
+  'Sections 3.1.2.1 and 3.1.2.2', '§ 4.1.2.3', 'Fig. 2.1.1.3', 'Table 8.8.8.8',
 ];
 
 cases.push({

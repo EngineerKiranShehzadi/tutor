@@ -24,20 +24,17 @@ function luhnValid(digits: string): boolean {
 }
 
 // A phone-shaped match counts only when it is written like a phone number.
-// Lectures write quantities as bare digit runs ("4294967296",
-// "175000000000"), so a bare run counts only with a leading "+" or a national
-// trunk "0" ("03001234567"), and a run of only 0s and 1s is binary. A
-// separated form counts unless it reads as something else: a decimal
+// A separated form counts unless it reads as something else: a decimal
 // ("3.14159265358979"), a dotted quad (left to the IPv4 check), a number
 // grouped in thousands ("1 000 000 000"), or a code ending in a single check
-// digit (the ISBN "0-13-468599-1").
+// digit (the ISBN "0-13-468599-1"). A bare run is judged by bareRunIsPhone.
 function looksLikePhone(candidate: string): boolean {
   const digits = candidate.replace(/\D/g, '');
   if (digits.length < 7 || digits.length > 15) return false;
   if (candidate.startsWith('+')) return true;
 
   const separators = candidate.match(/[-.\s()]+/g) ?? [];
-  if (separators.length === 0) return /^0\d{9,10}$/.test(digits) && !/^[01]+$/.test(digits);
+  if (separators.length === 0) return bareRunIsPhone(digits);
 
   const groups = candidate.split(/[-.\s()]+/).filter(g => g !== '');
   const onlySeparator = new Set(separators).size === 1 ? separators[0] : null;
@@ -49,15 +46,42 @@ function looksLikePhone(candidate: string): boolean {
   return true;
 }
 
+// A bare digit run with no "+" is a phone number when it has a dialled shape:
+// a trunk "0" national number (03001234567), "1" plus a 10-digit North
+// American number (14155552671), or 10-13 digits starting 2-9 (a national
+// number, 4155552671, or country code + number, 923001234567). Shorter runs
+// are left alone, and so are runs that read as a quantity (quantityShaped).
+function bareRunIsPhone(digits: string): boolean {
+  if (quantityShaped(digits)) return false;
+  if (digits.startsWith('0')) return digits.length === 10 || digits.length === 11;
+  if (digits.startsWith('1')) return digits.length === 11;
+  return digits.length >= 10 && digits.length <= 13;
+}
+
+// Lectures write quantities as bare digit runs. A run of five or more zeros is
+// a round number or a modulus (175000000000, 1000000007), a power of two or one
+// either side of it is a computing limit (4294967296, 2147483647), and a run of
+// one repeated digit or of only 0s and 1s is a placeholder or binary.
+function quantityShaped(digits: string): boolean {
+  if (/0{5,}/.test(digits) || /^(\d)\1+$/.test(digits) || /^[01]+$/.test(digits)) return true;
+  const n = BigInt(digits);
+  return [n - BigInt(1), n, n + BigInt(1)].some(m => m > BigInt(0) && (m & (m - BigInt(1))) === BigInt(0));
+}
+
+// "Chapter 10.2.3.4", "version 1.2.3.4", "§ 4.1.2.3", "Fig. 2.1.1.3", and the
+// later numbers of a list ("Sections 3.1.2.1 and 3.1.2.2").
+const SECTION_CUE = /(?:\b(?:chapters?|ch|sections?|sec|subsections?|parts?|versions?|ver|v|releases?|builds?|rev|revisions?|figures?|figs?|tables?|equations?|eqs?|steps?|clauses?|items?|units?|modules?|lessons?|exercises?|ex|problems?|appendix|appendices|rules?|paragraphs?|para|pages?|pp?|theorems?|lemmas?|definitions?|examples?|listings?)\.?|§)\s*(?:[\d.]+\s*(?:,|&|and|or|to|-|–)\s*)*$/i;
+const SECTION_CUE_WINDOW = 80;
+
 // An IPv4 address counts unless it identifies no one: private, loopback,
 // link-local, carrier-grade NAT, documentation, and multicast/reserved (which
 // also covers netmasks such as 255.255.255.0) — networking lectures are full
-// of these. A short lead with single-digit parts ("Chapter 10.2.3.4",
-// "version 1.2.3.4") is a section or version number, not an address.
-function looksLikePersonalIpv4(candidate: string): boolean {
-  const parts = candidate.split('.');
-  if (parts[0].length <= 2 && parts.slice(1).every(p => p.length === 1)) return false;
-  const [a, b, c] = parts.map(Number);
+// of these — or unless the text right before it names it as a section or
+// version number (SECTION_CUE). The shape alone cannot tell "10.2.3.4" from a
+// public address such as 8.8.8.8, so only the cue does.
+function looksLikePersonalIpv4(candidate: string, textBefore: string): boolean {
+  if (SECTION_CUE.test(textBefore)) return false;
+  const [a, b, c] = candidate.split('.').map(Number);
   const nonPersonal = a === 0 || a === 10 || a === 127 || a >= 224
     || (a === 100 && b >= 64 && b <= 127)
     || (a === 169 && b === 254)
@@ -89,7 +113,7 @@ function findRedactions(text: string): Redaction[] {
   }
 
   for (const match of text.matchAll(IPV4_PATTERN)) {
-    if (!looksLikePersonalIpv4(match[0])) continue;
+    if (!looksLikePersonalIpv4(match[0], text.slice(Math.max(0, match.index! - SECTION_CUE_WINDOW), match.index!))) continue;
     redactions.push({ start: match.index!, end: match.index! + match[0].length, placeholder: '[IP_ADDRESS]', category: 'IP_ADDRESS' });
   }
 

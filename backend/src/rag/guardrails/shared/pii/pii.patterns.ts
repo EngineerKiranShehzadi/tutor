@@ -27,7 +27,8 @@ export const PHONE_CANDIDATE_PATTERN = /(?<!\d)\+?\d{1,3}[-.\s]?\(?\d{2,4}\)?[-.
 export const CREDIT_CARD_CANDIDATE_PATTERN = /\b(?:\d[ -]?){13,19}\b/g;
 
 // pii-detector.service.ts drops addresses that identify no one (private,
-// loopback, netmask, …) and section/version numbers such as "10.2.3.4".
+// loopback, netmask, …) and numbers the text names as a section or version
+// ("Chapter 10.2.3.4").
 export const IPV4_PATTERN = /\b(?:(?:25[0-5]|2[0-4]\d|1?\d{1,2})\.){3}(?:25[0-5]|2[0-4]\d|1?\d{1,2})\b/g;
 
 // Government/national-identifier formats — kept as a named group so
