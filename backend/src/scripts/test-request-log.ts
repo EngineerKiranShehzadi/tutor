@@ -61,6 +61,12 @@ cases.push({
 });
 
 cases.push({
+  label: 'R11: formatRepairRejected (a refused list/table reformat) maps to its column; null → null',
+  run: () => buildRequestLogRow(trace([], { formatRepairRejected: 'LOST_CONTENT' }), false, PRICING).formatRepairRejected === 'LOST_CONTENT'
+    && buildRequestLogRow(trace([], { formatRepairRejected: null }), false, PRICING).formatRepairRejected === null,
+});
+
+cases.push({
   label: "Missing/empty responseStatus becomes 'UNKNOWN' (never null)",
   run: () => {
     const a = buildRequestLogRow(trace([], {}), false, PRICING);

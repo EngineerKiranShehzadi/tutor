@@ -22,6 +22,7 @@ const CHIP_TONE: Record<string, string> = {
   error: 'bg-red-50 text-red-700',
   not_answered: 'bg-amber-50 text-amber-700',
   verifier: 'bg-violet-50 text-violet-700',
+  format: 'bg-orange-50 text-orange-700',
   slow: 'bg-sky-50 text-sky-700',
 };
 

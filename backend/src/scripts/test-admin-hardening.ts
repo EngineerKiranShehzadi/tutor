@@ -1336,10 +1336,22 @@ const run = async () => {
       resetRequestLogColumnProbe();
       await writeRequestLog(buildRequestLogRow(mkTrace(ids[2], { memoryResult: 'NOT_ATTEMPTED', memorySkipReason: 'PII_MASKED' }), false));
       db.query = realDbQuery;
+      resetRequestLogColumnProbe();
       const fallback = (await query<{ n: number }>('SELECT count(*)::int AS n FROM rag_request_log WHERE trace_id = $1', [ids[2]])).rows[0].n;
       check('R10-1. memorySkipReason PII_MASKED is stored (rag_request_log.memory_skip_reason) and counted on the monitor summary; on a database without the column the row is still written',
         stored === 'PII_MASKED' && after - before === 1 && fallback === 1,
         `stored=${stored} count ${before}→${after} rowWithoutColumn=${fallback}`);
+
+      // R11: a refused list/table reformat is stored, counted and listed for attention.
+      const { getAttention } = await import('../services/observability/monitor.service');
+      const refusedBefore = (await getSummary('24h')).current.formatRepairsRefused;
+      await query('DELETE FROM rag_request_log WHERE trace_id = $1', [ids[1]]);
+      await writeRequestLog(buildRequestLogRow(mkTrace(ids[1], { memoryResult: 'MISS', formatRepairRejected: 'LOST_CONTENT', answerVerificationReason: 'VERIFIED' }), true));
+      const refusedAfter = (await getSummary('24h')).current.formatRepairsRefused;
+      const row = (await getAttention(200, null)).rows.find(r => r.traceId === ids[1]);
+      check('R11-1. A refused list/table reformat is stored (format_repair_rejected), counted on the monitor ("List/table not delivered") and listed for attention with reason "format"',
+        refusedAfter - refusedBefore === 1 && row?.formatRepairRejected === 'LOST_CONTENT' && row?.reasons.join() === 'format',
+        `count ${refusedBefore}→${refusedAfter} attention=${row ? `${row.formatRepairRejected}:${row.reasons.join('+')}` : 'not listed'}`);
     } finally {
       db.query = realDbQuery;
       resetRequestLogColumnProbe();

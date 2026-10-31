@@ -4,12 +4,13 @@ import { NON_PROBLEM_VERIFIER_REASONS } from '../rag/guardrails/output/answer-ve
 
 // Decides whether a finished trace is handed to Phoenix. PURE: no I/O; the
 // random source is injectable. Interesting traces (errors, anything that was
-// not a normal answer, verifier complaints, slow requests) are always
+// not a normal answer, verifier complaints, a refused list/table, slow
+// requests) are always
 // exported; only ordinary fast answered traces are subject to the sample rate.
 // rag_request_log is written for every request regardless of this decision.
 
 export type ExportReason =
-  | 'error' | 'not_answered' | 'verifier' | 'slow' | 'sampled' | 'dropped';
+  | 'error' | 'not_answered' | 'verifier' | 'format' | 'slow' | 'sampled' | 'dropped';
 
 export interface ExportDecision {
   export: boolean;
@@ -39,6 +40,11 @@ export function decideTraceExport(
   if (typeof verification === 'string' && verification !== '' && !(NON_PROBLEM_VERIFIER_REASONS as readonly string[]).includes(verification)) {
     return { export: true, reason: 'verifier' };
   }
+
+  // A requested list/table that was refused (the student got prose): exported so
+  // the monitor's attention row links to the trace.
+  const formatRejected = trace.attributes.formatRepairRejected;
+  if (typeof formatRejected === 'string' && formatRejected !== '') return { export: true, reason: 'format' };
 
   if (trace.durationMs > slowTraceMs) return { export: true, reason: 'slow' };
 

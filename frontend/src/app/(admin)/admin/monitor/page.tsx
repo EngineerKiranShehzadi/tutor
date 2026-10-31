@@ -135,7 +135,7 @@ function MonitorContent() {
       ) : (
         <>
           {error && <p className="text-[12px] text-amber-600 mb-3">Couldn't fetch the latest numbers — showing the previous ones.</p>}
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5">
             <SummaryCard
               loading={cardsLoading}
               label="Questions asked"
@@ -201,6 +201,16 @@ function MonitorContent() {
               value={cur ? cur.memorySkippedForPii.toLocaleString() : null}
               subValue="personal data was masked"
               change={cur && prev ? relChange(cur.memorySkippedForPii, prev.memorySkippedForPii, 'neutral') : null}
+            />
+            <SummaryCard
+              loading={cardsLoading}
+              label="List/table not delivered"
+              icon="fas fa-table-list"
+              accent="amber"
+              tooltip="Questions that asked for a list or a table but got the answer as plain text: the reformatted answer was refused because it added or dropped content. The answer itself was still correct. Lower is better."
+              value={cur ? cur.formatRepairsRefused.toLocaleString() : null}
+              subValue="sent as plain text"
+              change={cur && prev ? relChange(cur.formatRepairsRefused, prev.formatRepairsRefused, 'down') : null}
             />
           </div>
           {lastRefreshedAt && (

@@ -30,19 +30,21 @@ export const rate = (count: unknown, total: number): number | null => (total ===
 
 export const bucketUnit = (window: MonitorWindow): 'hour' | 'day' => (window === '30d' ? 'day' : 'hour');
 
-export type AttentionReason = 'error' | 'not_answered' | 'verifier' | 'slow';
+export type AttentionReason = 'error' | 'not_answered' | 'verifier' | 'format' | 'slow';
 
 // Mirrors the WHERE clause of getAttention. Like the SQL, a NULL
 // response_status or NULL verification reason never counts as a problem, nor
 // does a check that is switched off (NON_PROBLEM_VERIFIER_REASONS).
 export function buildReasons(
-  row: { status: string; responseStatus: string | null; answerVerificationReason: string | null; totalMs: number },
+  row: { status: string; responseStatus: string | null; answerVerificationReason: string | null; formatRepairRejected?: string | null; totalMs: number },
   slowMs: number
 ): AttentionReason[] {
   const reasons: AttentionReason[] = [];
   if (row.status === 'ERROR') reasons.push('error');
   if (row.responseStatus !== null && !(ANSWERED_STATUSES as readonly string[]).includes(row.responseStatus)) reasons.push('not_answered');
   if (row.answerVerificationReason !== null && !(NON_PROBLEM_VERIFIER_REASONS as readonly string[]).includes(row.answerVerificationReason)) reasons.push('verifier');
+  // Asked for a list/table, got prose: the reformat was refused.
+  if (row.formatRepairRejected) reasons.push('format');
   if (row.totalMs > slowMs) reasons.push('slow');
   return reasons;
 }
@@ -61,6 +63,8 @@ export interface PeriodSummary {
   tokens: { input: number; output: number; total: number };
   // Fact questions answered without answer memory because PII was masked in them.
   memorySkippedForPii: number;
+  // Questions that asked for a list or table and got prose: the reformat was refused.
+  formatRepairsRefused: number;
 }
 
 async function summarizePeriod(startOffset: string, endOffset: string): Promise<PeriodSummary> {
@@ -76,7 +80,8 @@ async function summarizePeriod(startOffset: string, endOffset: string): Promise<
             sum(est_cost_usd)::float8 AS cost,
             coalesce(sum(input_tokens), 0)::float8 AS in_tokens,
             coalesce(sum(output_tokens), 0)::float8 AS out_tokens,
-            count(*) FILTER (WHERE memory_skip_reason = 'PII_MASKED')::int AS memory_skipped_pii
+            count(*) FILTER (WHERE memory_skip_reason = 'PII_MASKED')::int AS memory_skipped_pii,
+            count(*) FILTER (WHERE format_repair_rejected IS NOT NULL)::int AS format_refused
        FROM rag_request_log
       WHERE created_at >= now() - $1::interval
         AND created_at <  now() - $2::interval`,
@@ -97,6 +102,7 @@ async function summarizePeriod(startOffset: string, endOffset: string): Promise<
     totalCostUsd: num(r.cost),
     tokens: { input, output, total: input + output },
     memorySkippedForPii: Number(r.memory_skipped_pii),
+    formatRepairsRefused: Number(r.format_refused),
   };
 }
 
@@ -175,6 +181,7 @@ export interface AttentionRow {
   notFoundReason: string | null;
   errorCode: string | null;
   answerVerificationReason: string | null;
+  formatRepairRejected: string | null;
   totalMs: number;
   exportedToPhoenix: boolean;
   reasons: AttentionReason[];
@@ -203,13 +210,14 @@ export async function getAttention(limit: number, before: string | null): Promis
     `SELECT r.trace_id, r.id, r.status,
             to_char(r.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at,
             r.lecture_id, l.title AS lecture_title, r.route, r.response_status,
-            r.not_found_reason, r.error_code, r.answer_verification_reason,
+            r.not_found_reason, r.error_code, r.answer_verification_reason, r.format_repair_rejected,
             r.total_ms, r.exported_to_phoenix
        FROM rag_request_log r
        LEFT JOIN lectures l ON l.id = r.lecture_id
       WHERE (r.status = 'ERROR'
              OR r.response_status NOT IN ${ANSWERED}
              OR r.answer_verification_reason NOT IN ${VERIFIER_OK}
+             OR r.format_repair_rejected IS NOT NULL
              OR r.total_ms > $1)
         AND ($2::timestamptz IS NULL OR r.created_at < $2::timestamptz)
       ORDER BY r.created_at DESC, r.id DESC
@@ -227,6 +235,7 @@ export async function getAttention(limit: number, before: string | null): Promis
     notFoundReason: (r.not_found_reason as string | null) ?? null,
     errorCode: (r.error_code as string | null) ?? null,
     answerVerificationReason: (r.answer_verification_reason as string | null) ?? null,
+    formatRepairRejected: (r.format_repair_rejected as string | null) ?? null,
     totalMs: Number(r.total_ms),
     exportedToPhoenix: Boolean(r.exported_to_phoenix),
     phoenixTraceUrl: null,
@@ -234,6 +243,7 @@ export async function getAttention(limit: number, before: string | null): Promis
       status: String(r.status),
       responseStatus: (r.response_status as string | null) ?? null,
       answerVerificationReason: (r.answer_verification_reason as string | null) ?? null,
+      formatRepairRejected: (r.format_repair_rejected as string | null) ?? null,
       totalMs: Number(r.total_ms),
     }, slowMs),
   }));

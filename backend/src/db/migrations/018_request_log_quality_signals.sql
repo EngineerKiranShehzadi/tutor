@@ -8,6 +8,12 @@
 -- masked questions can't be told apart in the cache). NULL otherwise, including
 -- every route that never uses memory.
 --
--- Additive and idempotent: one nullable column, nothing rewritten or backfilled.
+-- format_repair_rejected: the student asked for a list or table, the answer
+-- was reformatted, and the reformat was refused because it added content
+-- ('NEW_CONTENT') or dropped some ('LOST_CONTENT') — they got the answer as
+-- plain text. NULL otherwise.
+--
+-- Additive and idempotent: two nullable columns, nothing rewritten or backfilled.
 
 ALTER TABLE rag_request_log ADD COLUMN IF NOT EXISTS memory_skip_reason TEXT;
+ALTER TABLE rag_request_log ADD COLUMN IF NOT EXISTS format_repair_rejected TEXT;

@@ -37,13 +37,14 @@ for (const rs of ['ANSWERED', 'MEMORY_HIT_ANSWERED', 'GREETING_ANSWERED', 'SUMMA
 }
 cases.push({ label: 'verification reason other than VERIFIED -> ["verifier"]', run: () => same(buildReasons({ ...ok, answerVerificationReason: 'UNSUPPORTED_CLAIMS' }, SLOW), ['verifier']) });
 cases.push({ label: 'R6: VERIFICATION_DISABLED (check switched off) -> no "verifier"', run: () => same(buildReasons({ ...ok, answerVerificationReason: 'VERIFICATION_DISABLED' }, SLOW), []) });
+cases.push({ label: 'R11: a refused list/table reformat (formatRepairRejected) -> ["format"]', run: () => same(buildReasons({ ...ok, formatRepairRejected: 'LOST_CONTENT' }, SLOW), ['format']) && same(buildReasons({ ...ok, formatRepairRejected: null }, SLOW), []) });
 cases.push({ label: 'NULL verification reason -> no "verifier"', run: () => same(buildReasons({ ...ok, answerVerificationReason: null }, SLOW), []) });
 cases.push({ label: 'totalMs above threshold -> ["slow"]', run: () => same(buildReasons({ ...ok, totalMs: SLOW + 1 }, SLOW), ['slow']) });
 cases.push({ label: 'totalMs equal to threshold is not slow', run: () => same(buildReasons({ ...ok, totalMs: SLOW }, SLOW), []) });
 cases.push({
-  label: 'multiple problems keep order error, not_answered, verifier, slow',
-  run: () => same(buildReasons({ status: 'ERROR', responseStatus: 'NOT_FOUND', answerVerificationReason: 'REVISE', totalMs: SLOW + 1 }, SLOW),
-    ['error', 'not_answered', 'verifier', 'slow']),
+  label: 'multiple problems keep order error, not_answered, verifier, format, slow',
+  run: () => same(buildReasons({ status: 'ERROR', responseStatus: 'NOT_FOUND', answerVerificationReason: 'REVISE', formatRepairRejected: 'NEW_CONTENT', totalMs: SLOW + 1 }, SLOW),
+    ['error', 'not_answered', 'verifier', 'format', 'slow']),
 });
 
 // rates

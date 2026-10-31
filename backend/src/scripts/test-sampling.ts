@@ -57,6 +57,12 @@ cases.push({
 });
 
 cases.push({
+  label: 'R11: a refused list/table reformat (formatRepairRejected) is always exported (reason "format"), so its attention row links to the trace',
+  run: () => decideTraceExport(trace(normal({ formatRepairRejected: 'NEW_CONTENT' })), 0, never, SLOW_MS).reason === 'format'
+    && exp(trace(normal({ formatRepairRejected: null }))) === false,
+});
+
+cases.push({
   label: 'answerVerificationReason VERIFIED / unset does not force export',
   run: () => exp(trace(normal({ answerVerificationReason: 'VERIFIED' }))) === false &&
     exp(trace(normal())) === false &&

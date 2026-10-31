@@ -17,6 +17,7 @@ export interface PeriodSummary {
   totalCostUsd: number | null;
   tokens: { input: number; output: number; total: number };
   memorySkippedForPii: number;
+  formatRepairsRefused: number;
 }
 
 export interface MonitorSummary {
@@ -36,7 +37,7 @@ export interface ReadinessResult {
 export interface TimeseriesBucket { bucket: string; answered: number; notFound: number; errors: number; p95Ms: number }
 export interface MonitorTimeseries { window: MonitorWindow; bucketSize: 'hour' | 'day'; buckets: TimeseriesBucket[] }
 
-export type AttentionReason = 'error' | 'not_answered' | 'verifier' | 'slow';
+export type AttentionReason = 'error' | 'not_answered' | 'verifier' | 'format' | 'slow';
 export interface AttentionRow {
   traceId: string;
   createdAt: string;
@@ -47,6 +48,7 @@ export interface AttentionRow {
   notFoundReason: string | null;
   errorCode: string | null;
   answerVerificationReason: string | null;
+  formatRepairRejected: string | null;
   totalMs: number;
   exportedToPhoenix: boolean;
   reasons: AttentionReason[];

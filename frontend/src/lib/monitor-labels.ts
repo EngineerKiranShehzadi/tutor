@@ -87,10 +87,18 @@ export const VERIFIER_REASON_LABELS: Record<string, string> = {
 };
 
 // Why a request needs attention (monitor attention list).
+// rag_request_log.format_repair_rejected: why a requested list/table was not
+// served (the student got the answer as plain text).
+export const FORMAT_REJECTED_LABELS: Record<string, string> = {
+  NEW_CONTENT: 'Sent as plain text: reformatting added content',
+  LOST_CONTENT: 'Sent as plain text: reformatting dropped content',
+};
+
 export const ATTENTION_REASON_LABELS: Record<string, string> = {
   error: 'Error',
   not_answered: 'Not answered',
   verifier: 'Failed answer check',
+  format: 'List/table not delivered',
   slow: 'Slow',
 };
 
@@ -184,6 +192,7 @@ export function attentionDetailLabels(row: {
   notFoundReason?: string | null;
   errorCode?: string | null;
   answerVerificationReason?: string | null;
+  formatRepairRejected?: string | null;
 }): string[] {
   const out: string[] = [];
   if (row.errorCode) out.push(pick(ATTENTION_ERROR_LABELS, row.errorCode, GENERIC.errorCode));
@@ -200,5 +209,6 @@ export function attentionDetailLabels(row: {
   // Same as the backend's NON_PROBLEM_VERIFIER_REASONS: a check that is
   // switched off is not a problem with this answer.
   if (v && v !== 'VERIFIED' && v !== 'VERIFICATION_DISABLED') out.push(pick(ATTENTION_VERIFIER_LABELS, v, GENERIC.verifierReason));
+  if (row.formatRepairRejected) out.push(pick(FORMAT_REJECTED_LABELS, row.formatRepairRejected, 'Asked-for list/table not delivered'));
   return out;
 }

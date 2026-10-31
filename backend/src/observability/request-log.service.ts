@@ -24,6 +24,8 @@ export interface RequestLogRow {
   // Set when memory was skipped on purpose ('PII_MASKED'); see chat.service.ts.
   memorySkipReason: string | null;
   answerVerificationReason: string | null;
+  // NEW_CONTENT / LOST_CONTENT when a requested list/table reformat was refused.
+  formatRepairRejected: string | null;
   totalMs: number;
   stageMs: Record<string, number>;
   llmCalls: number;
@@ -115,6 +117,7 @@ export function buildRequestLogRow(
     memoryResult: str(attrs.memoryResult),
     memorySkipReason: str(attrs.memorySkipReason),
     answerVerificationReason: str(attrs.answerVerificationReason),
+    formatRepairRejected: str(attrs.formatRepairRejected),
     totalMs: Math.round(trace.durationMs),
     stageMs,
     llmCalls: llmSpans.length,
@@ -130,9 +133,11 @@ export function buildRequestLogRow(
 // The columns added by migrations after 008, written only once they exist.
 // Until a database is migrated (code deployed first), the insert would fail on
 // the unknown column and the request would not be logged at all, so a 42703
-// (undefined_column) falls back to the columns every database has.
+// (undefined_column) falls back to the columns every database has, for the rest
+// of the process's life (restart after db:setup).
 const LATER_COLUMNS: { column: string; value: (row: RequestLogRow) => unknown }[] = [
   { column: 'memory_skip_reason', value: r => r.memorySkipReason },
+  { column: 'format_repair_rejected', value: r => r.formatRepairRejected },
 ];
 let laterColumnsMissing = false;
 
@@ -174,7 +179,7 @@ export async function writeRequestLog(row: RequestLogRow): Promise<void> {
     } catch (err) {
       if ((err as { code?: string }).code !== '42703' || laterColumnsMissing) throw err;
       laterColumnsMissing = true;
-      logger.warn('[REQUEST_LOG] rag_request_log is missing columns from a newer migration — run db:setup. Logging without them until then.');
+      logger.warn('[REQUEST_LOG] rag_request_log is missing columns from a newer migration — run db:setup, then restart. Logging without them until then.');
       await insertRow(row, false);
     }
   } catch (err) {
