@@ -1,5 +1,6 @@
 import { env } from '../config/env';
 import type { FinishedTrace } from './types';
+import { NON_PROBLEM_VERIFIER_REASONS } from '../rag/guardrails/output/answer-verification.types';
 
 // Decides whether a finished trace is handed to Phoenix. PURE: no I/O; the
 // random source is injectable. Interesting traces (errors, anything that was
@@ -33,7 +34,9 @@ export function decideTraceExport(
   }
 
   const verification = trace.attributes.answerVerificationReason;
-  if (verification !== undefined && verification !== null && verification !== '' && verification !== 'VERIFIED') {
+  // VERIFICATION_DISABLED is not a complaint: with the check off it is on every
+  // answer, and force-exporting all of them would defeat the sample rate.
+  if (typeof verification === 'string' && verification !== '' && !(NON_PROBLEM_VERIFIER_REASONS as readonly string[]).includes(verification)) {
     return { export: true, reason: 'verifier' };
   }
 

@@ -36,6 +36,7 @@ for (const rs of ['ANSWERED', 'MEMORY_HIT_ANSWERED', 'GREETING_ANSWERED', 'SUMMA
   cases.push({ label: `${rs} is not "not_answered"`, run: () => same(buildReasons({ ...ok, responseStatus: rs }, SLOW), []) });
 }
 cases.push({ label: 'verification reason other than VERIFIED -> ["verifier"]', run: () => same(buildReasons({ ...ok, answerVerificationReason: 'UNSUPPORTED_CLAIMS' }, SLOW), ['verifier']) });
+cases.push({ label: 'R6: VERIFICATION_DISABLED (check switched off) -> no "verifier"', run: () => same(buildReasons({ ...ok, answerVerificationReason: 'VERIFICATION_DISABLED' }, SLOW), []) });
 cases.push({ label: 'NULL verification reason -> no "verifier"', run: () => same(buildReasons({ ...ok, answerVerificationReason: null }, SLOW), []) });
 cases.push({ label: 'totalMs above threshold -> ["slow"]', run: () => same(buildReasons({ ...ok, totalMs: SLOW + 1 }, SLOW), ['slow']) });
 cases.push({ label: 'totalMs equal to threshold is not slow', run: () => same(buildReasons({ ...ok, totalMs: SLOW }, SLOW), []) });

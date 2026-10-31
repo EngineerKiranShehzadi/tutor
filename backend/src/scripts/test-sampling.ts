@@ -51,6 +51,12 @@ cases.push({
 });
 
 cases.push({
+  label: 'R6: answerVerificationReason VERIFICATION_DISABLED (verification switched off) does not force export',
+  run: () => exp(trace(normal({ answerVerificationReason: 'VERIFICATION_DISABLED' }))) === false
+    && decideTraceExport(trace(normal({ answerVerificationReason: 'VERIFICATION_DISABLED' })), 1, never, SLOW_MS).reason === 'sampled',
+});
+
+cases.push({
   label: 'answerVerificationReason VERIFIED / unset does not force export',
   run: () => exp(trace(normal({ answerVerificationReason: 'VERIFIED' }))) === false &&
     exp(trace(normal())) === false &&

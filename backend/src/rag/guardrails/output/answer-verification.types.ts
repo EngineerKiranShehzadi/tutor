@@ -65,6 +65,12 @@ export const OUTPUT_GUARDRAIL_REASONS = [
 ] as const;
 export type OutputGuardrailReason = typeof OUTPUT_GUARDRAIL_REASONS[number];
 
+// Reasons that say nothing is wrong with the answer: it passed, or the check is
+// switched off on purpose (ANSWER_VERIFICATION_ENABLED=false). The monitor's
+// attention list and trace sampling treat every other reason as a problem;
+// with verification off, counting VERIFICATION_DISABLED flagged every answer.
+export const NON_PROBLEM_VERIFIER_REASONS: readonly OutputGuardrailReason[] = ['VERIFIED', 'VERIFICATION_DISABLED'];
+
 export interface OutputGuardrailResult {
   // The text that must actually be persisted/returned — either the
   // original draft (VERIFIED), a verified revision (REVISED_AND_VERIFIED),

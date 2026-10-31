@@ -1,6 +1,7 @@
 import { query } from '../../config/database';
 import { env } from '../../config/env';
 import { composePhoenixTraceUrl, resolvePhoenixProjectId } from './phoenix-links';
+import { NON_PROBLEM_VERIFIER_REASONS } from '../../rag/guardrails/output/answer-verification.types';
 
 // Postgres-only reads over rag_request_log / lectures for the admin monitor
 // dashboard. Deliberately independent of Phoenix. Never selects question or
@@ -20,6 +21,7 @@ export const parseWindow = (v: unknown): MonitorWindow =>
 // Same four statuses as the 008 partial index and observability/sampling.ts.
 export const ANSWERED_STATUSES = ['ANSWERED', 'MEMORY_HIT_ANSWERED', 'GREETING_ANSWERED', 'SUMMARY_ANSWERED'] as const;
 const ANSWERED = `(${ANSWERED_STATUSES.map(s => `'${s}'`).join(', ')})`;
+const VERIFIER_OK = `(${NON_PROBLEM_VERIFIER_REASONS.map(s => `'${s}'`).join(', ')})`;
 
 const num = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v));
 
@@ -31,7 +33,8 @@ export const bucketUnit = (window: MonitorWindow): 'hour' | 'day' => (window ===
 export type AttentionReason = 'error' | 'not_answered' | 'verifier' | 'slow';
 
 // Mirrors the WHERE clause of getAttention. Like the SQL, a NULL
-// response_status or NULL verification reason never counts as a problem.
+// response_status or NULL verification reason never counts as a problem, nor
+// does a check that is switched off (NON_PROBLEM_VERIFIER_REASONS).
 export function buildReasons(
   row: { status: string; responseStatus: string | null; answerVerificationReason: string | null; totalMs: number },
   slowMs: number
@@ -39,7 +42,7 @@ export function buildReasons(
   const reasons: AttentionReason[] = [];
   if (row.status === 'ERROR') reasons.push('error');
   if (row.responseStatus !== null && !(ANSWERED_STATUSES as readonly string[]).includes(row.responseStatus)) reasons.push('not_answered');
-  if (row.answerVerificationReason !== null && row.answerVerificationReason !== 'VERIFIED') reasons.push('verifier');
+  if (row.answerVerificationReason !== null && !(NON_PROBLEM_VERIFIER_REASONS as readonly string[]).includes(row.answerVerificationReason)) reasons.push('verifier');
   if (row.totalMs > slowMs) reasons.push('slow');
   return reasons;
 }
@@ -202,7 +205,7 @@ export async function getAttention(limit: number, before: string | null): Promis
        LEFT JOIN lectures l ON l.id = r.lecture_id
       WHERE (r.status = 'ERROR'
              OR r.response_status NOT IN ${ANSWERED}
-             OR r.answer_verification_reason <> 'VERIFIED'
+             OR r.answer_verification_reason NOT IN ${VERIFIER_OK}
              OR r.total_ms > $1)
         AND ($2::timestamptz IS NULL OR r.created_at < $2::timestamptz)
       ORDER BY r.created_at DESC, r.id DESC

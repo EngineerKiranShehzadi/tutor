@@ -197,6 +197,8 @@ export function attentionDetailLabels(row: {
     out.push('Something went wrong');
   }
   const v = row.answerVerificationReason;
-  if (v && v !== 'VERIFIED') out.push(pick(ATTENTION_VERIFIER_LABELS, v, GENERIC.verifierReason));
+  // Same as the backend's NON_PROBLEM_VERIFIER_REASONS: a check that is
+  // switched off is not a problem with this answer.
+  if (v && v !== 'VERIFIED' && v !== 'VERIFICATION_DISABLED') out.push(pick(ATTENTION_VERIFIER_LABELS, v, GENERIC.verifierReason));
   return out;
 }

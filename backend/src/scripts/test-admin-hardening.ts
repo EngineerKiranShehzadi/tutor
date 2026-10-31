@@ -1214,6 +1214,25 @@ const run = async () => {
     }
   }
 
+  // ── R6: verification switched off is not an attention row ───────────
+  {
+    const { getAttention } = await import('../services/observability/monitor.service');
+    const ids = ['a', 'b', 'c'].map(c => c.repeat(32));
+    await query('DELETE FROM rag_request_log WHERE trace_id = ANY($1::char(32)[])', [ids]);
+    await query(
+      `INSERT INTO rag_request_log (trace_id, status, response_status, answer_verification_reason, total_ms, created_at)
+       VALUES ($1, 'SUCCESS', 'ANSWERED', 'VERIFICATION_DISABLED', 100, now() + interval '1 hour'),
+              ($2, 'SUCCESS', 'ANSWERED', 'UNSUPPORTED_CLAIMS', 100, now() + interval '1 hour'),
+              ($3, 'SUCCESS', 'ANSWERED', 'VERIFIED', 100, now() + interval '1 hour')`,
+      ids
+    );
+    const { rows } = await getAttention(50, null);
+    const listed = rows.filter(r => ids.includes(r.traceId)).map(r => `${r.answerVerificationReason}:${r.reasons.join('+')}`);
+    await query('DELETE FROM rag_request_log WHERE trace_id = ANY($1::char(32)[])', [ids]);
+    check('R6-1. Attention list: an answer with VERIFICATION_DISABLED is not listed (it was, as "Failed answer check", for every answer with verification off); UNSUPPORTED_CLAIMS still is',
+      listed.join() === 'UNSUPPORTED_CLAIMS:verifier', `listed=[${listed.join(', ')}]`);
+  }
+
   // ── R5: readiness recovers as soon as the answer LLM does ───────────
   {
     const rag = env.LLM.RAG_ANSWER as { PROVIDER: string };
