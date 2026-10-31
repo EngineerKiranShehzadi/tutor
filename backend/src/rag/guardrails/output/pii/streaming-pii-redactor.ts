@@ -10,7 +10,7 @@ import type { AnswerStreamHandlers } from '../../../../services/llm-gemini.servi
 // How: the text is split into a settled part and a held-back tail. The tail is
 // the trailing run of characters that could still grow into an email, phone,
 // card, IP or ID number once more text arrives (letters, digits and . _ % + -
-// @ ( ), plus a single space or line break between digit groups, as in
+// @ ( ), plus a single space or line break after a digit group, as in
 // "0300 1234567"). No PII pattern can cross the character where the tail
 // starts, so the settled part redacts the same way now as it will in the
 // whole answer, and its redacted form only ever grows. Only redacted settled
@@ -18,8 +18,7 @@ import type { AnswerStreamHandlers } from '../../../../services/llm-gemini.servi
 // The cost is that the last word or number shows up one piece later.
 
 const RUN_CHAR = /[A-Za-z0-9._%+\-@()]/;
-const GROUP_END = /[0-9)]/;   // a phone/card group can end with these…
-const GROUP_START = /[0-9(]/; // …and the next group can start with these
+const GROUP_END = /[0-9)]/;   // a phone/card group can end with these
 
 // Index where the held-back tail of `text` starts (text.length = nothing held).
 export function settledLength(text: string): number {
@@ -27,9 +26,10 @@ export function settledLength(text: string): number {
   while (i > 0) {
     const c = text[i - 1];
     if (RUN_CHAR.test(c)) { i--; continue; }
-    // One whitespace between digit groups belongs to the run. At the very end
-    // the next group may not have arrived yet, so hold it too.
-    if (/\s/.test(c) && i - 2 >= 0 && GROUP_END.test(text[i - 2]) && (i === text.length || GROUP_START.test(text[i]))) {
+    // One whitespace after a digit group belongs to the run: the next group
+    // may follow it (or not have arrived yet), and a card number takes the
+    // space after it into the match when a word follows ("…1111 end").
+    if (/\s/.test(c) && i - 2 >= 0 && GROUP_END.test(text[i - 2])) {
       i--;
       continue;
     }
@@ -45,14 +45,26 @@ export interface PiiSafeStream extends AnswerStreamHandlers {
 
 export function createPiiSafeStream(target: AnswerStreamHandlers): PiiSafeStream {
   let raw = '';
-  let sent = 0; // length of the redacted text already sent
+  // The redacted text already sent — the text itself, not its length. A longer
+  // prefix almost always redacts to an extension of it, and then only the new
+  // part is sent. Not always: a card number swallows the space after it only
+  // when a word follows, so "4111 1111 1111 1111 " redacts to "[CREDIT_CARD] "
+  // until "end" arrives and then to "[CREDIT_CARD]end". Slicing by length sent
+  // "nd"; instead the draft is reset and resent (the final event replaces it
+  // anyway). Without onReset nothing more is sent until the two agree.
+  let shown = '';
 
   const emitUpTo = (end: number): void => {
     const redacted = scanForPii(raw.slice(0, end)).sanitizedText;
-    if (redacted.length > sent) {
-      target.onDelta(redacted.slice(sent));
-      sent = redacted.length;
+    if (redacted.startsWith(shown)) {
+      if (redacted.length > shown.length) target.onDelta(redacted.slice(shown.length));
+    } else if (target.onReset) {
+      target.onReset();
+      target.onDelta(redacted);
+    } else {
+      return;
     }
+    shown = redacted;
   };
 
   return {
@@ -62,7 +74,7 @@ export function createPiiSafeStream(target: AnswerStreamHandlers): PiiSafeStream
     },
     onReset(): void {
       raw = '';
-      sent = 0;
+      shown = '';
       target.onReset?.();
     },
     flush(): void {

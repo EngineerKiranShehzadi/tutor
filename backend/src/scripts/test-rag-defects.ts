@@ -1012,6 +1012,39 @@ cases.push({
   },
 });
 
+// ── ST5: the streamed draft ends up exactly the redacted answer ─────────
+cases.push({
+  label: 'ST5. Streaming redaction: ["4111 1111 1111 111", "1 end"] shows "[CREDIT_CARD]end" (was "[CREDIT_CARD] nd"); 5,000 random splits: draft = final, always a prefix of it, no raw value sent, no reset needed',
+  run: async () => {
+    const stream = (deltas: string[]) => {
+      let shown = ''; let resets = 0; let prefixOk = true; const sent: string[] = [];
+      const final = scanForPii(deltas.join('')).sanitizedText;
+      const s = createPiiSafeStream({ onDelta: t => { shown += t; sent.push(t); if (!final.startsWith(shown)) prefixOk = false; }, onReset: () => { shown = ''; resets++; } });
+      for (const d of deltas) s.onDelta(d);
+      s.flush();
+      return { shown, final, resets, prefixOk, sent: sent.join('') };
+    };
+    const reported = stream(['4111 1111 1111 111', '1 end']);
+    const RAWS = ['+92 300 1234567', '4111 1111 1111 1111', 'a.b@example.com', '203.45.67.89', '0300-1234567', '35202-1234567-1'];
+    const pieces = ['Call ', ...RAWS, ' or ', ' mail ', '. Done', ' x', ' and 12', ' end'];
+    let seed = 7;
+    const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+    let mismatches = 0, leaks = 0, resets = 0, notPrefix = 0;
+    for (let n = 0; n < 5000; n++) {
+      const text = Array.from({ length: 2 + Math.floor(rnd() * 5) }, () => pieces[Math.floor(rnd() * pieces.length)]).join('');
+      const deltas: string[] = [];
+      for (let i = 0; i < text.length;) { const k = 1 + Math.floor(rnd() * 12); deltas.push(text.slice(i, i + k)); i += k; }
+      const r = stream(deltas);
+      if (r.shown !== r.final) mismatches++;
+      if (!r.prefixOk) notPrefix++;
+      resets += r.resets;
+      if (RAWS.some(v => text.includes(v) && !r.final.includes(v) && r.sent.includes(v))) leaks++;
+    }
+    const pass = reported.shown === '[CREDIT_CARD]end' && reported.shown === reported.final && mismatches === 0 && notPrefix === 0 && leaks === 0 && resets === 0;
+    return { pass, detail: `reported="${reported.shown}", mismatches=${mismatches}, notPrefix=${notPrefix}, leaks=${leaks}, resets=${resets}` };
+  },
+});
+
 // ── ST2: a PII-masked question never reads or writes answer memory ──────
 cases.push({
   label: 'ST2. Masked question ("What is [PHONE]?") → no memory lookup, no memory write, memoryResult NOT_ATTEMPTED; an unmasked one still uses memory',
