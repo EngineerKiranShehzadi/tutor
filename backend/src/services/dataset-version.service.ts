@@ -951,7 +951,8 @@ export async function cancelDatasetBuild(lectureId: number): Promise<{ versionId
 // READY (only a lecture with NO active version shows the upload/failed states).
 // Repairs lectures left in a stale state, e.g. by the pre-A8 upload race that
 // could leave one at DATASET_UPLOADED with a live dataset (chat gated off, no
-// error shown). Safe to run any time.
+// error shown), and first uploads stuck in a processing status (below). Safe
+// to run any time; returns the ids it changed.
 export async function reconcileLectureStatuses(): Promise<number[]> {
   const { rows } = await query<{ id: number; status: string }>(
     `UPDATE lectures l SET status = 'READY', updated_at = NOW()
@@ -962,8 +963,47 @@ export async function reconcileLectureStatuses(): Promise<number[]> {
      RETURNING l.id, old.status`
   );
   for (const r of rows) logger.warn(`[DATASET] 🩹 Lecture #${r.id}: status ${r.status} → READY (it has a live dataset version)`);
-  return rows.map(r => r.id);
+  return [...rows.map(r => r.id), ...await failStuckFirstUploads()];
 }
+
+// The mirror case: NO live version, a processing status, and nothing in flight
+// (no BUILDING / READY_TO_ACTIVATE version). Nothing will ever move such a
+// lecture on: the dataset page treats it as a first upload still running
+// (upload disabled) and Cancel finds nothing to cancel. It gets FAILED — the
+// state failVersion leaves a lecture with no live dataset in — so the admin can
+// upload again.
+const PROCESSING_STATUSES = `('DATASET_UPLOADED','PROCESSING','EMBEDDING')`;
+const failStuckFirstUploads = async (): Promise<number[]> => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // Lock first; look for an in-flight version in a SECOND statement. A
+    // build (buildVersion inserts the version and sets EMBEDDING under this
+    // lock) may commit while we wait, and only a new statement sees it — a
+    // NOT EXISTS in the locking statement keeps its older snapshot.
+    const { rows: locked } = await client.query<{ id: number }>(
+      `SELECT id FROM lectures WHERE active_version_id IS NULL AND status IN ${PROCESSING_STATUSES}
+       ORDER BY id FOR UPDATE`
+    );
+    const { rows } = locked.length === 0 ? { rows: [] as { id: number; status: string }[] } : await client.query<{ id: number; status: string }>(
+      `UPDATE lectures l SET status = 'FAILED', updated_at = NOW()
+       FROM (SELECT id, status FROM lectures WHERE id = ANY($1::int[])) old
+       WHERE l.id = old.id AND l.active_version_id IS NULL AND l.status IN ${PROCESSING_STATUSES}
+         AND NOT EXISTS (SELECT 1 FROM dataset_versions v
+                         WHERE v.lecture_id = l.id AND v.status IN ('BUILDING','READY_TO_ACTIVATE'))
+       RETURNING l.id, old.status`,
+      [locked.map(r => r.id)]
+    );
+    await client.query('COMMIT');
+    for (const r of rows) logger.warn(`[DATASET] 🩹 Lecture #${r.id}: status ${r.status} → FAILED (no live dataset and no update in progress)`);
+    return rows.map(r => r.id);
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
+};
 
 export async function resumePendingVersions(deps: FinishDeps = {}): Promise<number[]> {
   await reconcileLectureStatuses().catch(err => logger.warn(`[DATASET] status reconcile failed: ${(err as Error).message}`));

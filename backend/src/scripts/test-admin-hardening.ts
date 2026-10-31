@@ -52,7 +52,7 @@ import { rateLimitStore } from '../graphql/resolvers/auth.resolver';
 import { ExpiringMap } from '../utils/expiring-map';
 import { globalLimiter, userLimiter } from '../middleware/rateLimiter';
 import { startMaintenanceScheduler, stopMaintenanceScheduler, maintenanceSchedulerState, runRetention } from '../observability/maintenance.scheduler';
-import { finishDatasetVersion, rollbackDataset, failDatasetVersion } from '../services/dataset-version.service';
+import { finishDatasetVersion, rollbackDataset, failDatasetVersion, reconcileLectureStatuses } from '../services/dataset-version.service';
 import { EMBEDDING_MODEL_VERSION } from '../services/embedding.service';
 import observabilityRoutes from '../routes/observability.routes';
 import { STAGE_SPAN_KIND, OpenInferenceSpanKind } from '../observability/otel-semconv';
@@ -1049,6 +1049,45 @@ const run = async () => {
       (!unset || (lim.MAX_ROWS === 1000 && lim.MAX_COLUMNS === 20 && lim.MAX_UNCOMPRESSED_BYTES === 5 * 1024 * 1024))
         && parsed.length === lim.MAX_ROWS && ms < 1000,
       `envUnset=${unset} rows=${lim.MAX_ROWS} cols=${lim.MAX_COLUMNS} uncompressedMB=${lim.MAX_UNCOMPRESSED_BYTES / 1048576} file=${Math.round(buf.length / 1024)} KB parse=${ms} ms`);
+  }
+
+  // ── AD-N3: a first upload stuck in a processing status is repaired ────
+  {
+    const mkLecture = async (status: string) => (await query<{ id: number }>(
+      `INSERT INTO lectures (title, youtube_url, youtube_video_id, status) VALUES ('[adn3] stuck', 'https://youtu.be/xxxxxxxxxxx', 'xxxxxxxxxxx', $1) RETURNING id`, [status])).rows[0].id;
+    const addBuilding = (lec: number, run: (sql: string, p: unknown[]) => Promise<unknown>) => run(
+      `INSERT INTO dataset_versions (lecture_id, version_no, status, mode, embedding_model_version, chunking_config_version, stats)
+       VALUES ($1, 1, 'BUILDING', 'MERGE', 'm', 'c', '{}'::jsonb)`, [lec]);
+    const stuck = await mkLecture('EMBEDDING');
+    const legacy = await mkLecture('PROCESSING');
+    const running = await mkLecture('EMBEDDING');
+    await addBuilding(running, (sql, p) => query(sql, p));
+    // A re-upload commits its new build while reconcile waits for this lecture's lock.
+    const racing = await mkLecture('EMBEDDING');
+    const other = await pool.connect();
+    let repaired: number[] = [];
+    try {
+      await other.query('BEGIN');
+      await other.query('SELECT id FROM lectures WHERE id = $1 FOR UPDATE', [racing]);
+      const pending = reconcileLectureStatuses();
+      for (let i = 0; i < 100; i++) {
+        const { rows } = await other.query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND pid <> pg_backend_pid()`);
+        if (rows[0].n > 0) break;
+        await new Promise(r => setTimeout(r, 20));
+      }
+      await addBuilding(racing, (sql, p) => other.query(sql, p));
+      await other.query('COMMIT');
+      repaired = await pending;
+    } finally {
+      other.release();
+    }
+    const statusOfLecture = async (id: number) => (await query<{ status: string }>('SELECT status FROM lectures WHERE id = $1', [id])).rows[0].status;
+    const st = { stuck: await statusOfLecture(stuck), legacy: await statusOfLecture(legacy), running: await statusOfLecture(running), racing: await statusOfLecture(racing) };
+    check('AD-N3-1. No live dataset + EMBEDDING/PROCESSING + nothing in flight → FAILED (upload unblocked); a running build, or one committed while reconcile waited for the lock, is left alone',
+      st.stuck === 'FAILED' && st.legacy === 'FAILED' && st.running === 'EMBEDDING' && st.racing === 'EMBEDDING'
+        && repaired.includes(stuck) && repaired.includes(legacy) && !repaired.includes(running) && !repaired.includes(racing),
+      `${JSON.stringify(st)} repaired⊇stuck,legacy=${repaired.includes(stuck) && repaired.includes(legacy)}`);
   }
 
   // ── X1/X2: trace-list query params reach the service as their real types ──
