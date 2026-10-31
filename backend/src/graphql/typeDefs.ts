@@ -196,7 +196,10 @@ export const typeDefs = `#graphql
     id:         Int!
     title:      String!
     status:     String!
+    # Embedded pieces in the live dataset (a long answer is several pieces).
     chunkCount: Int!
+    # Q&A pairs in the live dataset — what the lecture page lists.
+    qaCount:    Int!
     createdAt:  String!
     updatedAt:  String!
     # Operational readiness (additive): status is dataset processing only.

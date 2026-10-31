@@ -176,11 +176,15 @@ export const getLectureChunks = async (
 export const getLectureAgentDetails = async () => {
   logger.info('[ANALYTICS] getLectureAgentDetails: fetching all agents with chunk counts');
   const { rows } = await query<{
-    id: number; title: string; status: string; chunk_count: string; created_at: Date; updated_at: Date;
+    id: number; title: string; status: string; chunk_count: string; qa_count: string; created_at: Date; updated_at: Date;
     profile_is_active: boolean | null;
   }>(
+    // chunk_count is every embedded piece; qa_count is Q&A pairs (a long answer
+    // is stored as several pieces, each with the full Q&A — chunk_index 0 is
+    // the first), the number lectureChunks lists.
     `SELECT l.id, l.title, l.status,
             COUNT(c.id) AS chunk_count,
+            COUNT(c.id) FILTER (WHERE d.chunk_index = 0) AS qa_count,
             l.created_at, l.updated_at,
             (SELECT p.is_active FROM lecture_agent_profiles p WHERE p.lecture_id = l.id) AS profile_is_active
      FROM lectures l
@@ -194,6 +198,7 @@ export const getLectureAgentDetails = async () => {
     title:      r.title,
     status:     r.status,
     chunkCount: parseInt(r.chunk_count),
+    qaCount:    parseInt(r.qa_count),
     createdAt:  r.created_at.toISOString(),
     updatedAt:  r.updated_at.toISOString(),
     // MISSING (no profile row) | INACTIVE | ACTIVE — lecture_id is the profile's

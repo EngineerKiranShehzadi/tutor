@@ -47,6 +47,7 @@ export const GET_LECTURE_AGENT_DETAILS = gql`
       title
       status
       chunkCount
+      qaCount
       createdAt
       updatedAt
       agentProfileStatus

@@ -38,7 +38,7 @@ import { makeExecutableSchema } from '@graphql-tools/schema';
 import { ApolloServer } from '@apollo/server';
 import { applyMigrations } from './db-setup';
 import { getRecentQuestions, getRecentQuestionsPage, getContentGaps, CONTENT_GAPS_MAX_QUESTIONS, getMyStats,
-  getLectureChunks, getRegisteredStudents, getStudentJourney } from '../services/analytics.service';
+  getLectureChunks, getLectureAgentDetails, getRegisteredStudents, getStudentJourney } from '../services/analytics.service';
 import { getAllUsers } from '../services/user.service';
 import { analyticsResolvers } from '../graphql/resolvers/analytics.resolver';
 import { queryLimitsRule } from '../graphql/query-limits';
@@ -1250,6 +1250,9 @@ const run = async () => {
       check('AD-N7-1. lectureChunks lists and counts each Q&A pair once (a 3-piece answer is one row), with its full answer',
         page.total === 2 && page.items.length === 2 && page.items.every(i => i.answer === 'full answer'),
         `total=${page.total} items=${page.items.length}`);
+      const agent = (await getLectureAgentDetails()).find(a => a.id === small);
+      check('R9-1. lectureAgentDetails counts Q&A pairs too (qaCount 2, as the lecture page lists) next to embedded pieces (chunkCount 4) — the agents page captions its bars "Q&A pairs"',
+        agent?.qaCount === 2 && agent?.chunkCount === 4, `qaCount=${agent?.qaCount} chunkCount=${agent?.chunkCount}`);
     } finally {
       await query('DELETE FROM student_questions WHERE lecture_id = ANY($1::int[])', [[big, small, legacy]]);
     }

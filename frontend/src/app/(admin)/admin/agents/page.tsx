@@ -9,7 +9,7 @@ import {
 } from 'recharts';
 import { GET_LECTURE_AGENT_DETAILS } from '@/graphql/admin.queries';
 
-interface AgentDetail { id: number; title: string; status: string; chunkCount: number; createdAt: string; updatedAt: string; agentProfileStatus: string; chatReady: boolean }
+interface AgentDetail { id: number; title: string; status: string; chunkCount: number; qaCount: number; createdAt: string; updatedAt: string; agentProfileStatus: string; chatReady: boolean }
 
 const STATUS_CONFIG: Record<string, { label: string; dot: string; text: string; bg: string; border: string; icon: string; color: string }> = {
   READY:            { label: 'AI Ready',      dot: 'bg-emerald-400', text: 'text-emerald-700', bg: 'bg-emerald-50',  border: 'border-emerald-200', icon: 'fas fa-robot',       color: '#10b981' },
@@ -62,14 +62,14 @@ export default function AdminAgentsPage() {
       color: STATUS_CONFIG[key]?.color ?? '#94a3b8',
     }));
 
-  // Bar chart data — top 8 by chunk count
+  // Bar chart data — top 8 by Q&A pairs
   const barData = [...agents]
-    .sort((a, b) => b.chunkCount - a.chunkCount)
+    .sort((a, b) => b.qaCount - a.qaCount)
     .slice(0, 8)
     .map(a => ({
       name: a.title.length > 16 ? a.title.slice(0, 14) + '…' : a.title,
       fullName: a.title,
-      Chunks: a.chunkCount,
+      'Q&A pairs': a.qaCount,
       color: STATUS_CONFIG[a.status]?.color ?? '#94a3b8',
     }));
 
@@ -158,8 +158,8 @@ export default function AdminAgentsPage() {
 
           {/* Bar — chunks per agent */}
           <div className="col-span-3 bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
-            <h2 className="text-[16px] font-bold text-slate-800 mb-0.5">Knowledge Chunks per Agent</h2>
-            <p className="text-[12px] text-slate-400 mb-3">Q&A pairs embedded in each AI agent</p>
+            <h2 className="text-[16px] font-bold text-slate-800 mb-0.5">Q&A pairs per Agent</h2>
+            <p className="text-[12px] text-slate-400 mb-3">Q&A pairs in each AI agent&apos;s live dataset</p>
             <ResponsiveContainer width="100%" height={200}>
               <BarChart data={barData} margin={{ top: 4, right: 8, left: -18, bottom: 0 }} barSize={28}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
@@ -178,10 +178,10 @@ export default function AdminAgentsPage() {
                 <Tooltip
                   cursor={{ fill: '#f1f5f9', radius: 6 }}
                   contentStyle={{ borderRadius: 10, border: '1px solid #e2e8f0', fontSize: 12 }}
-                  formatter={(value, _, props) => [Number(value) + ' chunks', (props as { payload: { fullName: string } }).payload.fullName]}
+                  formatter={(value, _, props) => [`${Number(value)} Q&A pair${Number(value) === 1 ? '' : 's'}`, (props as { payload: { fullName: string } }).payload.fullName]}
                   labelFormatter={() => ''}
                 />
-                <Bar dataKey="Chunks" radius={[6, 6, 0, 0]}>
+                <Bar dataKey="Q&A pairs" radius={[6, 6, 0, 0]}>
                   {barData.map((entry, i) => (
                     <Cell key={i} fill={entry.color} />
                   ))}
@@ -248,8 +248,8 @@ export default function AdminAgentsPage() {
                         <span className={`w-1.5 h-1.5 rounded-full ${s.dot} ${isActive ? 'animate-pulse' : ''}`} />
                         {s.label}
                       </span>
-                      <span className="text-[13px] text-slate-400 font-medium">
-                        <i className="fas fa-layer-group text-[11px] mr-1" />{a.chunkCount} chunks
+                      <span className="text-[13px] text-slate-400 font-medium" title={`${a.chunkCount} embedded chunk${a.chunkCount === 1 ? '' : 's'}`}>
+                        <i className="fas fa-layer-group text-[11px] mr-1" />{a.qaCount} Q&A pair{a.qaCount === 1 ? '' : 's'}
                       </span>
                       <Link href={`/admin/lectures/${a.id}`}
                         className="opacity-0 group-hover:opacity-100 transition-opacity px-3 py-1.5 rounded-lg bg-indigo-50 text-indigo-700 text-[12px] font-semibold hover:bg-indigo-100 border border-indigo-100">
