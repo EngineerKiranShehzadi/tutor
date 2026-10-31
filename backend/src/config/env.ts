@@ -437,7 +437,9 @@ export const env = {
     RERANK_PROVIDER:    nonBlank('RERANK_PROVIDER', 'local-http'),
     // Hosted-provider settings. Each key is only required when its provider is
     // selected — checked once at startup (see config/retrieval-providers.ts).
-    EMBEDDING_MODEL:      nonBlank('EMBEDDING_MODEL', 'text-embedding-3-small'),
+    // Blank = the provider's own default (embedding-provider.resolver.ts:
+    // text-embedding-3-small for openai, voyage-4 for voyage).
+    EMBEDDING_MODEL:      nonBlank('EMBEDDING_MODEL', ''),
     // Must equal the database column (vector(1024)); anything else is rejected at startup.
     EMBEDDING_DIMENSIONS: positiveInt('EMBEDDING_DIMENSIONS', 1024),
     RERANK_MODEL:         nonBlank('RERANK_MODEL', 'rerank-3'),

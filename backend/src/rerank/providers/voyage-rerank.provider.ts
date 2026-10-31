@@ -1,5 +1,6 @@
 import { AppError } from '../../middleware/errorHandler';
 import { NetworkError, errorDetail, postJsonWithRetry, type RetryOptions } from '../../utils/http-retry';
+import { VOYAGE_API_BASE, probeVoyage } from '../../utils/voyage-api';
 import type { RerankCandidate, RerankProvider, RerankScore } from './rerank-provider.interface';
 
 // Voyage AI Reranker API — POST /v1/rerank.
@@ -8,7 +9,7 @@ import type { RerankCandidate, RerankProvider, RerankScore } from './rerank-prov
 // `data` is documented as sorted by descending relevance_score, and `index` is
 // the position in the request's `documents`. At most 1,000 documents per
 // request; without top_k every document is scored and returned.
-export const VOYAGE_RERANK_URL = 'https://api.voyageai.com/v1/rerank';
+export const VOYAGE_RERANK_URL = `${VOYAGE_API_BASE}/rerank`;
 const MAX_DOCUMENTS = 1000;
 const TIMEOUT_MS = 30_000;
 
@@ -35,6 +36,13 @@ export function createVoyageRerankProvider(config: VoyageRerankConfig): RerankPr
     modelVersion: `voyage:${model}`,
     assertConfigured,
 
+    // Readiness without spending tokens (see utils/voyage-api.ts). The same
+    // key serves the Voyage embedder, so a rejected key shows on both cards.
+    async probe(): Promise<void> {
+      assertConfigured();
+      await probeVoyage(apiKey);
+    },
+
     async rerank(query: string, candidates: RerankCandidate[]): Promise<RerankScore[]> {
       assertConfigured();
       if (candidates.length > MAX_DOCUMENTS) {
@@ -59,7 +67,8 @@ export function createVoyageRerankProvider(config: VoyageRerankConfig): RerankPr
         if (res.status === 401 || res.status === 403) throw new Error(`Voyage rejected the API key (${res.status}) — check VOYAGE_API_KEY: ${detail}`);
         // 429 is a rate limit or a used-up quota, not a down service: say so, so it is actionable.
         if (res.status === 429) throw new Error(`Voyage rerank rate limit or quota exceeded (429) after ${maxRetries} retries: ${detail}`);
-        if (res.status >= 500) throw new Error(`Voyage rerank unavailable (${res.status}) after ${maxRetries} retries: ${detail}`);
+        // "service unavailable" so the readiness signal counts every 5xx, not only 503.
+        if (res.status >= 500) throw new Error(`Voyage rerank service unavailable (${res.status}) after ${maxRetries} retries: ${detail}`);
         throw new Error(`Voyage rerank error ${res.status}: ${detail}`);
       }
 

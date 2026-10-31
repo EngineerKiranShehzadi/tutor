@@ -1,5 +1,5 @@
 /**
- * Hosted embedding (OpenAI) and rerank (Voyage) adapters.
+ * Hosted embedding (OpenAI, Voyage) and rerank (Voyage) adapters.
  * No network, no database, no API keys: fetch is stubbed and backoff sleeps
  * are injected. Config-dependent cases run in child processes with the
  * variables set or blanked.
@@ -10,6 +10,8 @@ import { spawnSync } from 'child_process';
 import * as path from 'path';
 import { createOpenAiEmbeddingProvider, OPENAI_EMBEDDINGS_URL } from '../embedding/providers/openai-embedding.provider';
 import { createVoyageRerankProvider, VOYAGE_RERANK_URL } from '../rerank/providers/voyage-rerank.provider';
+import { createVoyageEmbeddingProvider, VOYAGE_EMBEDDINGS_URL } from '../embedding/providers/voyage-embedding.provider';
+import { VOYAGE_PROBE_URL } from '../utils/voyage-api';
 import { EmbeddingUnavailableError, EmbeddingRateLimitedError, EmbeddingQuotaExceededError } from '../embedding/embedding-errors';
 import { checkProviderHealth } from '../observability/health.service';
 
@@ -49,6 +51,11 @@ const retry = { maxRetries: 3, baseDelayMs: 10, sleep: async (ms: number) => { s
 const openai = (over: Partial<Parameters<typeof createOpenAiEmbeddingProvider>[0]> = {}) =>
   createOpenAiEmbeddingProvider({ apiKey: KEY, model: 'text-embedding-3-small', dimensions: 1024, retry, ...over });
 const voyage = () => createVoyageRerankProvider({ apiKey: KEY, model: 'rerank-3', retry });
+const voyageEmb = (over: Partial<Parameters<typeof createVoyageEmbeddingProvider>[0]> = {}) =>
+  createVoyageEmbeddingProvider({ apiKey: KEY, model: 'voyage-4', dimensions: 1024, retry, ...over });
+// A response in Voyage's documented shape; items can be given out of order.
+const vEmbResp = (items: { index: number; embedding: number[] }[]) =>
+  json({ object: 'list', data: items.map(i => ({ object: 'embedding', ...i })), model: 'voyage-4', usage: { total_tokens: 1 } });
 // A response in OpenAI's documented shape; items can be given out of order.
 const embResp = (items: { index: number; embedding: number[] }[]) =>
   json({ object: 'list', data: items.map(i => ({ object: 'embedding', ...i })), model: 'text-embedding-3-small', usage: { prompt_tokens: 1, total_tokens: 1 } });
@@ -151,6 +158,97 @@ async function main() {
     try { openai({ dimensions: 512 }).assertConfigured(); return false; } catch (e) { return /1024/.test((e as Error).message); }
   } });
 
+  // ── Voyage embeddings (V1) ──────────────────────────────────────
+  cases.push({ label: 'voyage-emb: name voyage, model version voyage:<model>:<dims>', run: () =>
+    voyageEmb().name === 'voyage' && voyageEmb().modelVersion === 'voyage:voyage-4:1024' && voyageEmb().dimensions === 1024 });
+  cases.push({ label: 'voyage-emb: request shape — URL, POST, Bearer key, {input[], model, input_type, truncation:false, output_dtype}; a question is input_type "query", a passage "document"', run: async () => {
+    stub(() => vEmbResp([{ index: 0, embedding: vec() }]));
+    await voyageEmb().embed('what is a prompt?', true);
+    const q = sent[0];
+    await voyageEmb().embed('Q: What is a prompt?\nA: An instruction.', false);
+    const d = sent[1];
+    return q.url === VOYAGE_EMBEDDINGS_URL && q.url === 'https://api.voyageai.com/v1/embeddings' && q.method === 'POST'
+      && q.headers.Authorization === `Bearer ${KEY}` && q.headers['Content-Type'] === 'application/json'
+      && JSON.stringify(q.body) === '{"input":["what is a prompt?"],"model":"voyage-4","input_type":"query","truncation":false,"output_dtype":"float"}'
+      && d.body.input_type === 'document' && d.body.input[0] === 'Q: What is a prompt?\nA: An instruction.';
+  } });
+  cases.push({ label: 'voyage-emb: embedBatch is always input_type "document", keeps input order from `index`, and splits a big batch (300 → 3 requests of ≤128)', run: async () => {
+    stub(call => vEmbResp((call.body.input as string[]).map((t, i) => ({ index: i, embedding: vec(1024, Number(t)) })).reverse()));
+    const texts = Array.from({ length: 300 }, (_, i) => String(i));
+    const out = await voyageEmb().embedBatch(texts);
+    return sent.length === 3 && sent.every(c => c.body.input_type === 'document' && c.body.input.length <= 128)
+      && out.length === 300 && out.every((v, i) => v[0] === i);
+  } });
+  cases.push({ label: 'voyage-emb: a vector that is not 1024 wide, a wrong count, a bad/duplicate index and a non-numeric value are all rejected', run: async () => {
+    stub(() => vEmbResp([{ index: 0, embedding: vec(512) }]));
+    const w = await rejects(voyageEmb().embed('x', false));
+    stub(() => vEmbResp([{ index: 0, embedding: vec() }]));
+    const n = await rejects(voyageEmb().embedBatch(['a', 'b']));
+    stub(() => vEmbResp([{ index: 0, embedding: vec() }, { index: 0, embedding: vec() }]));
+    const dup = await rejects(voyageEmb().embedBatch(['a', 'b']));
+    stub(() => vEmbResp([{ index: 0, embedding: vec(1024, NaN as unknown as number) }]));
+    const nan = await rejects(voyageEmb().embed('a', false));
+    return /512-dim vector at index 0; expected 1024/.test(w.message) && /voyage-4/.test(w.message) && !(w instanceof EmbeddingUnavailableError)
+      && /1 embeddings for 2 inputs/.test(n.message) && /invalid or duplicate embedding index/.test(dup.message) && /non-numeric/.test(nan.message);
+  } });
+  cases.push({ label: 'voyage-emb: 429 retried then ok; 429 that never clears → EmbeddingRateLimitedError (pipeline pauses); a quota/billing 429 → EmbeddingQuotaExceededError (fails at once)', run: async () => {
+    sleeps.length = 0;
+    stub((_c, n) => n < 3 ? json({ detail: 'Rate limit exceeded' }, 429) : vEmbResp([{ index: 0, embedding: vec() }]));
+    const ok = await voyageEmb().embed('x', false);
+    const okCalls = sent.length;
+    stub(() => json({ detail: 'Rate limit exceeded' }, 429));
+    const r = await rejects(voyageEmb().embed('x', false));
+    stub(() => json({ detail: 'You have exceeded your quota. Please add a payment method.' }, 429));
+    const q = await rejects(voyageEmb({ retry: { ...retry, maxRetries: 0 } }).embed('x', false));
+    return ok.length === 1024 && okCalls === 3 && r instanceof EmbeddingRateLimitedError && r instanceof EmbeddingUnavailableError
+      && q instanceof EmbeddingQuotaExceededError && !(q instanceof EmbeddingUnavailableError);
+  } });
+  cases.push({ label: 'voyage-emb: 500/502/503/504 after retries and an unreachable host end as EmbeddingUnavailableError; 401 names VOYAGE_API_KEY and hides the key; 400 is not retried', run: async () => {
+    const outage: boolean[] = [];
+    for (const status of [500, 502, 503, 504]) {
+      stub(() => json({ detail: 'busy' }, status));
+      const e = await rejects(voyageEmb().embed('x', false));
+      outage.push(e instanceof EmbeddingUnavailableError && sent.length === 4 && /service unavailable/.test(e.message));
+    }
+    stub(() => { throw new TypeError('fetch failed'); });
+    const net = await rejects(voyageEmb().embedBatch(['x']));
+    stub(() => json({ detail: 'Provided API key is invalid.' }, 401));
+    const k = await rejects(voyageEmb().embed('x', false));
+    stub(() => json({ detail: 'Input too long' }, 400));
+    const bad = await rejects(voyageEmb().embed('x', false));
+    return outage.every(Boolean) && net instanceof EmbeddingUnavailableError && /not reachable/.test(net.message)
+      && /VOYAGE_API_KEY/.test(k.message) && !k.message.includes(KEY) && !(k instanceof EmbeddingUnavailableError)
+      && sent.length === 1 && /400/.test(bad.message);
+  } });
+  cases.push({ label: 'voyage-emb: empty text and a missing key are refused before any request; EMBEDDING_DIMENSIONS other than 1024 is rejected', run: async () => {
+    stub(() => vEmbResp([]));
+    const empty = await rejects(voyageEmb().embed('  ', true));
+    const noKey = await rejects(voyageEmb({ apiKey: '' }).embed('x', false));
+    let dims = '';
+    try { voyageEmb({ dimensions: 512 }).assertConfigured(); } catch (e) { dims = (e as Error).message; }
+    return /empty/i.test(empty.message) && /VOYAGE_API_KEY/.test(noKey.message) && sent.length === 0 && /1024/.test(dims);
+  } });
+  cases.push({ label: 'voyage probe (embedder and reranker): ONE GET /v1/batches?limit=1 with the key, never an embeddings/rerank call; 200 and 404 pass, 401/429/5xx/unreachable fail', run: async () => {
+    stub(() => json({ object: 'list', data: [], has_more: false }));
+    await voyageEmb().probe!();
+    const embCall = sent.map(c => `${c.method ?? 'GET'} ${c.url} ${c.headers.Authorization === `Bearer ${KEY}`}`);
+    await voyage().probe!();
+    const rrCall = sent.slice(1).map(c => `${c.method ?? 'GET'} ${c.url}`);
+    stub(() => json({ detail: 'Not Found' }, 404));
+    const moved = await voyageEmb().probe!().then(() => 'ok', () => 'fail');
+    const results: string[] = [];
+    for (const status of [401, 429, 503]) {
+      stub(() => json({ detail: 'x' }, status));
+      results.push(await voyageEmb().probe!().then(() => 'ok', (e: Error) => e.message));
+    }
+    stub(() => { throw new TypeError('fetch failed'); });
+    const unreachable = await rejects(voyageEmb().probe!());
+    return embCall.join() === `GET ${VOYAGE_PROBE_URL} true` && VOYAGE_PROBE_URL === 'https://api.voyageai.com/v1/batches?limit=1'
+      && rrCall.join() === `GET ${VOYAGE_PROBE_URL}` && moved === 'ok'
+      && /VOYAGE_API_KEY/.test(results[0]) && /429/.test(results[1]) && /service unavailable \(503\)/.test(results[2])
+      && unreachable instanceof EmbeddingUnavailableError && /not reachable/.test(unreachable.message);
+  } });
+
   // ── Voyage rerank ───────────────────────────────────────────────
   const cands = [{ id: 11, text: 'alpha' }, { id: 22, text: 'beta' }, { id: 33, text: 'gamma' }];
   const rrResp = (data: { index: number; relevance_score: number }[]) => json({ object: 'list', data, model: 'rerank-3', usage: { total_tokens: 9 } });
@@ -207,6 +305,7 @@ async function main() {
   } });
 
   // ── resolver / config / startup / health (child processes) ──────
+  const STARTUP_V = `require('../config/retrieval-providers').assertRetrievalProvidersConfigured({checkThresholds:false});console.log('STARTUP_OK')`;
   const VERSIONS = `const e=require('../services/embedding.service');const r=require('../services/rerank.service');
     console.log(JSON.stringify({ev:e.EMBEDDING_MODEL_VERSION,rv:r.RERANKER_MODEL_VERSION}))`;
   cases.push({ label: 'selecting openai/voyage switches the model versions to openai:text-embedding-3-small:1024 / voyage:rerank-3', run: () => {
@@ -214,6 +313,16 @@ async function main() {
     const d = JSON.parse(child(VERSIONS, {}).out) as { ev: string; rv: string };
     return o.ev === 'openai:text-embedding-3-small:1024' && o.rv === 'voyage:rerank-3'
       && d.ev === 'bge-large-en-v1.5:1024' && d.rv === 'bge-reranker-large';
+  } });
+  cases.push({ label: 'V1: EMBEDDING_PROVIDER=voyage resolves (it threw "Unknown embedding provider") — blank EMBEDDING_MODEL is voyage-4, never an OpenAI name; EMBEDDING_MODEL is honoured', run: () => {
+    const d = JSON.parse(child(VERSIONS, { EMBEDDING_PROVIDER: 'voyage', RERANK_PROVIDER: 'voyage' }).out) as { ev: string; rv: string };
+    const m = JSON.parse(child(VERSIONS, { EMBEDDING_PROVIDER: 'voyage', EMBEDDING_MODEL: 'voyage-3.5' }).out) as { ev: string; rv: string };
+    return d.ev === 'voyage:voyage-4:1024' && d.rv === 'voyage:rerank-3' && m.ev === 'voyage:voyage-3.5:1024';
+  } });
+  cases.push({ label: 'V1: startup with EMBEDDING_PROVIDER=voyage needs VOYAGE_API_KEY (one key for both stages) and passes with it', run: () => {
+    const r = child(STARTUP_V, { EMBEDDING_PROVIDER: 'voyage', RERANK_PROVIDER: 'voyage' });
+    const ok = child(STARTUP_V, { EMBEDDING_PROVIDER: 'voyage', RERANK_PROVIDER: 'voyage', VOYAGE_API_KEY: 'k' });
+    return r.status !== 0 && /EMBEDDING_PROVIDER=voyage requires VOYAGE_API_KEY/.test(r.stderr) && ok.out === 'STARTUP_OK';
   } });
   cases.push({ label: 'EMBEDDING_MODEL / EMBEDDING_DIMENSIONS / RERANK_MODEL come from env', run: () => {
     const o = JSON.parse(child(VERSIONS, { EMBEDDING_PROVIDER: 'openai', EMBEDDING_MODEL: 'text-embedding-3-large', EMBEDDING_DIMENSIONS: '1024', RERANK_PROVIDER: 'voyage', RERANK_MODEL: 'rerank-2.5' }).out) as { ev: string; rv: string };
@@ -247,14 +356,24 @@ async function main() {
   } });
 
   // ── health ──────────────────────────────────────────────────────
-  cases.push({ label: 'health: OpenAI is probed with ONE free GET /v1/models/{model} (never an embeddings call); Voyage from config alone, no call', run: async () => {
+  cases.push({ label: 'health: OpenAI is probed with ONE free GET /v1/models/{model}, Voyage (embedder and reranker) with ONE GET /v1/batches?limit=1 — never an embeddings/rerank call', run: async () => {
     stub(() => json({ id: 'text-embedding-3-small', object: 'model' }));
     const a = await checkProviderHealth(openai());
     const openaiCalls = sent.map(c => `${c.method ?? 'GET'} ${c.url}`);
-    stub(() => { throw new Error('health must not call the network'); });
+    stub(() => json({ object: 'list', data: [] }));
     const b = await checkProviderHealth(voyage());
-    return a.status === 'healthy' && b.status === 'healthy' && sent.length === 0
-      && openaiCalls.length === 1 && openaiCalls[0] === 'GET https://api.openai.com/v1/models/text-embedding-3-small';
+    const c = await checkProviderHealth(voyageEmb());
+    const voyageCalls = sent.map(x => `${x.method ?? 'GET'} ${x.url}`);
+    return a.status === 'healthy' && b.status === 'healthy' && c.status === 'healthy'
+      && openaiCalls.length === 1 && openaiCalls[0] === 'GET https://api.openai.com/v1/models/text-embedding-3-small'
+      && voyageCalls.length === 2 && voyageCalls.every(x => x === `GET ${VOYAGE_PROBE_URL}`);
+  } });
+  cases.push({ label: 'health: Voyage probe with a rejected key (401) → unhealthy; unreachable → unhealthy SERVICE_UNREACHABLE (was "healthy" from config alone)', run: async () => {
+    stub(() => json({ detail: 'Provided API key is invalid.' }, 401));
+    const a = await checkProviderHealth(voyageEmb());
+    stub(() => { throw new TypeError('fetch failed'); });
+    const b = await checkProviderHealth(voyage());
+    return a.status === 'unhealthy' && b.status === 'unhealthy' && b.errorCode === 'SERVICE_UNREACHABLE';
   } });
   cases.push({ label: 'health: OpenAI probe failing (bad key 401 / unreachable) → unhealthy', run: async () => {
     stub(() => json({ error: { message: 'Incorrect API key', type: 'invalid_request_error', code: 'invalid_api_key' } }, 401));

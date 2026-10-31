@@ -143,7 +143,8 @@ async function checkHttpReachable(url: string): Promise<ComponentHealth> {
 
 // Never a paid call per probe:
 //   - provider with an HTTP endpoint of its own (the local server): reachability;
-//   - hosted provider with a free probe() (OpenAI: model metadata): run it;
+//   - hosted provider with a free probe() (OpenAI: model metadata; Voyage:
+//     an authenticated listing that runs no model): run it;
 //   - hosted provider without one: config check.
 // With `component`, recent REAL calls are consulted too (provider-signal.ts): a
 // provider whose last calls kept failing is unhealthy even if it looks
