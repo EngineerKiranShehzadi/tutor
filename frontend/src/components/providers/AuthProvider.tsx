@@ -3,12 +3,14 @@ import { createContext, useCallback, useContext, useEffect, useState } from 'rea
 import { useRouter } from 'next/navigation';
 import { User } from '@/types';
 import { authApi } from '@/lib/api';
+import { refreshAccessToken, setAccessToken } from '@/lib/auth-token';
 
 interface AuthContextValue {
   user:      User | null;
   isLoading: boolean;
   setUser:   (user: User | null) => void;
   logout:    () => Promise<void>;
+  logoutAll: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -18,37 +20,42 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [user,      setUser]   = useState<User | null>(null);
   const [isLoading, setLoading] = useState(true);
 
-  // getMe fires exactly once here — all consumers share this single result
+  // Runs once per page load. The access token is kept only in memory
+  // (lib/auth-token.ts), so a session is restored from the httpOnly refresh
+  // cookie: refresh first, then getMe. All consumers share this single result.
   useEffect(() => {
-    const token = localStorage.getItem('accessToken');
-    if (!token) { setLoading(false); return; }
-    authApi.getMe()
-      .then(({ data }) => {
-        setUser(data.data);
-        console.log(`[AUTH] ✅ Session restored: ${data.data.email} (${data.data.role})`);
-      })
-      .catch((err) => {
-        const status = err?.response?.status;
-        if (status === 401 || status === 403) {
-          localStorage.removeItem('accessToken');
-          console.warn('[AUTH] ⚠️ Token invalid or expired, cleared');
-        } else {
-          console.warn('[AUTH] ⚠️ Could not reach server, keeping token for retry');
+    let cancelled = false;
+    (async () => {
+      try {
+        const token = await refreshAccessToken();
+        if (!token || cancelled) return;
+        const { data } = await authApi.getMe();
+        if (!cancelled) {
+          setUser(data.data);
+          console.log(`[AUTH] ✅ Session restored: ${data.data.email} (${data.data.role})`);
         }
-      })
-      .finally(() => setLoading(false));
+      } catch {
+        if (!cancelled) setAccessToken(null);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
-  const logout = useCallback(async () => {
-    try { await authApi.logout(); } catch { /* ignore */ }
-    localStorage.removeItem('accessToken');
+  const endSession = useCallback(async (call: () => Promise<unknown>) => {
+    try { await call(); } catch { /* ignore */ }
+    setAccessToken(null);
     setUser(null);
-    console.log('[AUTH] ✅ Logged out');
     router.push('/login');
   }, [router]);
 
+  const logout    = useCallback(() => endSession(authApi.logout), [endSession]);
+  // Ends every session of this account, on every device.
+  const logoutAll = useCallback(() => endSession(authApi.logoutAll), [endSession]);
+
   return (
-    <AuthContext.Provider value={{ user, isLoading, setUser, logout }}>
+    <AuthContext.Provider value={{ user, isLoading, setUser, logout, logoutAll }}>
       {children}
     </AuthContext.Provider>
   );

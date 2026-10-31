@@ -1,6 +1,7 @@
 import { ApolloClient, InMemoryCache, createHttpLink, fromPromise } from '@apollo/client';
 import { setContext } from '@apollo/client/link/context';
 import { onError } from '@apollo/client/link/error';
+import { getAccessToken, refreshAccessToken } from './auth-token';
 
 const httpLink = createHttpLink({
   uri: `${process.env.NEXT_PUBLIC_API_URL?.replace('/api/v1', '')}/graphql`,
@@ -8,7 +9,7 @@ const httpLink = createHttpLink({
 });
 
 const authLink = setContext((_, { headers }) => {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
+  const token = getAccessToken();
   return {
     headers: {
       ...headers,
@@ -16,27 +17,6 @@ const authLink = setContext((_, { headers }) => {
     },
   };
 });
-
-// Silently refresh the access token using the httpOnly refresh-token cookie
-async function refreshAccessToken(): Promise<string | null> {
-  try {
-    const apiBase = process.env.NEXT_PUBLIC_API_URL ?? '';
-    const res = await fetch(`${apiBase}/auth/refresh-token`, {
-      method: 'POST',
-      credentials: 'include',
-    });
-    if (!res.ok) return null;
-    const json = await res.json();
-    const newToken: string | undefined = json?.data?.accessToken;
-    if (newToken) {
-      localStorage.setItem('accessToken', newToken);
-      return newToken;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
 
 // Retry once on UNAUTHENTICATED — refresh token then replay the original operation
 const errorLink = onError(({ graphQLErrors, operation, forward }) => {

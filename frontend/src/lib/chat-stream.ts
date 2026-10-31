@@ -1,4 +1,5 @@
 import type { ChunkSource } from '@/types';
+import { getAccessToken, refreshAccessToken } from './auth-token';
 
 // Client for POST /chat/ask-stream (Server-Sent Events). EventSource can't
 // send a POST body or an Authorization header, so this reads the response
@@ -56,20 +57,25 @@ export async function streamAsk(
   signal: AbortSignal
 ): Promise<AskStreamResult> {
   const apiBase = process.env.NEXT_PUBLIC_API_URL ?? '';
-  const token = localStorage.getItem('accessToken');
+  const send = (token: string | null) => fetch(`${apiBase}/chat/ask-stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(params),
+    signal,
+  });
 
   let res: Response;
   try {
-    res = await fetch(`${apiBase}/chat/ask-stream`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'text/event-stream',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify(params),
-      signal,
-    });
+    res = await send(getAccessToken());
+    // Expired access token: refresh once (shared with axios/Apollo) and resend.
+    if (res.status === 401) {
+      const fresh = await refreshAccessToken();
+      if (fresh) res = await send(fresh);
+    }
   } catch (err) {
     if ((err as Error).name === 'AbortError') throw err;
     throw new StreamUnavailableError('Could not reach the streaming endpoint');

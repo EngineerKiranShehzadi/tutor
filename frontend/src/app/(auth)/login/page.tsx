@@ -17,6 +17,7 @@ import { useResendLoginOtp } from '@/hooks/useResendLoginOtp';
 import { useVerifySignupOtp } from '@/hooks/useVerifySignupOtp';
 import { ForgotPasswordFlow } from '@/components/auth/ForgotPasswordFlow';
 import { useAuth } from '@/hooks/useAuth';
+import { setAccessToken } from '@/lib/auth-token';
 
 type Mode = 'login' | 'forgot' | 'verify';
 
@@ -26,14 +27,18 @@ const schema = z.object({
 });
 type FormData = z.infer<typeof schema>;
 
+const OAUTH_ERRORS: Record<string, string> = {
+  oauth_failed:           'Google sign-in failed. Please try again or use email and password.',
+  oauth_unverified_email: 'Google has not verified that email address, so it cannot be used to sign in.',
+  oauth_account_exists:   'An account with this email already exists. Log in with your email and password.',
+};
+
 function LoginPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [mode, setMode] = useState<Mode>('login');
   const [serverError, setServerError] = useState(
-    searchParams.get('error') === 'oauth_failed'
-      ? 'Google sign-in failed. Please try again or use email and password.'
-      : ''
+    OAUTH_ERRORS[searchParams.get('error') ?? ''] ?? ''
   );
 
   const [verifyEmail, setVerifyEmail] = useState('');
@@ -102,7 +107,7 @@ function LoginPageInner() {
     try {
       const result = await login(data.email, data.password);
       if (result.status === 'AUTHENTICATED') {
-        localStorage.setItem('accessToken', result.accessToken);
+        setAccessToken(result.accessToken);
         setUser(result.user);
         router.push(result.user.role === 'ADMIN' ? '/admin/dashboard' : '/courses');
       } else if (result.status === 'EMAIL_VERIFICATION_REQUIRED') {
@@ -127,7 +132,7 @@ function LoginPageInner() {
     if (code.length !== 6) { setOtpError('Enter the complete 6-digit code'); return; }
     try {
       const result = await verifyOtp(verifyEmail, code);
-      localStorage.setItem('accessToken', result.accessToken);
+      setAccessToken(result.accessToken);
       setUser(result.user);
       router.push(result.user.role === 'ADMIN' ? '/admin/dashboard' : '/courses');
     } catch (err: unknown) {

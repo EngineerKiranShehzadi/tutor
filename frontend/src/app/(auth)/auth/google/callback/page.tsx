@@ -1,25 +1,24 @@
 'use client';
 import { Suspense, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { useAuth } from '@/hooks/useAuth';
 
+// The backend's Google callback sets only the httpOnly refresh cookie and
+// redirects here (the access token is never put in a URL). AuthProvider, which
+// mounts with this page load, turns that cookie into a session; this page just
+// waits for it and moves on.
 function GoogleCallbackInner() {
   const router = useRouter();
   const params = useSearchParams();
+  const { user, isLoading } = useAuth();
 
   useEffect(() => {
-    const token = params.get('token');
     const error = params.get('error');
-    if (token) {
-      localStorage.setItem('accessToken', token);
-      // Full page load, not router.replace: AuthProvider only reads the token
-      // (and calls /me) once on mount, and it already mounted on this page
-      // with no token. A client-side navigation would leave user=null and
-      // bounce back to /login.
-      window.location.replace('/courses');
-    } else {
-      router.replace(`/login?error=${error ?? 'oauth_failed'}`);
-    }
-  }, [params, router]);
+    if (error) { router.replace(`/login?error=${encodeURIComponent(error)}`); return; }
+    if (isLoading) return;
+    if (user) router.replace(user.role === 'ADMIN' ? '/admin/dashboard' : '/courses');
+    else router.replace('/login?error=oauth_failed');
+  }, [params, router, user, isLoading]);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50">

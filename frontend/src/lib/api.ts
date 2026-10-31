@@ -1,4 +1,5 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
+import { getAccessToken, setAccessToken, refreshAccessToken } from './auth-token';
 
 const api = axios.create({
   baseURL:         process.env.NEXT_PUBLIC_API_URL,
@@ -6,17 +7,14 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
-// Attach access token from localStorage on every request
+// Attach the in-memory access token (lib/auth-token.ts) on every request
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-  if (typeof window !== 'undefined') {
-    const token = localStorage.getItem('accessToken');
-    if (token) config.headers.Authorization = `Bearer ${token}`;
-  }
+  const token = getAccessToken();
+  if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
 
 // Auto-refresh access token on 401
-let refreshPromise: Promise<string | null> | null = null;
 
 api.interceptors.response.use(
   (res) => res,
@@ -28,36 +26,20 @@ api.interceptors.response.use(
     const AUTH_ENDPOINTS = ['/auth/login', '/auth/refresh-token',
                             '/auth/verify-email', '/auth/forgot-password', '/auth/reset-password'];
     if (AUTH_ENDPOINTS.some(p => original.url?.includes(p))) {
-      if (original.url?.includes('/auth/refresh-token')) {
-        localStorage.removeItem('accessToken');
-        if (typeof window !== 'undefined') window.location.href = '/login';
-      }
       return Promise.reject(error);
     }
 
     if (error.response?.status === 401 && !original._retry) {
       original._retry = true;
-      try {
-        // Deduplicate: reuse an in-flight refresh rather than firing N parallel ones
-        if (!refreshPromise) {
-          refreshPromise = api.post('/auth/refresh-token')
-            .then(({ data }) => data.data.accessToken as string)
-            .catch(() => null)
-            .finally(() => { refreshPromise = null; });
-        }
-        const newToken = await refreshPromise;
-        if (!newToken) {
-          localStorage.removeItem('accessToken');
-          if (typeof window !== 'undefined') window.location.href = '/login';
-          return Promise.reject(error);
-        }
-        localStorage.setItem('accessToken', newToken);
-        original.headers.Authorization = `Bearer ${newToken}`;
-        return api(original);
-      } catch {
-        localStorage.removeItem('accessToken');
+      // Shared with Apollo / the chat stream: one refresh at a time per tab
+      const newToken = await refreshAccessToken();
+      if (!newToken) {
+        setAccessToken(null);
         if (typeof window !== 'undefined') window.location.href = '/login';
+        return Promise.reject(error);
       }
+      original.headers.Authorization = `Bearer ${newToken}`;
+      return api(original);
     }
     return Promise.reject(error);
   }
@@ -71,6 +53,7 @@ export const authApi = {
                       api.post('/auth/login', data),
   resendLoginOtp:   (email: string) => api.post('/auth/resend-login-otp', { email }),
   logout:           () => api.post('/auth/logout'),
+  logoutAll:        () => api.post('/auth/logout-all'),
   forgotPassword:   (email: string) => api.post('/auth/forgot-password', { email }),
   resetPassword:    (token: string, password: string) =>
                       api.post(`/auth/reset-password/${token}`, { password }),
