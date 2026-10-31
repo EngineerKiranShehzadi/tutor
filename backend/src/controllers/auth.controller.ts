@@ -56,14 +56,14 @@ function httpsGet(url: string, headers: Record<string, string>): Promise<{ statu
 // ── Validators ────────────────────────────────────────
 // normalizeEmail() is deliberately NOT used on any of these.
 // Its defaults strip dots and "+tags" out of Gmail addresses, so
-// "ali.khan@gmail.com" became "alikhan@gmail.com" before the lookup — while
-// signup (which goes through GraphQL, not these validators) stored the address
-// exactly as typed. The two disagreed, and any account with a dot in its Gmail
-// address could never be found at login.
+// "ali.khan@gmail.com" became "alikhan@gmail.com" before the lookup, while
+// signup (GraphQL, not these validators) kept the dots — the two disagreed and
+// any account with a dot in its Gmail address could never be found at login.
 // RFC 5321 2.4: the local part is to be interpreted only by the destination
-// host, so an application should not rewrite it. Addresses are stored and
-// looked up as typed; the service layer lowercases them, which is safe because
-// providers treat addresses case-insensitively.
+// host, so an application should not rewrite it. The only normalisation is
+// trim + lowercase, done in the service layer on every store and lookup (safe
+// because providers treat addresses case-insensitively); the database also
+// enforces uniqueness on lower(email).
 export const loginValidators = [
   body('email').isEmail().withMessage('Valid email required'),
   body('password').notEmpty().withMessage('Password is required'),

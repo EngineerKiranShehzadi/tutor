@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+-- Case-insensitive uniqueness, enforced by the database (see migration 012).
+CREATE UNIQUE INDEX IF NOT EXISTS users_email_lower_key ON users (lower(email));
 
 -- ── REFRESH TOKENS ─────────────────────────────
 CREATE TABLE IF NOT EXISTS refresh_tokens (
