@@ -7,6 +7,43 @@ Newest entry at the top.
 
 ---
 
+## 2026-11-01 — OpenAI switch: LLM adapter, readiness probe, pricing (C1–C4)
+
+**Changed by:** Kiran
+**Files:** `llm/providers/openai-llm.provider.ts` (new), `llm/json-schema.ts` (new), `llm/llm-provider.resolver.ts`,
+`llm/providers/llm-provider.interface.ts`, Gemini/Groq adapters, `config/llm-providers.ts` (new), `config/env.ts`,
+`server.ts`, `utils/http-retry.ts`, `observability/health.service.ts`, `services/llm-gemini.service.ts`,
+`.env.example`, `docs/OPENAI_SWITCH.md` (renamed from `VOYAGE_SWITCH.md`), `START_HERE.md`; tests in
+`backend/src/scripts/` (new `test-openai-llm-provider.ts`, part of `npm test`)
+
+**Production stack:** embedding OpenAI `text-embedding-3-small` (1024), rerank Voyage `rerank-3`, all ten LLM
+tasks OpenAI `gpt-5.6-luna`. One `OPENAI_API_KEY` covers embedding and the LLM tasks. The earlier Voyage
+embedding work came from a superseded plan; its adapter stays registered, unused.
+
+**Deploy note:** no new migration (018 is from the entry below). Set the env as in `.env.example` and follow
+`docs/OPENAI_SWITCH.md`: re-embed, tune the thresholds, set `RETRIEVAL_THRESHOLDS_TUNED_FOR=openai:voyage`.
+Until then a production start is refused, by design. A missing key for a selected LLM provider now stops a
+production start too.
+
+- **C1 — `RAG_LLM_PROVIDER=openai` threw "Unknown LLM provider".** New OpenAI Chat Completions adapter, with
+  streaming (usage included, so cost is recorded) and strict structured outputs. `reasoning_effort` is always
+  sent: off/minimal/unset → none, so the small structured calls pay for no reasoning (the model's own default
+  is medium). A model that rejects `temperature` or effort "none" is retried once without it, and that is
+  remembered. Quota 429s are labelled apart from rate limits, a timeout is never retried, and keys are redacted.
+  Every selected LLM provider's key is checked at startup.
+- **C2 — readiness never verified a non-Gemini answer LLM.** OpenAI is probed with `GET /models/{model}` (no
+  tokens). `checkAnswerLlm` is the pure probe; the real-call signal is applied after the cache (R5), so a
+  recovery shows on the next readiness call and a failed probe is re-checked after 5 s.
+- **C3 — cost would read NULL.** gpt-5.6-luna ($0.20 / $1.20 per 1M) and gpt-5.6-terra ($2.00 / $12.00) are
+  priced by default; `LLM_PRICING_JSON` overrides them.
+- **C4 — the general-knowledge fallback is gone.** `generateAnswerFromLLM` answered without lecture evidence and
+  hardcoded Gemini models; nothing called it. The answer's retry fallback model now stays on the same provider
+  (gpt-5.6-luna on OpenAI).
+- **Corrections** — the switch runbook, `.env.example` and START_HERE describe OpenAI embeddings with Voyage
+  rerank only. Re-embedding the 2,828 pieces costs well under one cent.
+
+---
+
 ## 2026-11-01 — Integration audit round 2: R1–R11, Voyage embedding (V1–V5), sweep
 
 **Changed by:** Kiran
@@ -18,13 +55,13 @@ routes and validation, Voyage adapters (`embedding/providers/voyage-embedding.pr
 `rerank/providers/voyage-rerank.provider.ts`, `utils/voyage-api.ts` new), resolver, `config/env.ts`,
 `.env.example`, migration `018_request_log_quality_signals.sql` (new), `scripts/reembed-all.ts` (new),
 GraphQL `typeDefs.ts`; frontend Errors, Traces, Health, Monitor and agents pages, monitor labels,
-DatasetManager; `docs/VOYAGE_SWITCH.md` (new), `START_HERE.md`; tests in `backend/src/scripts/`
+DatasetManager; `docs/VOYAGE_SWITCH.md` (new; now `docs/OPENAI_SWITCH.md`, see the entry above), `START_HERE.md`; tests in `backend/src/scripts/`
 
 **Deploy note:** run `npm run db:setup` (migration `018`: two nullable columns on
 `rag_request_log`) with the backend. A backend started before it still logs every request
 without the new columns, and needs a restart after `db:setup`. Deploy backend and frontend
 together (`lectureAgentDetails.qaCount`, the dry run's `previews`, monitor fields). No
-re-embedding is needed until the switch to Voyage (`docs/VOYAGE_SWITCH.md`).
+re-embedding is needed until the provider switch (`docs/OPENAI_SWITCH.md`).
 
 **Student answers**
 - **R1 — real phone numbers and IPs were no longer masked (regression from ST1).** A bare
@@ -61,7 +98,7 @@ re-embedding is needed until the switch to Voyage (`docs/VOYAGE_SWITCH.md`).
 - **R8** — switching MERGE/REPLACE no longer re-uploads the file: one dry run returns both
   previews.
 
-**Voyage (decided stack: Voyage embedding + rerank, Gemini answers)**
+**Voyage (built against a superseded plan — production embeds with OpenAI; see the entry above)**
 - **V1** — new Voyage embedding adapter (`input_type` query/document, 1024 dims checked,
   quota vs rate-limit 429s told apart). `EMBEDDING_PROVIDER=voyage` used to stop the server
   at startup. A blank `EMBEDDING_MODEL` is the provider's own default.
@@ -71,7 +108,7 @@ re-embedding is needed until the switch to Voyage (`docs/VOYAGE_SWITCH.md`).
 - **V2** — `npm run reembed:all` rebuilds every lecture under the current model through
   the normal pipeline (dry run first; `--apply`). Dev data: 7 lectures, 2,828 pieces.
 - **V3 / V4** — `.env.example` describes the Voyage stack and that one key gates both
-  stages. `docs/VOYAGE_SWITCH.md` gives the order: re-embed, tune the thresholds, then
+  stages. `docs/VOYAGE_SWITCH.md` (now `docs/OPENAI_SWITCH.md`) gives the order: re-embed, tune the thresholds, then
   cut over. Not run yet: it needs a Voyage key.
 
 **Sweep** — two real pipeline stages now have spans (their latency reaches the chart), dead
