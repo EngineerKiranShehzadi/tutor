@@ -391,6 +391,7 @@ export default function LecturePage({ params }: Props) {
                 recSeconds={recSecs}
                 interimText={chat.interimText}
                 isSpeechSupported={chat.isSpeechSupported}
+                isAnswerPending={chat.isAnswerPending}
               />
             </>
           )}

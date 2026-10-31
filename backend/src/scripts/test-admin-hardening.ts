@@ -785,6 +785,52 @@ const run = async () => {
       `abc=${abc.status} 8k=${eightK.status} unset=${JSON.stringify(unset.val)} iters0=${zeroIters.val?.iters} rate=${badRate.status}`);
   }
 
+  // ── S16: the SSE heartbeat stops when the client goes away ───────────
+  {
+    const stu = (await query<{ id: string }>(`INSERT INTO users (name, email, password_hash, is_verified, role) VALUES ('S16', $1, 'x', TRUE, 'STUDENT') RETURNING id`, [`s16-${Date.now()}@example.test`])).rows[0].id;
+    const chat = env.CHAT as { RATE_LIMIT_PER_MINUTE: number; DAILY_QUESTION_LIMIT: number };
+    const savedChat = { ...chat };
+    chat.RATE_LIMIT_PER_MINUTE = 0; chat.DAILY_QUESTION_LIMIT = 0;
+    const realSet = global.setInterval, realClear = global.clearInterval, realQuery = pool.query;
+    let heartbeat: unknown = null;
+    const clearedAt: number[] = [];
+    let pipelineResumedAt = 0;
+    (global as { setInterval: unknown }).setInterval = ((fn: () => void, ms?: number) => {
+      const h = realSet(fn, ms); if (ms === 15000 && heartbeat === null) heartbeat = h; return h;
+    }) as unknown;
+    (global as { clearInterval: unknown }).clearInterval = ((h: NodeJS.Timeout) => { if (h === heartbeat) clearedAt.push(Date.now()); return realClear(h); }) as unknown;
+    // A slow pipeline: the lecture lookup takes 1.5 s.
+    (pool as unknown as { query: unknown }).query = async (text: string, params?: unknown[]) => {
+      if (/^SELECT \* FROM lectures WHERE id = \$1/.test(text)) { await new Promise(r => setTimeout(r, 1500)); pipelineResumedAt = Date.now(); }
+      return (realQuery as unknown as (t: string, p?: unknown[]) => Promise<unknown>).call(pool, text, params);
+    };
+    const app = express(); app.use(express.json()); app.use('/chat', chatRoutes);
+    const srv = app.listen(0, '127.0.0.1');
+    await new Promise<void>(r => srv.once('listening', () => r()));
+    try {
+      const ac = new AbortController();
+      const started = Date.now();
+      const res = await fetch(`http://127.0.0.1:${(srv.address() as AddressInfo).port}/chat/ask-stream`, {
+        method: 'POST', signal: ac.signal,
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${generateAccessToken(stu, 'STUDENT')}` },
+        body: JSON.stringify({ lectureId: 999999, question: 'slow question?', sessionId: 1 }),
+      });
+      await new Promise(r => setTimeout(r, 300));
+      ac.abort(); // the student closes the tab
+      await new Promise(r => setTimeout(r, 2000)); // let the pipeline finish
+      const first = clearedAt[0] ?? 0;
+      check('S16-1. Client disconnects mid-answer → the heartbeat is cleared at once (before the slow pipeline finishes), not only in finally',
+        res.status === 200 && heartbeat !== null && first > 0 && pipelineResumedAt > 0 && first < pipelineResumedAt && first - started < 1200,
+        `stream=${res.status} clearedAfter=${first ? first - started : 'never'}ms pipelineResumedAfter=${pipelineResumedAt ? pipelineResumedAt - started : 'n/a'}ms clears=${clearedAt.length}`);
+    } finally {
+      srv.close();
+      (global as { setInterval: unknown }).setInterval = realSet;
+      (global as { clearInterval: unknown }).clearInterval = realClear;
+      (pool as unknown as { query: unknown }).query = realQuery;
+      Object.assign(chat, savedChat);
+    }
+  }
+
 };
 
 (async () => {

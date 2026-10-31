@@ -71,18 +71,25 @@ router.post('/ask-stream', protect, async (req: AuthenticatedRequest, res: Respo
   req.socket.setNoDelay(true);
 
   let clientGone = false;
-  res.on('close', () => { clientGone = true; });
-
-  const send = (event: string, data: unknown): void => {
-    if (clientGone || res.writableEnded) return;
-    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-  };
 
   // Comment lines keep idle connections (slow retrieval / rate-limit
   // backoff) from being dropped by intermediaries.
   const heartbeat = setInterval(() => {
     if (!clientGone && !res.writableEnded) res.write(': keep-alive\n\n');
   }, HEARTBEAT_MS);
+  // A client that disconnects stops the heartbeat right away, instead of it
+  // ticking until the pipeline finishes. (The finally below clears it too;
+  // clearInterval is idempotent.)
+  res.on('close', () => {
+    clientGone = true;
+    clearInterval(heartbeat);
+    if (!res.writableEnded) logger.info(`[CHAT-STREAM] client disconnected before the answer — heartbeat stopped (session #${String(sessionId)})`);
+  });
+
+  const send = (event: string, data: unknown): void => {
+    if (clientGone || res.writableEnded) return;
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
 
   logger.info(`[CHAT-STREAM] "${student.email}" → session #${sessionId}: "${logSafeText(question, 80)}"`);
 
