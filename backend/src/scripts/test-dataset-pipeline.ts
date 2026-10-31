@@ -1363,7 +1363,8 @@ const run = async () => {
     const c1 = await prepareDatasetVersion(Lc, makeXlsx(baseRows(8)));
     const vc = c1.kind === 'CREATED' ? c1.versionId : -1;
     await finishDatasetVersion(vc, { embed: someWork, retryDelayMs: 30, chunkBackoffMs: 1, maxAttempts: 2, outageMaxMs: 1, consecutiveFailureLimit: 99 });
-    const finished = await waitFor(async () => (await statusOf(vc)).status !== 'BUILDING', 15000);
+    // Wait for a final status: READY_TO_ACTIVATE is the moment between "embedded" and "live".
+    const finished = await waitFor(async () => !['BUILDING', 'READY_TO_ACTIVATE'].includes((await statusOf(vc)).status), 15000);
     const sc = await statusOf(vc);
     check('25c. An intermittent outage that embeds something every pass keeps going (clock restarts on progress) and publishes',
       finished && sc.status === 'ACTIVE' && sc.outage_since === null && (await getLectureReadiness(Lc)).ready,
