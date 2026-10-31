@@ -28,6 +28,8 @@ import { runInputGuardrails } from '../rag/guardrails/input/input-guardrail.serv
 import { classifyRoute } from '../services/query-router.service';
 import { detectExpectedResponseFormat } from '../rag/guardrails/output/format/response-format.detector';
 import { runAdaptiveRetrieval } from '../rag/query-processing/adaptive-retrieval/adaptive-retrieval.service';
+import { assertRetrievalProvidersConfigured } from '../config/retrieval-providers';
+import { logger } from '../utils/logger';
 import pool from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { askLectureAgent, LECTURE_NOT_FOUND_MESSAGE, type AskLectureAgentDeps } from '../services/chat.service';
@@ -780,6 +782,40 @@ cases.push({
     const pass = single.stopReason === 'SUFFICIENT_EVIDENCE' && single.uncoveredSubqueryIndexes.length === 0
       && exact.coveredSubqueryIndexes.includes(2) && exact.uncoveredSubqueryIndexes.join() === '1';
     return { pass, detail: `single=${single.stopReason}/${single.uncoveredSubqueryIndexes.join()}, exact uncovered=${exact.uncoveredSubqueryIndexes.join()}` };
+  },
+});
+
+// ── S6: thresholds must match the providers they were tuned for ─────────
+cases.push({
+  label: 'S6. RETRIEVAL_THRESHOLDS_TUNED_FOR ≠ active providers: throws in production, warns elsewhere; a match (default) is silent',
+  run: async () => {
+    const r = env.RETRIEVAL as { THRESHOLDS_TUNED_FOR: string; EMBEDDING_PROVIDER: string; RERANK_PROVIDER: string };
+    const e = env as { NODE_ENV: string };
+    const saved = { tuned: r.THRESHOLDS_TUNED_FOR, node: e.NODE_ENV };
+    const warnings: string[] = [];
+    const realWarn = logger.warn.bind(logger);
+    (logger as { warn: unknown }).warn = (msg: unknown) => { warnings.push(String(msg)); return logger; };
+    const outcome = (): string => { try { assertRetrievalProvidersConfigured(); return 'ok'; } catch (err) { return `threw: ${(err as Error).message}`; } };
+    try {
+      const active = `${r.EMBEDDING_PROVIDER}:${r.RERANK_PROVIDER}`;
+      r.THRESHOLDS_TUNED_FOR = active;
+      e.NODE_ENV = 'production';
+      const matchProd = outcome();
+      r.THRESHOLDS_TUNED_FOR = 'voyage:voyage';
+      const mismatchProd = outcome();
+      e.NODE_ENV = 'development';
+      const before = warnings.length;
+      const mismatchDev = outcome();
+      const warned = warnings.slice(before).some(w => w.includes('tuned for voyage:voyage') && w.includes(`providers are ${active}`));
+      const skipped = (() => { e.NODE_ENV = 'production'; try { assertRetrievalProvidersConfigured({ checkThresholds: false }); return 'ok'; } catch { return 'threw'; } })();
+      const pass = matchProd === 'ok'
+        && /^threw: Retrieval thresholds were tuned for voyage:voyage but providers are .* re-run tune:thresholds and update RETRIEVAL_THRESHOLDS_TUNED_FOR$/.test(mismatchProd)
+        && mismatchDev === 'ok' && warned && skipped === 'ok';
+      return { pass, detail: `match=${matchProd} | prod=${mismatchProd.slice(0, 60)}… | dev=${mismatchDev}, warned=${warned} | tuner=${skipped}` };
+    } finally {
+      r.THRESHOLDS_TUNED_FOR = saved.tuned; e.NODE_ENV = saved.node;
+      (logger as { warn: unknown }).warn = realWarn;
+    }
   },
 });
 

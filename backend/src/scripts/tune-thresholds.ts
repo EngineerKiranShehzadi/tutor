@@ -93,7 +93,8 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   console.log('Session         : read-only (default_transaction_read_only=on)');
-  assertRetrievalProvidersConfigured();
+  // Tuning is how a thresholds/providers mismatch is fixed, so it is not refused here.
+  assertRetrievalProvidersConfigured({ checkThresholds: false });
 
   // ── lectures and their Q&As ────────────────────────────────────
   const { rows: lecRows } = await query<{ id: number; title: string; active_version_id: number }>(

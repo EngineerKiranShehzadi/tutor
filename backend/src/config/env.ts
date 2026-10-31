@@ -430,6 +430,11 @@ export const env = {
     VECTOR_SIMILARITY_THRESHOLD: finiteFloat('VECTOR_SIMILARITY_THRESHOLD', 0.55),
     // Minimum reranker score for a chunk to be used as context.
     RERANK_MIN_SCORE: finiteFloat('RERANK_MIN_SCORE', 0.5),
+    // "<embeddingProvider>:<rerankProvider>" the two thresholds above were tuned
+    // with (npm run tune:thresholds). Scores from other providers are calibrated
+    // differently, so a mismatch is refused at startup in production and warned
+    // about elsewhere (config/retrieval-providers.ts).
+    THRESHOLDS_TUNED_FOR: nonBlank('RETRIEVAL_THRESHOLDS_TUNED_FOR', 'local-http:local-http'),
   },
 
   CHAT: {

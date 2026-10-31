@@ -910,6 +910,8 @@ export const askLectureAgent = async (
           rerankerInputCount: candidates.length,
           rerankerOutputCount: c.length,
           minRerankScore: DEFAULT_MIN_RERANK_SCORE,
+          rerankProvider: env.RETRIEVAL.RERANK_PROVIDER,
+          rerankMinScore: DEFAULT_MIN_RERANK_SCORE,
           topRerankerScore,
           lowestSelectedRerankerScore: c[c.length - 1]?.rerankScore ?? null,
           chunksRemovedByRelevanceFloor: belowFloorCount,
