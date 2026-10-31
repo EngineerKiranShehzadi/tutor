@@ -4,6 +4,7 @@ import { resolveEmbeddingProvider } from '../embedding/embedding-provider.resolv
 import { resolveRerankProvider } from '../rerank/rerank-provider.resolver';
 import { logger } from '../utils/logger';
 import { classifyErrorCode } from './tracer';
+import { providerDownSignal, type ProviderComponent } from './provider-signal';
 
 export type ComponentStatus = 'healthy' | 'degraded' | 'unhealthy';
 export type OverallStatus = 'healthy' | 'degraded' | 'unhealthy';
@@ -26,12 +27,18 @@ export interface ReadinessResult {
   };
 }
 
-// database + pgvector + embeddingServer are required for any lecture
-// question to be answerable at all -> their failure means `unhealthy`.
-// reranker + gemini failing still leaves the backend process and
-// non-RAG features (auth, lecture browsing, chat history) working ->
-// `degraded`, not `unhealthy`.
-const REQUIRED_COMPONENTS = ['database', 'pgvector', 'embeddingServer'] as const;
+// Every component a lecture question needs is REQUIRED: if one is unhealthy no
+// question can be answered, so readiness is `unhealthy` (HTTP 503) and a load
+// balancer / uptime monitor sees it. That is the database, pgvector, the
+// embedding provider, the reranker (a rerank failure fails the question) and —
+// when it generates the answers — Gemini. `degraded` (HTTP 200) is left for
+// what is uncertain rather than down: a check that only verified config (e.g.
+// HEALTH_GEMINI_CHECK_ENABLED=false), or Gemini when another provider answers.
+type ComponentName = keyof ReadinessResult['components'];
+export const requiredComponents = (answerProvider = env.LLM.RAG_ANSWER.PROVIDER): ComponentName[] => [
+  'database', 'pgvector', 'embeddingServer', 'reranker',
+  ...(answerProvider === 'gemini' ? ['gemini' as const] : []),
+];
 
 interface CacheEntry { result: ComponentHealth; checkedAtMs: number; }
 const cache = new Map<string, CacheEntry>();
@@ -99,19 +106,39 @@ async function checkHttpReachable(url: string): Promise<ComponentHealth> {
   }
 }
 
-// Provider with an HTTP endpoint of its own (the local server): probe it.
-// Hosted provider: config check only — the key is present and the settings are
-// usable — never a paid call per probe. Anything else is uncertain (degraded).
+// Never a paid call per probe:
+//   - provider with an HTTP endpoint of its own (the local server): reachability;
+//   - hosted provider with a free probe() (OpenAI: model metadata): run it;
+//   - hosted provider without one (Voyage): config check.
+// After that, recent REAL calls are consulted (provider-signal.ts): a provider
+// whose last calls kept failing is unhealthy even if it looks reachable/configured.
 export async function checkProviderHealth(
-  provider: { healthUrl?: string; assertConfigured(): void },
+  provider: { healthUrl?: string; assertConfigured(): void; probe?(): Promise<void> },
+  component?: ProviderComponent,
 ): Promise<ComponentHealth> {
-  if (provider.healthUrl) return checkHttpReachable(provider.healthUrl);
-  try {
-    provider.assertConfigured();
-    return { status: 'healthy', latencyMs: 0 };
-  } catch {
-    return { status: 'unhealthy', latencyMs: 0, errorCode: 'NOT_CONFIGURED' };
+  let base: ComponentHealth;
+  if (provider.healthUrl) {
+    base = await checkHttpReachable(provider.healthUrl);
+  } else {
+    try {
+      provider.assertConfigured();
+    } catch {
+      return { status: 'unhealthy', latencyMs: 0, errorCode: 'NOT_CONFIGURED' };
+    }
+    if (provider.probe) {
+      try {
+        const { latencyMs } = await timed(() => provider.probe!());
+        base = { status: 'healthy', latencyMs: Math.round(latencyMs) };
+      } catch (err) {
+        return { status: 'unhealthy', latencyMs: 0, errorCode: classifyErrorCode(err) };
+      }
+    } else {
+      base = { status: 'healthy', latencyMs: 0 };
+    }
   }
+  if (base.status !== 'healthy' || !component) return base;
+  const down = providerDownSignal(component);
+  return down ? { status: 'unhealthy', latencyMs: base.latencyMs, errorCode: down } : base;
 }
 
 async function checkGemini(): Promise<ComponentHealth> {
@@ -136,6 +163,13 @@ async function checkGemini(): Promise<ComponentHealth> {
   }
 }
 
+// unhealthy if a required component is down; degraded if anything else is not
+// healthy (or a required one is only unverified); healthy otherwise.
+export function overallStatus(components: ReadinessResult['components'], required: ComponentName[]): OverallStatus {
+  if (required.some(name => components[name].status === 'unhealthy')) return 'unhealthy';
+  return Object.values(components).some(c => c.status !== 'healthy') ? 'degraded' : 'healthy';
+}
+
 export function checkLiveness(): { status: 'ok'; timestamp: string } {
   return { status: 'ok', timestamp: new Date().toISOString() };
 }
@@ -146,17 +180,14 @@ export async function checkReadiness(): Promise<ReadinessResult> {
   const [database, pgvector, embeddingServer, reranker, gemini] = await Promise.all([
     cached('database', ttl, checkDatabase),
     cached('pgvector', ttl, checkPgvector),
-    cached('embeddingServer', ttl, () => checkProviderHealth(resolveEmbeddingProvider(env.RETRIEVAL.EMBEDDING_PROVIDER))),
-    cached('reranker', ttl, () => checkProviderHealth(resolveRerankProvider(env.RETRIEVAL.RERANK_PROVIDER))),
+    cached('embeddingServer', ttl, () => checkProviderHealth(resolveEmbeddingProvider(env.RETRIEVAL.EMBEDDING_PROVIDER), 'embeddingServer')),
+    cached('reranker', ttl, () => checkProviderHealth(resolveRerankProvider(env.RETRIEVAL.RERANK_PROVIDER), 'reranker')),
     cached('gemini', ttl, checkGemini),
   ]);
 
   const components = { database, pgvector, embeddingServer, reranker, gemini };
 
-  const anyRequiredUnhealthy = REQUIRED_COMPONENTS.some(name => components[name].status === 'unhealthy');
-  const anyDegraded = Object.values(components).some(c => c.status !== 'healthy');
-
-  const status: OverallStatus = anyRequiredUnhealthy ? 'unhealthy' : anyDegraded ? 'degraded' : 'healthy';
+  const status = overallStatus(components, requiredComponents());
 
   if (status !== 'healthy') {
     logger.warn(`[HEALTH] Readiness=${status} — ${JSON.stringify(Object.fromEntries(Object.entries(components).map(([k, v]) => [k, v.status])))}`);

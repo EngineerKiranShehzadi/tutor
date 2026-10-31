@@ -24,13 +24,13 @@ import { assertThrowawayDb } from './test-db-guard-lib';
 assertThrowawayDb('test-dataset-pipeline');
 
 import pool, { query } from '../config/database';
-import { EMBEDDING_MODEL_VERSION, EmbeddingUnavailableError } from '../services/embedding.service';
+import { EMBEDDING_MODEL_VERSION, EmbeddingUnavailableError, EmbeddingRateLimitedError, EmbeddingQuotaExceededError } from '../services/embedding.service';
 import { buildChunkPieces, parseExcel } from '../services/chunk.service';
 import { matchRows, FileRow, ActiveQa, QaFields } from '../services/dataset-plan';
 import {
   prepareDatasetVersion, finishDatasetVersion, resumePendingVersions, rollbackDataset, exportActiveDataset,
   listDatasetVersions, RemovalConfirmationRequired, getLectureReadiness, validateVersion, retryMissingEmbeddings,
-  cleanupOldVersions, failDatasetVersion, FinishResult as FinishResultT,
+  cleanupOldVersions, failDatasetVersion, cancelDatasetBuild, FinishResult as FinishResultT,
 } from '../services/dataset-version.service';
 import { searchChunks } from '../services/vector-search.service';
 import { lookupAnswerMemory, writeAnswerMemory } from '../services/rag-answer-memory.service';
@@ -1263,6 +1263,117 @@ const run = async () => {
       r.outcome === 'FAILED' && /different model/.test(r.error ?? '') && stc.active_version_id === live && stc.status === 'READY'
         && (await activeChunks(Lc)).length === liveChunks && (await getLectureReadiness(Lc)).ready,
       `outcome=${r.outcome} error="${(r.error ?? '').slice(0, 100)}" active=${stc.active_version_id} (expected ${live})`);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 25. A stuck build can always be ended: quota fails fast, outages are time-limited, admins can cancel (A2)
+  // ─────────────────────────────────────────────────────────────────────
+  {
+    const waitFor = async (pred: () => Promise<boolean>, ms = 8000) => {
+      for (let t = 0; t < ms; t += 50) { if (await pred()) return true; await new Promise(r => setTimeout(r, 50)); }
+      return false;
+    };
+    const statusOf = async (id: number) =>
+      (await query<{ status: string; last_error: string | null; attempts: number; outage_since: Date | null }>(
+        'SELECT status, last_error, attempts, outage_since FROM dataset_versions WHERE id = $1', [id])).rows[0];
+
+    // (a) quota exhausted → FAILED on the first pass, previous dataset live, lecture free again
+    const La = await newLecture('25a quota');
+    embedder.reset();
+    const a1 = await prepareDatasetVersion(La, makeXlsx(baseRows(3)));
+    if (a1.kind === 'CREATED') await fin(a1.versionId);
+    const liveA = (await lectureState(La)).active_version_id;
+    let quotaCalls = 0;
+    const quota = async (): Promise<number[]> => { quotaCalls++; throw new EmbeddingQuotaExceededError('OpenAI embeddings quota exhausted (429 insufficient_quota) — simulated'); };
+    const a2 = await prepareDatasetVersion(La, makeXlsx(baseRows(5)));
+    const ra = a2.kind === 'CREATED' ? await finishDatasetVersion(a2.versionId, { embed: quota, ...FAST, maxAttempts: 5 }) : null;
+    const sa = a2.kind === 'CREATED' ? await statusOf(a2.versionId) : null;
+    const a3 = await prepareDatasetVersion(La, makeXlsx(baseRows(4)), { dryRun: true });
+    check('25a. Quota exhausted → FAILED on the first pass with an actionable message (no 5 passes, no retries per chunk); the previous dataset stays live; uploads are possible again',
+      ra?.outcome === 'FAILED' && sa?.status === 'FAILED' && /quota exhausted/i.test(sa?.last_error ?? '') && /upload the file again/i.test(sa?.last_error ?? '')
+        && quotaCalls === 1 && (await lectureState(La)).active_version_id === liveA && (await getLectureReadiness(La)).ready && a3.kind === 'DRY_RUN',
+      `outcome=${ra?.outcome} embedCalls=${quotaCalls} error="${(sa?.last_error ?? '').slice(0, 110)}"`);
+
+    // (b) persistent rate limit with no progress → waits (as an outage, attempts not used), then gives up after the time limit
+    const Lb = await newLecture('25b rate limit cap');
+    embedder.reset();
+    const b1 = await prepareDatasetVersion(Lb, makeXlsx(baseRows(3)));
+    if (b1.kind === 'CREATED') await fin(b1.versionId);
+    const liveB = (await lectureState(Lb)).active_version_id;
+    const limited = async (): Promise<number[]> => { throw new EmbeddingRateLimitedError('OpenAI embeddings rate limit (429) persisted after 3 retries — simulated'); };
+    const b2 = await prepareDatasetVersion(Lb, makeXlsx(baseRows(5)));
+    const vb = b2.kind === 'CREATED' ? b2.versionId : -1;
+    const rb = await finishDatasetVersion(vb, { embed: limited, retryDelayMs: 30, chunkBackoffMs: 1, maxAttempts: 2, outageMaxMs: 250 });
+    const paused = await statusOf(vb);
+    const gaveUp = await waitFor(async () => (await statusOf(vb)).status === 'FAILED');
+    const sb = await statusOf(vb);
+    check('25b. Persistent 429 → first PAUSED as a rate limit (attempts not used), then FAILED after the outage time limit; previous dataset live',
+      rb.outcome === 'PAUSED' && paused.status === 'BUILDING' && /rate-limiting requests \(429\)/.test(paused.last_error ?? '') && paused.attempts === 0 && paused.outage_since !== null
+        && gaveUp && /for over .* gave up/.test(sb.last_error ?? '') && (await lectureState(Lb)).active_version_id === liveB,
+      `first=${rb.outcome} note="${(paused.last_error ?? '').slice(0, 90)}" final=${sb.status} error="${(sb.last_error ?? '').slice(0, 90)}"`);
+
+    // (c) an outage that still makes progress every pass is never given up on (the clock restarts)
+    const Lc = await newLecture('25c outage with progress');
+    let n = 0;
+    const someWork = async (text: string): Promise<number[]> => {
+      n++;
+      if (n % 5 !== 0) throw new EmbeddingUnavailableError('embedding server not reachable (simulated, intermittent)');
+      return vecFor(text);
+    };
+    const c1 = await prepareDatasetVersion(Lc, makeXlsx(baseRows(8)));
+    const vc = c1.kind === 'CREATED' ? c1.versionId : -1;
+    await finishDatasetVersion(vc, { embed: someWork, retryDelayMs: 30, chunkBackoffMs: 1, maxAttempts: 2, outageMaxMs: 1, consecutiveFailureLimit: 99 });
+    const finished = await waitFor(async () => (await statusOf(vc)).status !== 'BUILDING', 15000);
+    const sc = await statusOf(vc);
+    check('25c. An intermittent outage that embeds something every pass keeps going (clock restarts on progress) and publishes',
+      finished && sc.status === 'ACTIVE' && sc.outage_since === null && (await getLectureReadiness(Lc)).ready,
+      `final=${sc.status} outage_since=${sc.outage_since} error=${sc.last_error}`);
+
+    // (d) admin cancel of a running build: stops the loop, frees the lecture, never touches the live dataset
+    const Ld = await newLecture('25d cancel');
+    embedder.reset();
+    const d1 = await prepareDatasetVersion(Ld, makeXlsx(baseRows(3)));
+    if (d1.kind === 'CREATED') await fin(d1.versionId);
+    const liveD = (await lectureState(Ld)).active_version_id;
+    const liveChunksD = (await activeChunks(Ld)).length;
+    let release: () => void = () => undefined;
+    let slowCalls = 0;
+    const gate = new Promise<void>(r => { release = r; });
+    const slow = async (text: string): Promise<number[]> => { slowCalls++; await gate; return vecFor(text); };
+    const d2 = await prepareDatasetVersion(Ld, makeXlsx(baseRows(8)));
+    const vd = d2.kind === 'CREATED' ? d2.versionId : -1;
+    const running = finishDatasetVersion(vd, { embed: slow, ...FAST, statusCheckMs: 0 });
+    await waitFor(async () => slowCalls > 0);
+    const cancelled = await cancelDatasetBuild(Ld);
+    const sd = await statusOf(vd);
+    const rollbackWorks = await expectReject(rollbackDataset(Ld));
+    release();
+    const outcome = await running;
+    const callsAfter = slowCalls;
+    const sdAfter = await statusOf(vd);
+    const stD = await lectureState(Ld);
+    const again = await prepareDatasetVersion(Ld, makeXlsx(baseRows(4)), { dryRun: true });
+    check('25d. Cancel → version FAILED ("Cancelled by an admin."), running loop stops at once, live dataset unchanged and READY; upload and rollback are unblocked',
+      cancelled.versionId === vd && sd.status === 'FAILED' && sd.last_error === 'Cancelled by an admin.'
+        && outcome.outcome === 'SKIPPED' && callsAfter === 1 && sdAfter.status === 'FAILED'
+        && stD.active_version_id === liveD && stD.status === 'READY' && (await activeChunks(Ld)).length === liveChunksD
+        && again.kind === 'DRY_RUN' && !/in progress/.test(rollbackWorks.message),
+      `cancelled=${cancelled.versionId} status=${sd.status} loop=${outcome.outcome} embedCalls=${callsAfter} active=${stD.active_version_id} (expected ${liveD}) rollback="${rollbackWorks.message.slice(0, 60)}"`);
+
+    // (e) nothing to cancel → 404; (f) cancelling a first-ever build leaves the lecture FAILED and uploadable
+    const none = await expectReject(cancelDatasetBuild(Ld));
+    const Lf = await newLecture('25f cancel first build');
+    const f1 = await prepareDatasetVersion(Lf, makeXlsx(baseRows(3)));
+    const cf = await cancelDatasetBuild(Lf);
+    const stF = await lectureState(Lf);
+    embedder.reset();
+    const f2 = await prepareDatasetVersion(Lf, makeXlsx(baseRows(3)));
+    if (f2.kind === 'CREATED') await fin(f2.versionId);
+    check('25e/f. Cancel with nothing in flight → 404; cancelling a first-ever build → lecture FAILED, then a new upload builds and publishes normally',
+      none.rejected && (none.err as { statusCode?: number }).statusCode === 404
+        && f1.kind === 'CREATED' && cf.versionId === f1.versionId && stF.status === 'FAILED' && stF.active_version_id === null
+        && f2.kind === 'CREATED' && (await lectureState(Lf)).status === 'READY' && (await getLectureReadiness(Lf)).ready,
+      `none=${none.rejected}/${(none.err as { statusCode?: number })?.statusCode} firstCancel→${stF.status} reupload=${f2.kind} → ${(await lectureState(Lf)).status}`);
   }
 
   // ─────────────────────────────────────────────────────────────────────

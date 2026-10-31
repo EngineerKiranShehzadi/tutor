@@ -114,6 +114,8 @@ export const datasetApi = {
   },
   versions: (lectureId: number) => api.get(`/datasets/versions/${lectureId}`),
   rollback: (lectureId: number) => api.post(`/datasets/rollback/${lectureId}`),
+  // Stops the in-flight update (marks it failed); the live dataset is untouched.
+  cancel: (lectureId: number) => api.post(`/datasets/cancel/${lectureId}`),
   exportXlsx: (lectureId: number) => api.get(`/datasets/export/${lectureId}`, { responseType: 'blob' }),
 };
 

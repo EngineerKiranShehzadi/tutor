@@ -2,6 +2,7 @@ import { QnaChunk } from '../types';
 import { logger } from '../utils/logger';
 import { env } from '../config/env';
 import { resolveRerankProvider } from '../rerank/rerank-provider.resolver';
+import { tracked } from '../observability/provider-signal';
 
 const provider = resolveRerankProvider(env.RETRIEVAL.RERANK_PROVIDER);
 
@@ -18,10 +19,10 @@ export const rerankChunks = async (
 ): Promise<QnaChunk[]> => {
   if (candidates.length === 0) return [];
 
-  const scores = await provider.rerank(
+  const scores = await tracked('reranker', () => provider.rerank(
     question,
     candidates.map(c => ({ id: c.id, text: c.chunk_text }))
-  );
+  ));
   const byId = new Map(candidates.map(c => [c.id, c]));
   const reranked: QnaChunk[] = [];
   for (const r of scores.slice(0, topN)) {

@@ -63,7 +63,7 @@ Phoenix is bound to `127.0.0.1` on the server. Never open port 6006 publicly. Pi
 
 ## External uptime monitor
 
-Use a free service (UptimeRobot, Better Stack, Healthchecks.io). Create an HTTPS monitor on `https://<your-api-host>/health/ready`, interval 5 min, alert by email/phone. `/health/ready` returns HTTP 200 for `healthy` and `degraded` (reranker or Gemini down) and **503** for `unhealthy` (database, pgvector or embedding server down), so a plain status-code check is enough. Use `/health/live` if you only want to know the process is up. This is separate from the in-app email alerts, which cannot fire if the whole backend is down.
+Use a free service (UptimeRobot, Better Stack, Healthchecks.io). Create an HTTPS monitor on `https://<your-api-host>/health/ready`, interval 5 min, alert by email/phone. `/health/ready` returns **503** for `unhealthy` — any component a lecture question needs is down: database, pgvector, the embedding provider, the reranker, or Gemini when it is the answer model (`RAG_LLM_PROVIDER=gemini`) — and HTTP 200 for `healthy` and `degraded` (a check that only verified configuration, e.g. `HEALTH_GEMINI_CHECK_ENABLED=false`), so a plain status-code check is enough. Hosted providers are never checked with a paid call: OpenAI embeddings with a free `GET /v1/models/{model}`, Voyage rerank from its config plus the outcome of recent real calls (two availability failures in a row within 5 minutes → unhealthy). Use `/health/live` if you only want to know the process is up. This is separate from the in-app email alerts, which cannot fire if the whole backend is down.
 
 ## Environment variables
 

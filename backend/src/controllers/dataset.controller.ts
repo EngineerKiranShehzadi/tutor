@@ -4,7 +4,7 @@ import { getLectureById, updateLectureStatus, updateLectureDatasetLocation } fro
 import { AppError } from '../middleware/errorHandler';
 import {
   prepareDatasetVersion, finishDatasetVersion, rollbackDataset, listDatasetVersions, exportActiveDataset,
-  RemovalConfirmationRequired, DatasetMode,
+  cancelDatasetBuild, RemovalConfirmationRequired, DatasetMode,
 } from '../services/dataset-version.service';
 import { uploadRawDataset, isS3Configured } from '../services/s3-storage.service';
 import { sendSuccess, sendError } from '../utils/response';
@@ -130,6 +130,18 @@ export const rollbackDatasetVersion = async (req: AuthenticatedRequest, res: Res
   try {
     const result = await rollbackDataset(lectureId);
     sendSuccess(res, 'Rolled back to the previous dataset version.', { lectureId, ...result });
+  } catch (err) { next(err); }
+};
+
+// POST /datasets/cancel/:lectureId — stop the in-flight update (the live dataset is untouched)
+export const cancelDatasetUpdate = async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
+  const lectureId = parseLectureId(req);
+  if (isNaN(lectureId)) { sendError(res, 'Invalid lecture ID', 400); return; }
+  try {
+    await getLectureById(lectureId);
+    const result = await cancelDatasetBuild(lectureId);
+    logger.warn(`[UPLOAD] Admin "${req.user?.email}" cancelled dataset update v${result.versionNo} for lecture #${lectureId}`);
+    sendSuccess(res, `Update to version ${result.versionNo} was cancelled. The current dataset stays live.`, { lectureId, ...result });
   } catch (err) { next(err); }
 };
 

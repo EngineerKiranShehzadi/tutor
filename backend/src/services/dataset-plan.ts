@@ -170,6 +170,14 @@ const jaccard = (a: Set<string>, b: Set<string>): number => {
 // Pairs (added file row, carried-over Q&A) that look like the same Q&A with a
 // corrected wording: same answer, same question once punctuation/case are
 // ignored, or near-identical word sets. Under MERGE both would stay live.
+//
+// Runs on every dry run, on the request thread, so it must not compare every
+// added row with every carried Q&A. Exact matches use hash maps. For the word
+// overlap it uses the standard prefix filter for Jaccard: with every word set
+// sorted by one global order (rarest word first), two sets with
+// Jaccard >= t always share a word within their first |s| - ceil(t·|s|) + 1
+// words. Only pairs sharing such a word are scored, which gives exactly the
+// same result as the all-pairs scan.
 export const findPossibleDuplicates = (
   added: { sheetRow: number; question: string; answer: string }[],
   carried: { qaId: string; question: string; answer: string }[]
@@ -179,12 +187,38 @@ export const findPossibleDuplicates = (
     return { x, q, a: normSpace(x.answer), words: new Set(q.split(' ').filter(Boolean)) };
   };
   const existing = carried.map(prep);
+
+  const freq = new Map<string, number>();
+  for (const e of existing) for (const w of e.words) freq.set(w, (freq.get(w) ?? 0) + 1);
+  const ordered = (words: Set<string>): string[] =>
+    [...words].sort((x, y) => (freq.get(x) ?? 0) - (freq.get(y) ?? 0) || (x < y ? -1 : x > y ? 1 : 0));
+  // (- 1e-9: a float rounding up here would shorten the prefix and miss pairs)
+  const prefixLen = (n: number): number => n - Math.ceil(JACCARD_THRESHOLD * n - 1e-9) + 1;
+
+  const byAnswer = new Map<string, number[]>();
+  const byQuestion = new Map<string, number[]>();
+  const byPrefixWord = new Map<string, number[]>();
+  const push = (m: Map<string, number[]>, k: string, i: number) => { const l = m.get(k); if (l) l.push(i); else m.set(k, [i]); };
+  existing.forEach((e, i) => {
+    push(byAnswer, e.a, i);
+    push(byQuestion, e.q, i);
+    if (e.words.size > 0) for (const w of ordered(e.words).slice(0, prefixLen(e.words.size))) push(byPrefixWord, w, i);
+  });
+
   const out: PossibleDuplicate[] = [];
   for (const n of added.map(prep)) {
-    for (const e of existing) {
-      if (n.a === e.a || n.q === e.q || jaccard(n.words, e.words) >= JACCARD_THRESHOLD) {
-        out.push({ sheetRow: n.x.sheetRow, newQuestion: n.x.question, existingQaId: e.x.qaId, existingQuestion: e.x.question });
+    const hits = new Set<number>([...(byAnswer.get(n.a) ?? []), ...(byQuestion.get(n.q) ?? [])]);
+    if (n.words.size > 0) {
+      for (const w of ordered(n.words).slice(0, prefixLen(n.words.size))) {
+        for (const i of byPrefixWord.get(w) ?? []) {
+          if (!hits.has(i) && jaccard(n.words, existing[i].words) >= JACCARD_THRESHOLD) hits.add(i);
+        }
       }
+    }
+    // Same order as the all-pairs scan: file order, then carried order.
+    for (const i of [...hits].sort((x, y) => x - y)) {
+      const e = existing[i];
+      out.push({ sheetRow: n.x.sheetRow, newQuestion: n.x.question, existingQaId: e.x.qaId, existingQuestion: e.x.question });
     }
   }
   return out;

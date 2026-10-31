@@ -1,8 +1,18 @@
 import { AppError } from '../../middleware/errorHandler';
 import { logger } from '../../utils/logger';
-import { NetworkError, errorDetail, postJsonWithRetry, type RetryOptions } from '../../utils/http-retry';
+import { NetworkError, postJsonWithRetry, type RetryOptions } from '../../utils/http-retry';
+
+// OpenAI error body: { error: { message, type, code } }.
+async function openAiError(res: Response): Promise<{ detail: string; code: string | null }> {
+  const text = await res.text().catch(() => '');
+  try {
+    const e = (JSON.parse(text) as { error?: { message?: string; type?: string; code?: string } }).error;
+    if (e) return { detail: String(e.message ?? text).slice(0, 300), code: e.code ?? e.type ?? null };
+  } catch { /* not JSON */ }
+  return { detail: text.slice(0, 300), code: null };
+}
 import { EMBEDDING_COLUMN_DIMS } from '../embedding-dimensions';
-import { EmbeddingUnavailableError } from '../embedding-errors';
+import { EmbeddingQuotaExceededError, EmbeddingRateLimitedError, EmbeddingUnavailableError } from '../embedding-errors';
 import type { EmbeddingProvider } from './embedding-provider.interface';
 
 // OpenAI Embeddings API — POST /v1/embeddings.
@@ -12,6 +22,9 @@ import type { EmbeddingProvider } from './embedding-provider.interface';
 // inputs per request, 8192 tokens per input; `dimensions` is supported by the
 // text-embedding-3 models.
 export const OPENAI_EMBEDDINGS_URL = 'https://api.openai.com/v1/embeddings';
+// GET /v1/models/{model}: free (no tokens), checks the key and reachability.
+export const OPENAI_MODELS_URL = 'https://api.openai.com/v1/models';
+const PROBE_TIMEOUT_MS = 3_000;
 
 // Well under the 2048-input / 300k-token request limits, so one oversized
 // batch from the dataset pipeline is split here instead of rejected.
@@ -46,9 +59,14 @@ export function createOpenAiEmbeddingProvider(config: OpenAiEmbeddingConfig): Em
     }
   };
 
-  const fail = (status: number, detail: string): Error => {
+  // OpenAI answers 429 both for "slow down" (rate_limit_exceeded) and for
+  // "out of credit" (insufficient_quota). Only the first goes away by waiting.
+  const fail = (status: number, detail: string, code: string | null): Error => {
+    if (status === 429 && (code === 'insufficient_quota' || /exceeded your current quota/i.test(detail))) {
+      return new EmbeddingQuotaExceededError(`OpenAI embeddings quota exhausted (429 insufficient_quota) — raise the quota or billing limit: ${detail}`);
+    }
     if (status === 429) {
-      return new EmbeddingUnavailableError(`OpenAI embeddings rate limit (429) persisted after ${maxRetries} retries: ${detail}`);
+      return new EmbeddingRateLimitedError(`OpenAI embeddings rate limit (429) persisted after ${maxRetries} retries: ${detail}`);
     }
     if (status === 502 || status === 503 || status === 504) {
       return new EmbeddingUnavailableError(`OpenAI embeddings unavailable (${status}) after ${maxRetries} retries: ${detail}`);
@@ -77,7 +95,10 @@ export function createOpenAiEmbeddingProvider(config: OpenAiEmbeddingConfig): Em
       }
       throw err;
     }
-    if (!res.ok) throw fail(res.status, await errorDetail(res));
+    if (!res.ok) {
+      const { detail, code } = await openAiError(res);
+      throw fail(res.status, detail, code);
+    }
 
     const data = ((await res.json()) as OpenAiEmbeddingResponse).data;
     if (!Array.isArray(data) || data.length !== inputs.length) {
@@ -113,6 +134,25 @@ export function createOpenAiEmbeddingProvider(config: OpenAiEmbeddingConfig): Em
     modelVersion: `openai:${model}:${dimensions}`,
     dimensions,
     assertConfigured,
+
+    // Readiness: fetches the model's metadata — no tokens, no cost — which
+    // proves the key works and the API is reachable.
+    async probe(): Promise<void> {
+      assertConfigured();
+      let res: Response;
+      try {
+        res = await fetch(`${OPENAI_MODELS_URL}/${encodeURIComponent(model)}`, {
+          headers: { Authorization: `Bearer ${apiKey}` },
+          signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+        });
+      } catch (err) {
+        throw new EmbeddingUnavailableError(`OpenAI not reachable at ${OPENAI_MODELS_URL}: ${(err as Error).message}`);
+      }
+      if (!res.ok) {
+        const { detail, code } = await openAiError(res);
+        throw fail(res.status, detail, code);
+      }
+    },
 
     // OpenAI models have no query/passage distinction, so isQuery is unused.
     async embed(text: string, _isQuery: boolean): Promise<number[]> {

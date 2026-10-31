@@ -31,6 +31,9 @@ export class StreamUnavailableError extends Error {}
 // Thrown when the server reported a failure through an `error` event.
 export class StreamServerError extends Error {}
 
+// The per-student question limit was hit (HTTP 429); message is safe to show.
+export class StreamRateLimitedError extends StreamServerError {}
+
 interface ParsedEvent { event: string; data: string }
 
 // Splits a buffer into complete SSE events, returning the unfinished tail.
@@ -79,6 +82,13 @@ export async function streamAsk(
   } catch (err) {
     if ((err as Error).name === 'AbortError') throw err;
     throw new StreamUnavailableError('Could not reach the streaming endpoint');
+  }
+
+  // Per-student question limit: show the server's message. Falling back to the
+  // GraphQL mutation would only hit the same limit.
+  if (res.status === 429) {
+    const body = await res.json().catch(() => null) as { message?: string } | null;
+    throw new StreamRateLimitedError(body?.message ?? 'Too many questions. Please wait a moment and try again.');
   }
 
   if (!res.ok || !res.body) {

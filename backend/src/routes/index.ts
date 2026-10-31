@@ -29,6 +29,8 @@ router.get('/health/live', (_req, res) => {
 
 // Checks every dependency required to answer a lecture question. Never
 // exposes raw provider errors — only safe status/latency/error-code.
+// 503 when any of them is down (`unhealthy`); 200 for `healthy` and for
+// `degraded`, which only means "unverified" (see health.service.ts).
 router.get('/health/ready', async (_req, res) => {
   try {
     const result = await checkReadiness();

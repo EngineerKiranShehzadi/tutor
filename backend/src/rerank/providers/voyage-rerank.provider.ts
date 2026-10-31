@@ -57,7 +57,9 @@ export function createVoyageRerankProvider(config: VoyageRerankConfig): RerankPr
       if (!res.ok) {
         const detail = await errorDetail(res);
         if (res.status === 401 || res.status === 403) throw new Error(`Voyage rejected the API key (${res.status}) — check VOYAGE_API_KEY: ${detail}`);
-        if (res.status === 429 || res.status >= 500) throw new Error(`Voyage rerank unavailable (${res.status}) after ${maxRetries} retries: ${detail}`);
+        // 429 is a rate limit or a used-up quota, not a down service: say so, so it is actionable.
+        if (res.status === 429) throw new Error(`Voyage rerank rate limit or quota exceeded (429) after ${maxRetries} retries: ${detail}`);
+        if (res.status >= 500) throw new Error(`Voyage rerank unavailable (${res.status}) after ${maxRetries} retries: ${detail}`);
         throw new Error(`Voyage rerank error ${res.status}: ${detail}`);
       }
 

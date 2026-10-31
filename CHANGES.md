@@ -7,6 +7,83 @@ Newest entry at the top.
 
 ---
 
+## 2026-10-31 — Admin/dataset fixes, batch 2: stuck builds, upload limits, question limits, readiness (A2, A4, A5, A6)
+
+**Changed by:** Kiran
+**Files:** `backend/src/services/dataset-version.service.ts`, `backend/src/services/chunk.service.ts`,
+`backend/src/services/dataset-plan.ts`, `backend/src/utils/xlsx-guard.ts` (new),
+`backend/src/services/ask-quota.service.ts` (new), `backend/src/observability/provider-signal.ts` (new),
+`backend/src/observability/health.service.ts`, `backend/src/embedding/*`, `backend/src/rerank/providers/voyage-rerank.provider.ts`,
+`backend/src/app.ts`, `backend/src/config/env.ts`, `backend/src/routes/{dataset,chat,index}.routes.ts`,
+`backend/src/controllers/dataset.controller.ts`, `backend/src/graphql/resolvers/chat.resolver.ts`,
+`backend/src/db/migrations/013_dataset_outage_and_ask_quota.sql` (new), `backend/.env.example`,
+`frontend/src/components/admin/DatasetManager.tsx`, `frontend/src/lib/{api,chat-stream}.ts`,
+`frontend/src/hooks/useChat.ts`, `docs/OBSERVABILITY.md`, tests in `backend/src/scripts/`
+
+**Deploy note:** apply migration `013` (`npm run db:setup`, or run the file) before
+starting this code. It adds `dataset_versions.outage_since` and an index on
+`student_questions (student_id, created_at)`.
+
+- **A2 — a stuck build blocked the lecture forever.** A 429 counted as a passing
+  outage, so a used-up quota retried every 15 s for ever. Meanwhile every upload
+  got 409 and rollback was refused, and only database surgery could end it. Now:
+  - OpenAI's 429 `insufficient_quota` is `EmbeddingQuotaExceededError`. The
+    build fails on the first pass with "quota exhausted — raise the quota or
+    billing limit, then upload the file again".
+  - A plain 429 is `EmbeddingRateLimitedError`. It waits like an outage and the
+    note says "rate-limiting (429)".
+  - Waiting on an outage or rate limit is capped. After
+    `DATASET_OUTAGE_MAX_MINUTES` (default 360) without progress the build fails.
+    Any pass that embeds something restarts the clock.
+  - New admin action **Cancel update**: `POST /api/v1/datasets/cancel/:lectureId`,
+    with a button and confirmation in the dataset manager. It marks the
+    in-flight version FAILED through the batch-1 guarded path, so the live
+    dataset is never touched. A running embedding loop sees this within about
+    2 s and stops. Upload and rollback work again right away.
+  - Voyage reports 429 as "rate limit or quota exceeded", separate from 5xx.
+- **A4 — unbounded parsing of uploads on the shared thread.** Before
+  SheetJS sees the file:
+  - The zip is checked: declared sizes, entry count, and real inflation with a
+    hard output cap, so a zip that lies about its size is caught too.
+  - Only the dataset sheet is parsed, stopping one row past the limit.
+  - Only the first `DATASET_MAX_COLUMNS` columns are read.
+  - Limits: `DATASET_MAX_ROWS` 5000, `DATASET_MAX_UNCOMPRESSED_MB` 50,
+    `DATASET_MAX_ZIP_ENTRIES` 500, `DATASET_MAX_COLUMNS` 100. The real merged
+    lecture files have at most 545 rows and are under 1 MB uncompressed.
+  - Breaking a limit, or a file that isn't a zip, returns a clear 400.
+  - The possible-duplicate scan (it runs on every preview) was all-pairs. It
+    now uses hash maps plus the standard Jaccard prefix filter, with exactly the
+    same result: 5,000 × 5,000 rows in about 0.2 s.
+- **A5 — no limit on the LLM path, and every user shared one IP.** Express
+  `trust proxy` is now set from `TRUST_PROXY` (default 1 hop in production,
+  off otherwise), so `req.ip` is the client. Asking the tutor is now limited
+  per student on both GraphQL `askLectureAgent` and `/chat/ask-stream`:
+  - `CHAT_RATE_LIMIT_PER_MINUTE` (default 10), kept in memory per process.
+  - `CHAT_DAILY_QUESTION_LIMIT` (default 200), counted in `student_questions`,
+    so it holds across restarts and instances.
+  - Over the limit, GraphQL returns `RATE_LIMITED` and the stream returns HTTP
+    429 with `Retry-After` before it opens. The chat shows the message instead
+    of the generic "trouble connecting" reply.
+- **A6 — readiness reported a dead answer path as healthy.** `/health/ready`
+  now requires every component a question needs: database, pgvector,
+  embedding, reranker (a rerank failure fails the question), and Gemini when it
+  is the answer model. Any of them down gives 503. `degraded` (200) now only
+  means a check that verified configuration only. Hosted providers are still
+  never checked with a paid call. OpenAI embeddings are probed with a free
+  `GET /v1/models/{model}`. Voyage is judged from recent real calls: two
+  availability failures in a row within 5 minutes means unhealthy.
+- **Tests:**
+  - test-dataset-pipeline (78/78), new 25a–f: quota fails fast, the rate-limit
+    cap, progress restarts the clock, cancel mid-build, cancel with nothing in
+    flight, cancel a first build.
+  - New test-admin-hardening (16/16): zip bomb, lying zip, entries, rows,
+    columns, the 7 real datasets unchanged, the duplicate scan equal to the old
+    scan on 400 random cases, trust proxy, burst and daily limits on both entry
+    points, readiness rules.
+  - test-hosted-providers (35/35): OpenAI probe, quota vs rate limit.
+
+---
+
 ## 2026-10-31 — Admin/dataset fixes, batch 1: the live dataset can't be destroyed or replaced by a stale-model one (A1, A3)
 
 **Changed by:** Kiran

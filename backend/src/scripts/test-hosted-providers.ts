@@ -10,7 +10,7 @@ import { spawnSync } from 'child_process';
 import * as path from 'path';
 import { createOpenAiEmbeddingProvider, OPENAI_EMBEDDINGS_URL } from '../embedding/providers/openai-embedding.provider';
 import { createVoyageRerankProvider, VOYAGE_RERANK_URL } from '../rerank/providers/voyage-rerank.provider';
-import { EmbeddingUnavailableError } from '../embedding/embedding-errors';
+import { EmbeddingUnavailableError, EmbeddingRateLimitedError, EmbeddingQuotaExceededError } from '../embedding/embedding-errors';
 import { checkProviderHealth } from '../observability/health.service';
 
 interface Case { label: string; run: () => boolean | Promise<boolean> }
@@ -244,11 +244,29 @@ async function main() {
   } });
 
   // ── health ──────────────────────────────────────────────────────
-  cases.push({ label: 'health: hosted providers are healthy from config alone — no network call', run: async () => {
-    stub(() => { throw new Error('health must not call the network'); });
+  cases.push({ label: 'health: OpenAI is probed with ONE free GET /v1/models/{model} (never an embeddings call); Voyage from config alone, no call', run: async () => {
+    stub(() => json({ id: 'text-embedding-3-small', object: 'model' }));
     const a = await checkProviderHealth(openai());
+    const openaiCalls = sent.map(c => `${c.method ?? 'GET'} ${c.url}`);
+    stub(() => { throw new Error('health must not call the network'); });
     const b = await checkProviderHealth(voyage());
-    return a.status === 'healthy' && b.status === 'healthy' && sent.length === 0;
+    return a.status === 'healthy' && b.status === 'healthy' && sent.length === 0
+      && openaiCalls.length === 1 && openaiCalls[0] === 'GET https://api.openai.com/v1/models/text-embedding-3-small';
+  } });
+  cases.push({ label: 'health: OpenAI probe failing (bad key 401 / unreachable) → unhealthy', run: async () => {
+    stub(() => json({ error: { message: 'Incorrect API key', type: 'invalid_request_error', code: 'invalid_api_key' } }, 401));
+    const a = await checkProviderHealth(openai());
+    stub(() => { throw new TypeError('fetch failed'); });
+    const b = await checkProviderHealth(openai());
+    return a.status === 'unhealthy' && b.status === 'unhealthy' && b.errorCode === 'SERVICE_UNREACHABLE';
+  } });
+  cases.push({ label: 'openai: 429 insufficient_quota → EmbeddingQuotaExceededError (not an outage); 429 rate_limit_exceeded → EmbeddingRateLimitedError (an outage)', run: async () => {
+    stub(() => json({ error: { message: 'You exceeded your current quota, please check your plan and billing details.', type: 'insufficient_quota', code: 'insufficient_quota' } }, 429));
+    const q = await rejects(openai({ retry: { ...retry, maxRetries: 0 } }).embed('x', false));
+    stub(() => json({ error: { message: 'Rate limit reached for requests', type: 'requests', code: 'rate_limit_exceeded' } }, 429));
+    const r = await rejects(openai({ retry: { ...retry, maxRetries: 0 } }).embed('x', false));
+    return q instanceof EmbeddingQuotaExceededError && !(q instanceof EmbeddingUnavailableError) && /quota/.test(q.message)
+      && r instanceof EmbeddingRateLimitedError && r instanceof EmbeddingUnavailableError && /rate limit/.test(r.message);
   } });
   cases.push({ label: 'health: a hosted provider without its key is unhealthy NOT_CONFIGURED (still no call)', run: async () => {
     stub(() => { throw new Error('no network'); });

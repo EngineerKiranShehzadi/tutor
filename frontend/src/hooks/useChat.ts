@@ -3,7 +3,7 @@ import { useState, useCallback, useRef, useEffect, createElement, Fragment } fro
 import { useMutation, useLazyQuery } from '@apollo/client';
 import { ChatMessage, ChunkSource } from '@/types';
 import { v4 as uuidv4 } from 'uuid';
-import { streamAsk, StreamUnavailableError } from '@/lib/chat-stream';
+import { streamAsk, StreamUnavailableError, StreamRateLimitedError } from '@/lib/chat-stream';
 import { ChatSessionGuard } from '@/lib/chat-session-guard';
 import { useVoice } from './useVoice';
 import {
@@ -31,6 +31,15 @@ export interface ChatSession {
 }
 
 const FALLBACK_REPLY = "I'm having trouble connecting. Please try again in a moment.";
+
+// The server's own message when the per-student question limit was hit
+// (stream: HTTP 429; GraphQL: extensions.code RATE_LIMITED), else null.
+const rateLimitMessage = (err: unknown): string | null => {
+  if (err instanceof StreamRateLimitedError) return err.message;
+  const gql = (err as { graphQLErrors?: { message: string; extensions?: { code?: unknown } }[] })?.graphQLErrors;
+  const hit = gql?.find(e => e.extensions?.code === 'RATE_LIMITED');
+  return hit ? hit.message : null;
+};
 
 function entryToMessages(entry: HistoryEntry): ChatMessage[] {
   return [
@@ -353,6 +362,7 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
         return;
       } catch (err) {
         if (controller.signal.aborted || (err as Error).name === 'AbortError') return;
+        let errorReply = rateLimitMessage(err) ?? FALLBACK_REPLY;
 
         // Stream never started → the server did not answer, so the GraphQL
         // path is a safe fallback (it also handles access-token refresh).
@@ -374,6 +384,7 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
             return;
           } catch (gqlErr) {
             console.error('[CHAT] ❌ Error:', gqlErr);
+            errorReply = rateLimitMessage(gqlErr) ?? FALLBACK_REPLY;
           }
         } else {
           console.error('[CHAT] ❌ Stream error:', err);
@@ -381,10 +392,10 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
 
         optionsRef.current?.onAnswerError?.();
         if (liveMsgId) {
-          updateLive({ content: FALLBACK_REPLY, isStreaming: false });
+          updateLive({ content: errorReply, isStreaming: false });
         } else {
           setLocalMessages(prev => [...prev, {
-            id: uuidv4(), role: 'ai', type: 'text', content: FALLBACK_REPLY, timestamp: new Date(),
+            id: uuidv4(), role: 'ai', type: 'text', content: errorReply, timestamp: new Date(),
           }]);
         }
         setTyping(false);

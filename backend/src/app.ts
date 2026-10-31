@@ -13,6 +13,9 @@ import { logger } from './utils/logger';
 export const createApp = async (): Promise<Express> => {
   logger.info('[APP] Initialising Express application...');
   const app = express();
+  // Must come first: req.ip (rate limits, logs) depends on it.
+  app.set('trust proxy', env.TRUST_PROXY);
+  logger.info(`[APP] trust proxy = ${JSON.stringify(env.TRUST_PROXY)}`);
 
   // ── Security ──────────────────────────────────────────
   app.use(helmet());
@@ -30,8 +33,10 @@ export const createApp = async (): Promise<Express> => {
   app.use(morgan(env.NODE_ENV === 'production' ? 'combined' : 'dev'));
   logger.info(`[APP] Morgan HTTP logger active (format=${env.NODE_ENV === 'production' ? 'combined' : 'dev'})`);
 
-  // ── REST Routes (global limiter applies only here) ────
-  // /graphql has its own per-mutation rate limiting in the resolvers
+  // ── REST Routes (global per-IP limiter applies only here) ────
+  // /graphql is not behind it. Its expensive and sensitive mutations limit
+  // themselves: askLectureAgent per student (services/ask-quota.service.ts,
+  // shared with /chat/ask-stream), the auth mutations per IP (auth.resolver.ts).
   app.use('/api/v1', globalLimiter, routes);
   logger.info('[APP] REST routes mounted at /api/v1');
 

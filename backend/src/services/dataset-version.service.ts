@@ -4,7 +4,10 @@ import pool, { query } from '../config/database';
 import type { PoolClient } from 'pg';
 import { AppError } from '../middleware/errorHandler';
 import { logger } from '../utils/logger';
-import { generateEmbedding, generateEmbeddingsBatch, EMBEDDING_MODEL_VERSION, EmbeddingUnavailableError } from './embedding.service';
+import {
+  generateEmbedding, generateEmbeddingsBatch, EMBEDDING_MODEL_VERSION,
+  EmbeddingUnavailableError, EmbeddingRateLimitedError, EmbeddingQuotaExceededError,
+} from './embedding.service';
 import { env } from '../config/env';
 import { parseExcel, toFileRows, buildChunkPieces, CHUNKING_CONFIG_VERSION } from './chunk.service';
 import { getLectureById, updateLectureProgress, updateLectureStatus } from './lecture.service';
@@ -38,6 +41,9 @@ const CHUNK_BACKOFF_MS = 500;
 const CONSECUTIVE_FAILURE_LIMIT = 3;
 const INSERT_BATCH = 200;
 const SELF_CHECK_SAMPLE = 5;
+// How often a running build re-reads its own status, so an admin cancel (or
+// another process finishing it) stops the embedding loop.
+const STATUS_CHECK_MS = 2000;
 const EXPECTED_DIMS = 1024;
 
 // ── Types ───────────────────────────────────────────────────────────────
@@ -110,6 +116,10 @@ export interface FinishDeps {
   // Test hook: runs right before the activation transaction (used to simulate
   // another process activating the same version first).
   beforeActivate?: () => Promise<void>;
+  // Give up on a build after the embedding service has been down (or
+  // rate-limiting) this long with no progress. 0 = never. Default from env.
+  outageMaxMs?: number;
+  statusCheckMs?: number;
 }
 
 export interface FinishResult {
@@ -534,6 +544,9 @@ const failVersion = async (v: VersionRow, message: string): Promise<FinishResult
   return { outcome: 'FAILED', error: message };
 };
 
+const fmtDuration = (ms: number): string =>
+  ms >= 3_600_000 ? `${+(ms / 3_600_000).toFixed(1)} h` : ms >= 60_000 ? `${Math.round(ms / 60_000)} min` : ms >= 1000 ? `${Math.round(ms / 1000)} s` : `${ms} ms`;
+
 /** Fails an in-flight version by id (no-op for a live or finished one). */
 export async function failDatasetVersion(versionId: number, message: string): Promise<FinishResult> {
   const { rows } = await query<VersionRow>(
@@ -669,6 +682,8 @@ export async function finishDatasetVersion(versionId: number, deps: FinishDeps =
     const chunkRetries = deps.chunkRetries ?? CHUNK_RETRIES;
     const backoff = deps.chunkBackoffMs ?? CHUNK_BACKOFF_MS;
     const failLimit = deps.consecutiveFailureLimit ?? CONSECUTIVE_FAILURE_LIMIT;
+    const outageMaxMs = deps.outageMaxMs ?? env.DATASET.OUTAGE_MAX_MS;
+    const statusCheckMs = deps.statusCheckMs ?? STATUS_CHECK_MS;
 
     const { rows } = await query<VersionRow>(
       'SELECT id, lecture_id, version_no, status, attempts, stats FROM dataset_versions WHERE id = $1', [versionId]
@@ -689,7 +704,27 @@ export async function finishDatasetVersion(versionId: number, deps: FinishDeps =
       // Failure kinds seen in this pass. An outage is "the embedding service was
       // unreachable and nothing else went wrong" — however few chunks are left.
       let sawUnavailable = false;
+      let sawRateLimited = false;
       let sawOtherFailure = false;
+      // Quota/billing exhausted: not an outage, the build fails right away.
+      let quotaError = null as string | null; // set inside callbacks; keep TS from narrowing it to null
+      const recordFailure = (err: unknown): void => {
+        if (err instanceof EmbeddingQuotaExceededError) quotaError = err.message;
+        else if (err instanceof EmbeddingUnavailableError) {
+          sawUnavailable = true;
+          if (err instanceof EmbeddingRateLimitedError) sawRateLimited = true;
+        } else sawOtherFailure = true;
+      };
+      // Cheap periodic re-read of the version's status: stops the loop once the
+      // version was cancelled (or finished by another process).
+      let lastStatusCheck = Date.now();
+      const stopRequested = async (): Promise<boolean> => {
+        if (Date.now() - lastStatusCheck < statusCheckMs) return false;
+        lastStatusCheck = Date.now();
+        const { rows: cur } = await query<{ status: string }>('SELECT status FROM dataset_versions WHERE id = $1', [versionId]);
+        return cur[0]?.status !== 'BUILDING';
+      };
+      let stopped = false;
       type Pending = { id: number; chunk_text: string };
       // One chunk with its own retries; records the failure kind on the pass.
       const embedOne = async (chunk: Pending): Promise<boolean> => {
@@ -705,11 +740,12 @@ export async function finishDatasetVersion(versionId: number, deps: FinishDeps =
             return true;
           } catch (err) {
             lastErr = err;
+            if (err instanceof EmbeddingQuotaExceededError) break; // retrying cannot help
             if (t < chunkRetries) await sleep(backoff * (t + 1));
           }
         }
         logger.error(`[DATASET] ❌ Could not embed chunk id=${chunk.id}: ${(lastErr as Error)?.message}`);
-        if (lastErr instanceof EmbeddingUnavailableError) sawUnavailable = true; else sawOtherFailure = true;
+        recordFailure(lastErr);
         return false;
       };
 
@@ -736,12 +772,13 @@ export async function finishDatasetVersion(versionId: number, deps: FinishDeps =
           }
         }
         logger.error(`[DATASET] ❌ Embedding service unavailable for a batch of ${batch.length}: ${(lastErr as Error)?.message}`);
-        sawUnavailable = true;
+        recordFailure(lastErr);
         return false;
       };
 
       const batchSize = embedBatch ? batchSizeCfg : 1;
-      for (let i = 0; i < pending.length && consecutive < failLimit; i += batchSize) {
+      for (let i = 0; i < pending.length && consecutive < failLimit && !quotaError; i += batchSize) {
+        if (await stopRequested()) { stopped = true; break; }
         const batch = pending.slice(i, i + batchSize);
         if (!embedBatch) {
           if (await embedOne(batch[0])) { consecutive = 0; done++; await updateLectureProgress(v.lecture_id, Math.min(total, total - pending.length + done)); }
@@ -753,6 +790,7 @@ export async function finishDatasetVersion(versionId: number, deps: FinishDeps =
           okCount = (await embedBatchOnce(batch)) ? batch.length : 0;
           if (okCount === 0) { consecutive += batch.length; continue; }
         } catch (err) {
+          if (err instanceof EmbeddingQuotaExceededError) { recordFailure(err); break; }
           logger.warn(`[DATASET] Batch of ${batch.length} failed (${(err as Error).message}); retrying chunk by chunk`);
           for (const chunk of batch) {
             if (await embedOne(chunk)) { okCount++; consecutive = 0; } else consecutive++;
@@ -764,21 +802,47 @@ export async function finishDatasetVersion(versionId: number, deps: FinishDeps =
         if (okCount > 0) await updateLectureProgress(v.lecture_id, Math.min(total, total - pending.length + done));
       }
 
+      if (stopped) {
+        logger.warn(`[DATASET] ⏹️  Lecture #${v.lecture_id} version #${v.version_no}: no longer BUILDING (cancelled or finished elsewhere) — stopped embedding`);
+        return { outcome: 'SKIPPED' };
+      }
+
       const remaining = (await pendingChunks(versionId)).length;
       const outage = sawUnavailable && !sawOtherFailure;
       if (remaining > 0) {
+        if (quotaError) {
+          return failVersion(v,
+            `Embedding provider quota exhausted — ${remaining} chunk(s) could not be embedded. ` +
+            `Raise the provider's quota or billing limit, then upload the file again. Details: ${quotaError}`);
+        }
         let note: string;
         if (outage) {
-          // The embedding service is down, which is not the dataset's fault: keep
-          // the build alive and keep retrying for as long as it takes. Attempts are
-          // NOT consumed, so the version can never be failed by an outage — it
-          // finishes by itself once the service is back, no backend restart needed.
-          note = `Embedding service unavailable — ${remaining} chunk(s) waiting; retrying automatically every ${Math.round(retryDelay / 1000)}s`;
-          await query('UPDATE dataset_versions SET last_error = $2, updated_at = NOW() WHERE id = $1', [versionId, note]);
+          // The embedding service is down (or throttling us), which is not the
+          // dataset's fault: keep the build alive and retry. Attempts are NOT
+          // consumed; the build finishes by itself once the service is back, no
+          // restart needed. It is given up only after outageMaxMs with no
+          // progress, so a long outage cannot hold the lecture's update slot
+          // (and rollback) forever. An admin can also cancel it at any time.
+          const { rows: o } = await query<{ outage_ms: string | null }>(
+            `UPDATE dataset_versions
+             SET outage_since = CASE WHEN $2 THEN NOW() ELSE COALESCE(outage_since, NOW()) END, updated_at = NOW()
+             WHERE id = $1
+             RETURNING EXTRACT(EPOCH FROM (NOW() - outage_since)) * 1000 AS outage_ms`,
+            [versionId, done > 0]
+          );
+          const outageMs = Number(o[0]?.outage_ms ?? 0);
+          const cause = sawRateLimited ? 'Embedding provider is rate-limiting requests (429)' : 'Embedding service unavailable';
+          if (outageMaxMs > 0 && outageMs >= outageMaxMs) {
+            return failVersion(v,
+              `${cause} for over ${fmtDuration(outageMaxMs)} — gave up; ${remaining} chunk(s) not embedded. Upload the file again once the service is back.`);
+          }
+          note = `${cause} — ${remaining} chunk(s) waiting; retrying automatically every ${Math.round(retryDelay / 1000)}s` +
+            (outageMaxMs > 0 ? ` (gives up after ${fmtDuration(outageMaxMs)} without progress)` : '');
+          await query('UPDATE dataset_versions SET last_error = $2 WHERE id = $1', [versionId, note]);
         } else {
           const attempts = v.attempts + 1;
           note = `${remaining} chunk(s) could not be embedded (attempt ${attempts}/${maxAttempts})`;
-          await query('UPDATE dataset_versions SET attempts = $2, last_error = $3, updated_at = NOW() WHERE id = $1', [versionId, attempts, note]);
+          await query('UPDATE dataset_versions SET attempts = $2, last_error = $3, outage_since = NULL, updated_at = NOW() WHERE id = $1', [versionId, attempts, note]);
           if (attempts >= maxAttempts) {
             return failVersion(v, `Embedding did not complete after ${attempts} attempts; ${remaining} chunk(s) have no embedding`);
           }
@@ -796,7 +860,7 @@ export async function finishDatasetVersion(versionId: number, deps: FinishDeps =
       }
 
       // Past the embedding step: any recorded outage note no longer applies.
-      await query('UPDATE dataset_versions SET last_error = NULL WHERE id = $1', [versionId]);
+      await query('UPDATE dataset_versions SET last_error = NULL, outage_since = NULL WHERE id = $1', [versionId]);
 
       const problems = await validateVersion(versionId);
       if (problems.length > 0) return failVersion(v, `Validation failed: ${problems.join('; ')}`);
@@ -827,6 +891,25 @@ export async function finishDatasetVersion(versionId: number, deps: FinishDeps =
   } finally {
     runningVersions.delete(versionId);
   }
+}
+
+// Admin action: stop the lecture's in-flight update. The version is marked
+// FAILED (its half-built rows are cleaned up), which frees the lecture for a new
+// upload or a rollback. The live dataset is never touched; a running embedding
+// loop notices within a few seconds and stops.
+export async function cancelDatasetBuild(lectureId: number): Promise<{ versionId: number; versionNo: number }> {
+  const { rows } = await query<{ id: number; version_no: number }>(
+    `SELECT id, version_no FROM dataset_versions
+     WHERE lecture_id = $1 AND status IN ('BUILDING','READY_TO_ACTIVATE') ORDER BY id DESC LIMIT 1`,
+    [lectureId]
+  );
+  if (!rows[0]) throw new AppError('No dataset update is in progress for this lecture.', 404);
+  const r = await failDatasetVersion(rows[0].id, 'Cancelled by an admin.');
+  if (r.outcome !== 'FAILED') {
+    throw new AppError('The update finished before it could be cancelled — nothing was changed.', 409);
+  }
+  logger.warn(`[DATASET] ⏹️  Lecture #${lectureId}: update version #${rows[0].version_no} (id=${rows[0].id}) cancelled by an admin`);
+  return { versionId: rows[0].id, versionNo: rows[0].version_no };
 }
 
 // Server start: continue any version that was mid-build when the process
@@ -947,7 +1030,7 @@ export async function rollbackDataset(lectureId: number): Promise<{ activeVersio
     const { rows: inflight } = await client.query(
       `SELECT id FROM dataset_versions WHERE lecture_id = $1 AND status IN ('BUILDING','READY_TO_ACTIVATE')`, [lectureId]
     );
-    if (inflight.length > 0) throw new AppError('A dataset update is still in progress for this lecture — wait for it to finish before rolling back.', 409);
+    if (inflight.length > 0) throw new AppError('A dataset update is still in progress for this lecture — wait for it to finish, or cancel it, before rolling back.', 409);
 
     const current = lec[0].active_version_id;
     const { rows: prev } = await client.query<{ id: number }>(

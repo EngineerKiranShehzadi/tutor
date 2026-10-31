@@ -58,6 +58,8 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
   const [versionsLoaded, setVersionsLoaded] = useState(false);
   const [rollbackOpen, setRollbackOpen] = useState(false);
   const [rollingBack, setRollingBack] = useState(false);
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [exporting, setExporting] = useState(false);
   const lastSeenInFlight = useRef<number | null>(null);
 
@@ -92,7 +94,7 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
     if (!finished) return;
     lastSeenInFlight.current = null;
     if (finished.status === 'ACTIVE') setNotice(`Version ${finished.version_no} is now live.`);
-    else if (finished.status === 'FAILED') setError(`Version ${finished.version_no} failed: ${finished.last_error ?? 'unknown error'}. The previous dataset is still live.`);
+    else if (finished.status === 'FAILED') setError(`Version ${finished.version_no} ${/^Cancelled/.test(finished.last_error ?? '') ? 'was cancelled' : `failed: ${finished.last_error ?? 'unknown error'}`}. The previous dataset is still live.`);
     onChanged();
   }, [inFlight, versions]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -175,6 +177,24 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
       setRollbackOpen(false);
     } finally {
       setRollingBack(false);
+    }
+  };
+
+  const doCancel = async () => {
+    setCancelling(true); setError(''); setNotice('');
+    try {
+      const res = await datasetApi.cancel(lectureId);
+      lastSeenInFlight.current = null;   // the notice below replaces the "finished" message
+      setNotice(res.data.message);
+      setCancelOpen(false);
+      await loadVersions();
+      onChanged();
+    } catch (err) {
+      setError(apiMessage(err, 'Cancel failed.'));
+      setCancelOpen(false);
+      await loadVersions();
+    } finally {
+      setCancelling(false);
     }
   };
 
@@ -364,7 +384,17 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
                 <i className={`fas ${waiting ? 'fa-pause' : 'fa-brain fa-spin'} mr-2 ${waiting ? 'text-amber-600' : 'text-violet-600'}`} />
                 Building version {inFlight.version_no} {inFlight.status === 'READY_TO_ACTIVATE' ? '· publishing…' : ''}
               </span>
-              <span className="text-xl font-black tabular-nums text-slate-800" data-testid="dataset-progress-pct">{pct}%</span>
+              <span className="flex items-center gap-3">
+                <span className="text-xl font-black tabular-nums text-slate-800" data-testid="dataset-progress-pct">{pct}%</span>
+                <button
+                  onClick={() => setCancelOpen(true)}
+                  disabled={cancelling}
+                  data-testid="cancel-build-btn"
+                  className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-300 bg-white rounded-lg text-[13px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                >
+                  <i className="fas fa-stop" /> Cancel update
+                </button>
+              </span>
             </div>
             <div className="w-full bg-white/80 rounded-full h-2.5 overflow-hidden border border-white">
               <div className={`h-2.5 rounded-full transition-all duration-500 ${waiting ? 'bg-amber-400' : 'bg-violet-500'}`} style={{ width: `${pct}%` }} />
@@ -439,6 +469,26 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
           )}
         </div>
       </div>
+
+      {/* Cancel confirmation */}
+      {cancelOpen && inFlight && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4" role="dialog" aria-modal="true" data-testid="cancel-dialog">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
+            <h3 className="text-lg font-bold text-slate-900 mb-2">Cancel the update to version {inFlight.version_no}?</h3>
+            <ul className="text-[14px] text-slate-600 list-disc pl-5 space-y-1.5 mb-5">
+              <li>The new version is stopped and marked as failed; its half-built data is removed.</li>
+              <li>{active ? <>Students keep getting answers from <b>v{active.version_no}</b>, unchanged.</> : <>This lecture has no live dataset yet, so it stays unavailable until you upload again.</>}</li>
+              <li>You can upload a file or switch versions again right away.</li>
+            </ul>
+            <div className="flex justify-end gap-2.5">
+              <button onClick={() => setCancelOpen(false)} className="px-4 py-2 border border-slate-200 rounded-xl text-[15px] font-semibold text-slate-600 hover:bg-slate-50" data-testid="cancel-dismiss">Keep building</button>
+              <button onClick={doCancel} disabled={cancelling} className="px-4 py-2 bg-red-600 text-white rounded-xl text-[15px] font-semibold hover:bg-red-700 disabled:opacity-60" data-testid="cancel-confirm">
+                {cancelling ? 'Cancelling…' : 'Cancel update'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Rollback confirmation */}
       {rollbackOpen && active && previous && (

@@ -82,6 +82,18 @@ const parseLlmPricing = (raw: string): Record<string, LlmPrice> => {
 export const env = {
   NODE_ENV:      optional('NODE_ENV', 'development'),
   PORT:          parseInt(optional('PORT', '5000'), 10),
+  // Express 'trust proxy'. Behind a load balancer / reverse proxy req.ip is the
+  // proxy's address unless this is set, so every IP-based limit would put all
+  // users in one bucket. Number = proxy hops to trust; 'false' = none; any
+  // other value is passed to Express as-is (e.g. 'loopback'). Default: 1 hop in
+  // production, none otherwise. Do not trust hops you don't have — clients
+  // could then pick their own IP via X-Forwarded-For.
+  TRUST_PROXY: ((): boolean | number | string => {
+    const raw = optional('TRUST_PROXY', optional('NODE_ENV', 'development') === 'production' ? '1' : 'false').trim();
+    if (raw === 'false' || raw === '0' || raw === '') return false;
+    if (raw === 'true') return true;
+    return /^\d+$/.test(raw) ? parseInt(raw, 10) : raw;
+  })(),
   FRONTEND_URL:  optional('FRONTEND_URL', 'http://localhost:3000'),
   // Domain attribute for the auth cookies. Leave blank when the frontend and the
   // API share a host (cookies ignore ports, so localhost:3000/5000 is fine). Set
@@ -108,6 +120,15 @@ export const env = {
     // local CPU server, lecture 4 (329 chunks): per-chunk 111 s, batch 8 128 s,
     // batch 32 158 s; vectors identical (min cosine 0.9999999999991).
     EMBED_BATCH: Math.max(1, parseInt(optional('DATASET_EMBED_BATCH', '1'), 10) || 1),
+    // A build waiting on an embedding outage / rate limit is failed after this
+    // long without progress (0 = wait forever). Admins can also cancel it.
+    // Upload limits, checked before the spreadsheet is parsed (A4). Real lecture
+    // datasets: ≤ 545 rows, 10 columns, < 1 MB uncompressed, ≤ 17 zip entries.
+    MAX_ROWS:               Math.max(1, parseInt(optional('DATASET_MAX_ROWS', '5000'), 10) || 5000),
+    MAX_COLUMNS:            Math.max(1, parseInt(optional('DATASET_MAX_COLUMNS', '100'), 10) || 100),
+    MAX_UNCOMPRESSED_BYTES: Math.max(1, parseInt(optional('DATASET_MAX_UNCOMPRESSED_MB', '50'), 10) || 50) * 1024 * 1024,
+    MAX_ZIP_ENTRIES:        Math.max(1, parseInt(optional('DATASET_MAX_ZIP_ENTRIES', '500'), 10) || 500),
+    OUTAGE_MAX_MS: (() => { const m = parseInt(optional('DATASET_OUTAGE_MAX_MINUTES', '360'), 10); return Number.isFinite(m) && m >= 0 ? m * 60_000 : 360 * 60_000; })(),
   },
 
   DB: {
@@ -401,6 +422,10 @@ export const env = {
     // How many prior turns of the session are passed to the router, rewriter
     // and answer prompt as follow-up context. 0 disables history.
     HISTORY_TURNS: nonNegativeInt('CHAT_HISTORY_TURNS', 10),
+    // Per-student limits on asking the tutor (both GraphQL and /chat/ask-stream).
+    // 0 disables. See services/ask-quota.service.ts.
+    RATE_LIMIT_PER_MINUTE: nonNegativeInt('CHAT_RATE_LIMIT_PER_MINUTE', 10),
+    DAILY_QUESTION_LIMIT:  nonNegativeInt('CHAT_DAILY_QUESTION_LIMIT', 200),
   },
 
   INPUT_GUARDRAIL: {

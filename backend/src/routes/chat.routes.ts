@@ -3,6 +3,7 @@ import { protect } from '../middleware/auth.middleware';
 import { AuthenticatedRequest, QnaChunk } from '../types';
 import { AppError } from '../middleware/errorHandler';
 import { askLectureAgent } from '../services/chat.service';
+import { enforceAskQuota, AskQuotaExceededError } from '../services/ask-quota.service';
 import { logger } from '../utils/logger';
 import { logSafeText } from '../observability/sanitize';
 
@@ -44,6 +45,19 @@ router.post('/ask-stream', protect, async (req: AuthenticatedRequest, res: Respo
     typeof question !== 'string' || !question.trim() || question.length > MAX_QUESTION_CHARS
   ) {
     res.status(400).json({ success: false, message: 'Invalid lectureId, sessionId or question' });
+    return;
+  }
+
+  // Before the stream opens, so a refusal is a plain 429 the client can show.
+  try {
+    await enforceAskQuota(student.id);
+  } catch (err) {
+    if (err instanceof AskQuotaExceededError) {
+      res.status(429).set('Retry-After', String(err.retryAfterSec)).json({ success: false, message: err.message });
+      return;
+    }
+    logger.error('[CHAT-STREAM] Quota check failed', err);
+    res.status(500).json({ success: false, message: 'Something went wrong. Please try again.' });
     return;
   }
 

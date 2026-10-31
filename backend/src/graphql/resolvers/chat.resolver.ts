@@ -16,6 +16,7 @@ import {
   renameChatSession,
 } from '../../services/chat.service';
 import { AppError } from '../../middleware/errorHandler';
+import { enforceAskQuota, AskQuotaExceededError } from '../../services/ask-quota.service';
 import { logger } from '../../utils/logger';
 import { logSafeText } from '../../observability/sanitize';
 
@@ -37,6 +38,9 @@ function chunkToGql(c: QnaChunk) {
 
 function wrap(fn: () => Promise<unknown>) {
   return fn().catch((err: unknown) => {
+    if (err instanceof AskQuotaExceededError) {
+      throw new GraphQLError(err.message, { extensions: { code: 'RATE_LIMITED', status: 429, retryAfterSec: err.retryAfterSec } });
+    }
     if (err instanceof AppError) {
       throw new GraphQLError(err.message, { extensions: { code: 'BAD_REQUEST', status: err.statusCode } });
     }
@@ -175,6 +179,7 @@ export const chatResolvers = {
         if (!input.question.trim()) {
           throw new GraphQLError('Question cannot be empty', { extensions: { code: 'BAD_REQUEST' } });
         }
+        await enforceAskQuota(student.id);
         logger.info(`[CHAT] "${student.email}" → session #${input.sessionId}: "${logSafeText(input.question, 80)}"`);
         const { answer, sources } = await askLectureAgent({
           studentId: student.id,

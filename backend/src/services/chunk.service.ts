@@ -1,4 +1,6 @@
 import * as XLSX from 'xlsx';
+import { env } from '../config/env';
+import { assertSafeXlsx } from '../utils/xlsx-guard';
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 import { logger } from '../utils/logger';
 import { AppError } from '../middleware/errorHandler';
@@ -140,13 +142,37 @@ function normaliseRow(r: Record<string, unknown>): RawRow {
   return n as RawRow;
 }
 
-// Parses the xlsx buffer and returns validated rows
+// Parses the xlsx buffer and returns validated rows. The work is bounded before
+// it starts (it runs on the shared request thread, dry runs included): the zip
+// is checked against the decompressed-size limit, only the dataset sheet is
+// parsed, and parsing stops one row past the row limit.
 export function parseExcel(buffer: Buffer): RawRow[] {
-  const workbook = XLSX.read(buffer, { type: 'buffer' });
+  const lim = env.DATASET;
+  assertSafeXlsx(buffer, { maxUncompressedBytes: lim.MAX_UNCOMPRESSED_BYTES, maxEntries: lim.MAX_ZIP_ENTRIES });
+
+  let names: string[];
+  try {
+    names = XLSX.read(buffer, { type: 'buffer', bookSheets: true }).SheetNames;
+  } catch {
+    throw new AppError('The file is not a valid .xlsx workbook.', 400);
+  }
+  if (names.length === 0) throw new AppError('Excel file is empty', 400);
   // The audit workbooks carry several sheets; the dataset is on Final_Dataset.
-  const sheetName = workbook.SheetNames.find(n => n.trim().toLowerCase() === 'final_dataset') ?? workbook.SheetNames[0];
-  const sheet    = workbook.Sheets[sheetName];
-  const rawRows  = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
+  const sheetName = names.find(n => n.trim().toLowerCase() === 'final_dataset') ?? names[0];
+  // Header + MAX_ROWS rows + one more, to tell "exactly at the limit" from "over it".
+  const workbook = XLSX.read(buffer, { type: 'buffer', sheets: [sheetName], sheetRows: lim.MAX_ROWS + 2, cellHTML: false });
+  const sheet = workbook.Sheets[sheetName];
+  if (!sheet || !sheet['!ref']) throw new AppError('Excel file is empty', 400);
+
+  // Only the first MAX_COLUMNS columns are read; the importer uses ten at most.
+  // (A stray cell far to the right would otherwise make every row that wide.)
+  const ref = XLSX.utils.decode_range(sheet['!ref']);
+  ref.e.c = Math.min(ref.e.c, ref.s.c + lim.MAX_COLUMNS - 1);
+  const rawRows  = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '', range: ref });
+  // Blank rows are not counted, so empty formatted rows below the data never trip this.
+  if (rawRows.length > lim.MAX_ROWS) {
+    throw new AppError(`The sheet "${sheetName}" has more than ${lim.MAX_ROWS.toLocaleString()} rows of data (the limit). Split it into smaller files.`, 400);
+  }
 
   if (rawRows.length === 0) throw new AppError('Excel file is empty', 400);
 

@@ -12,14 +12,18 @@ export interface EmbeddingProvider {
   readonly dimensions: number;
   // Where a readiness probe should check reachability, for providers that sit
   // behind an endpoint of their own (the local server). Omitted for hosted
-  // providers: their readiness is the assertConfigured() check, so a probe
-  // never spends tokens.
+  // providers: their readiness is probe() when they have one, else the
+  // assertConfigured() check, so a probe never spends tokens.
   readonly healthUrl?: string;
   // Throws a clear error if the provider cannot work as configured (missing
   // API key, unusable settings). Called once at startup, and again before the
   // first request so scripts fail with the same message. Never makes a network
   // call.
   assertConfigured(): void;
+  // Optional readiness probe for hosted providers: a call that costs nothing
+  // (no tokens) but proves the key works and the API is reachable. Throws on
+  // failure, with the same error classes as embed().
+  probe?(): Promise<void>;
   // Embeds one text. isQuery must be true for student questions — retrieval
   // models that distinguish queries from indexed passages (BGE) use it.
   // Throws EmbeddingUnavailableError when the backend is down.

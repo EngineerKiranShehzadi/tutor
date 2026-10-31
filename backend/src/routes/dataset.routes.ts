@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { protect, requireRole } from '../middleware/auth.middleware';
-import { uploadDataset, getDatasetVersions, rollbackDatasetVersion, exportDataset } from '../controllers/dataset.controller';
+import { uploadDataset, getDatasetVersions, rollbackDatasetVersion, exportDataset, cancelDatasetUpdate } from '../controllers/dataset.controller';
 
 const router = Router();
 
@@ -36,6 +36,9 @@ router.get('/versions/:lectureId', protect, requireRole('ADMIN'), getDatasetVers
 
 // POST /api/v1/datasets/rollback/:lectureId — Admin only (re-activates the previous version)
 router.post('/rollback/:lectureId', protect, requireRole('ADMIN'), rollbackDatasetVersion);
+
+// POST /api/v1/datasets/cancel/:lectureId  — Admin only (stops a stuck/unwanted in-flight update)
+router.post('/cancel/:lectureId', protect, requireRole('ADMIN'), cancelDatasetUpdate);
 
 // GET /api/v1/datasets/export/:lectureId    — Admin only (active dataset incl. qa_id column)
 router.get('/export/:lectureId', protect, requireRole('ADMIN'), exportDataset);
