@@ -493,21 +493,20 @@ export const signupUser = async (
   const existingUser = existing.rows[0];
   if (existingUser) {
     // Answer exactly as for a fresh signup so this form cannot be used to find
-    // out which addresses are registered; the real reason stays in the log. The
-    // stored password is never touched (overwriting it would let a stranger
-    // pre-set the password on someone else's unverified account).
-    logger.warn(`[AUTH] signupUser: email already registered — "${normalizedEmail}" (no new account created)`);
-    try {
-      if (existingUser.is_verified) {
-        if (env.EMAIL.USER && env.EMAIL.PASSWORD) await sendAccountExistsNotice(existingUser.email, existingUser.name);
-      } else {
-        // Never finished verifying: just give them a fresh code.
-        const otp = await issueEmailVerificationOtp(existingUser.id);
-        if (env.NODE_ENV !== 'production') logger.info(`[DEV] Signup (re-signup) OTP for ${existingUser.email}: ${otp}`);
-        if (env.EMAIL.USER && env.EMAIL.PASSWORD) await sendSignupVerificationOtp(existingUser.email, existingUser.name, otp);
+    // out which addresses are registered; the real reason stays in the log.
+    // Nothing about the stored account changes, and no code is issued even if it
+    // is still unverified: its password was chosen by whoever created it, which
+    // may not be the owner of this inbox, so verifying it from here could hand
+    // that stranger a verified account. The owner gets a notice pointing them to
+    // log in or reset the password (reset proves inbox ownership and replaces
+    // the password).
+    logger.warn(`[AUTH] signupUser: email already registered — "${normalizedEmail}" (no account created, no code issued)`);
+    if (env.EMAIL.USER && env.EMAIL.PASSWORD) {
+      try {
+        await sendAccountExistsNotice(existingUser.email, existingUser.name);
+      } catch (noticeErr) {
+        logger.warn(`[AUTH] signupUser: account-exists notice failed for "${normalizedEmail}"`, noticeErr);
       }
-    } catch (followUpErr) {
-      logger.warn(`[AUTH] signupUser: follow-up email failed for "${normalizedEmail}"`, followUpErr);
     }
     return { email: normalizedEmail, message: SIGNUP_CODE_SENT };
   }

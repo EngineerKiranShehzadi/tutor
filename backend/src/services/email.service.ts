@@ -137,11 +137,11 @@ export const sendAccountExistsNotice = async (to: string, userName: string): Pro
     from:    FROM,
     to,
     subject: 'You already have an AskAITutor account',
-    text:    `Hi ${userName}, someone tried to sign up for AskAITutor with this email address, but you already have an account. Log in, or use "Forgot password" if you cannot remember your password. If this was not you, you can ignore this email.`,
+    text:    `Hi ${userName}, someone tried to sign up for AskAITutor with this email address, but an account with it already exists. Log in to continue (if you never finished verifying, you will be sent a code), or use "Forgot password" to set a new password. If this was not you, you can ignore this email.`,
     html:    `<div style="font-family:Arial,sans-serif;font-size:14px;color:#1e293b">
       <p>Hi ${userName.replace(/[<>&"]/g, '')},</p>
-      <p>Someone tried to sign up for AskAITutor with this email address, but you already have an account.</p>
-      <p>Log in, or use <b>Forgot password</b> if you cannot remember your password. If this was not you, you can ignore this email.</p>
+      <p>Someone tried to sign up for AskAITutor with this email address, but an account with it already exists.</p>
+      <p>Log in to continue (if you never finished verifying, you will be sent a code), or use <b>Forgot password</b> to set a new password. If this was not you, you can ignore this email.</p>
     </div>`,
   });
 
