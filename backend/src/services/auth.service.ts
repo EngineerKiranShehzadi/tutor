@@ -715,35 +715,75 @@ export const verifySignupOtp = async (
 };
 
 // ── GOOGLE OAUTH ──────────────────────────────────────
+// The caller has already checked that Google verified the address.
+//  - google_id already linked          → sign in.
+//  - no account with this email        → create one (verified).
+//  - unverified local account          → nobody has proven owning that inbox,
+//    and its password may be a stranger's; Google just proved it, so the
+//    account is claimed: linked, verified, password removed, sessions revoked.
+//  - verified local account, or one linked to a different Google account →
+//    refused. Attaching a Google identity to an account its owner has already
+//    secured needs an explicit, authenticated linking step, never a match on
+//    the email alone.
+type GoogleOAuthResult =
+  | { status: 'AUTHENTICATED'; user: Omit<User, 'password_hash'>; accessToken: string; refreshToken: string }
+  | { status: 'ACCOUNT_EXISTS' };
+
 export const googleOAuthUser = async (profile: {
   googleId: string;
   name: string;
   email: string;
   avatarUrl?: string;
-}) => {
-  const { googleId, name, email, avatarUrl } = profile;
+}): Promise<GoogleOAuthResult> => {
+  const { googleId, name, avatarUrl } = profile;
+  const email = profile.email.trim().toLowerCase();
   logger.info(`[AUTH] googleOAuthUser: email="${email}" googleId="${googleId}"`);
 
-  const { rows } = await query<User>(
-    'SELECT * FROM users WHERE google_id = $1 OR email = $2 LIMIT 1',
-    [googleId, email.toLowerCase()]
-  );
-  let user = rows[0];
+  let user: User | undefined = (await query<User>('SELECT * FROM users WHERE google_id = $1', [googleId])).rows[0];
 
   if (user) {
-    if (!user.google_id) {
-      await query('UPDATE users SET google_id = $1, is_verified = TRUE WHERE id = $2', [googleId, user.id]);
-    }
-    logger.info(`[AUTH] googleOAuthUser: existing user "${email}" (id=${user.id})`);
+    logger.info(`[AUTH] googleOAuthUser: existing linked user "${email}" (id=${user.id})`);
   } else {
-    const { rows: newRows } = await query<User>(
-      `INSERT INTO users (name, email, google_id, avatar_url, is_verified)
-       VALUES ($1, $2, $3, $4, TRUE)
-       RETURNING *`,
-      [name.trim(), email.toLowerCase(), googleId, avatarUrl ?? null]
-    );
-    user = newRows[0];
-    logger.info(`[AUTH] googleOAuthUser: new user created "${email}" (id=${user.id})`);
+    const byEmail = (await query<User>('SELECT * FROM users WHERE email = $1', [email])).rows[0];
+    if (byEmail && (byEmail.is_verified || byEmail.google_id)) {
+      logger.warn(`[AUTH] googleOAuthUser: refused to auto-link Google account to existing ${byEmail.google_id ? 'Google-linked' : 'verified'} account "${email}" (id=${byEmail.id})`);
+      return { status: 'ACCOUNT_EXISTS' };
+    }
+    if (byEmail) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const { rows: claimed } = await client.query<User>(
+          `UPDATE users SET google_id = $1, is_verified = TRUE, password_hash = NULL
+           WHERE id = $2 AND is_verified = FALSE AND google_id IS NULL
+           RETURNING *`,
+          [googleId, byEmail.id]
+        );
+        if (!claimed[0]) {
+          await client.query('ROLLBACK');
+          return { status: 'ACCOUNT_EXISTS' };
+        }
+        await client.query('DELETE FROM refresh_tokens WHERE user_id = $1', [byEmail.id]);
+        await client.query('UPDATE email_verification_tokens SET used = TRUE WHERE user_id = $1 AND used = FALSE', [byEmail.id]);
+        await client.query('COMMIT');
+        user = claimed[0];
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
+      logger.info(`[AUTH] googleOAuthUser: unverified account "${email}" claimed via Google (id=${user.id}); its password was removed`);
+    } else {
+      const { rows: newRows } = await query<User>(
+        `INSERT INTO users (name, email, google_id, avatar_url, is_verified)
+         VALUES ($1, $2, $3, $4, TRUE)
+         RETURNING *`,
+        [name.trim(), email, googleId, avatarUrl ?? null]
+      );
+      user = newRows[0];
+      logger.info(`[AUTH] googleOAuthUser: new user created "${email}" (id=${user.id})`);
+    }
   }
 
   const accessToken  = generateAccessToken(user.id, user.role);
@@ -751,7 +791,7 @@ export const googleOAuthUser = async (profile: {
   await storeRefreshToken(user.id, refreshToken);
 
   const { password_hash: _, ...safeUser } = user;
-  return { user: safeUser, accessToken, refreshToken };
+  return { status: 'AUTHENTICATED', user: safeUser, accessToken, refreshToken };
 };
 
 // ── HELPER ────────────────────────────────────────────

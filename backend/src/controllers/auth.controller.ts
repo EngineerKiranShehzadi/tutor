@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { body } from 'express-validator';
 import * as https from 'https';
+import crypto from 'crypto';
 import * as AuthService from '../services/auth.service';
 import { sendSuccess, sendError } from '../utils/response';
 import { asyncHandler } from '../middleware/errorHandler';
@@ -145,12 +146,33 @@ export const resendLoginOtp = asyncHandler(async (req: Request, res: Response) =
 });
 
 // ── Google OAuth ──────────────────────────────────────
+// Login-CSRF guard: a random state nonce goes to Google and into a short-lived
+// httpOnly cookie; the callback only proceeds when the two match, so nobody can
+// complete a sign-in in your browser with an authorization code of theirs.
+// SameSite=Lax (not Strict) because the callback is a top-level navigation
+// coming back from accounts.google.com, which a Strict cookie would not ride.
+const OAUTH_STATE_COOKIE = 'oauth_state';
+const OAUTH_STATE_COOKIE_OPTS = {
+  httpOnly: true,
+  secure:   env.NODE_ENV === 'production',
+  sameSite: 'lax' as const,
+  path:     '/api/v1/auth/google',
+};
+
+const statesMatch = (a: string | undefined, b: string | undefined): boolean => {
+  if (!a || !b) return false;
+  const x = Buffer.from(a), y = Buffer.from(b);
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+};
+
 export const googleRedirect = (_req: Request, res: Response): void => {
   const { CLIENT_ID, CALLBACK_URL } = env.GOOGLE;
   if (!CLIENT_ID) {
     res.status(503).send('Google OAuth is not configured on this server.');
     return;
   }
+  const state = crypto.randomBytes(32).toString('base64url');
+  res.cookie(OAUTH_STATE_COOKIE, state, { ...OAUTH_STATE_COOKIE_OPTS, maxAge: 10 * 60 * 1000 });
   const params = new URLSearchParams({
     client_id:     CLIENT_ID,
     redirect_uri:  CALLBACK_URL,
@@ -158,13 +180,23 @@ export const googleRedirect = (_req: Request, res: Response): void => {
     scope:         'openid email profile',
     access_type:   'offline',
     prompt:        'select_account',
+    state,
   });
   res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
 };
 
 export const googleCallback = asyncHandler(async (req: Request, res: Response) => {
-  const { code } = req.query as { code?: string };
+  const { code, state } = req.query as { code?: string; state?: string };
   const { CLIENT_ID, CLIENT_SECRET, CALLBACK_URL } = env.GOOGLE;
+
+  // One-shot: the nonce is cleared whatever happens next.
+  const expectedState = req.cookies?.[OAUTH_STATE_COOKIE] as string | undefined;
+  res.clearCookie(OAUTH_STATE_COOKIE, OAUTH_STATE_COOKIE_OPTS);
+  if (!statesMatch(state, expectedState)) {
+    logger.warn('[AUTH] Google OAuth callback rejected: state missing or does not match');
+    res.redirect(`${env.FRONTEND_URL}/login?error=oauth_failed`);
+    return;
+  }
 
   if (!code || !CLIENT_ID || !CLIENT_SECRET) {
     logger.warn('[AUTH] Google OAuth callback missing code or config');
@@ -222,19 +254,33 @@ export const googleCallback = asyncHandler(async (req: Request, res: Response) =
   }
 
   const googleUser = JSON.parse(profileResult.body) as {
-    id: string; name: string; email: string; picture?: string;
+    id: string; name: string; email: string; picture?: string; verified_email?: boolean;
   };
+
+  // Only an address Google itself has verified is evidence of owning it.
+  if (googleUser.verified_email !== true || !googleUser.email) {
+    logger.warn(`[AUTH] Google OAuth rejected: email not verified by Google ("${googleUser.email}")`);
+    res.redirect(`${env.FRONTEND_URL}/login?error=oauth_unverified_email`);
+    return;
+  }
 
   logger.info(`[AUTH] Google OAuth: profile for "${googleUser.email}"`);
 
-  const { accessToken, refreshToken } = await AuthService.googleOAuthUser({
+  const result = await AuthService.googleOAuthUser({
     googleId:  googleUser.id,
     name:      googleUser.name,
     email:     googleUser.email,
     avatarUrl: googleUser.picture,
   });
+  if (result.status === 'ACCOUNT_EXISTS') {
+    res.redirect(`${env.FRONTEND_URL}/login?error=oauth_account_exists`);
+    return;
+  }
 
-  res.cookie(REFRESH_COOKIE, refreshToken, REFRESH_COOKIE_OPTS);
+  // Only the httpOnly refresh cookie leaves here. The access token is never put
+  // in the URL (where history, logs and Referer would keep it): the callback page
+  // obtains one through the normal silent refresh.
+  res.cookie(REFRESH_COOKIE, result.refreshToken, REFRESH_COOKIE_OPTS);
   logger.info(`[AUTH] ✅ Google OAuth success: "${googleUser.email}"`);
-  res.redirect(`${env.FRONTEND_URL}/auth/google/callback?token=${accessToken}`);
+  res.redirect(`${env.FRONTEND_URL}/auth/google/callback`);
 });
