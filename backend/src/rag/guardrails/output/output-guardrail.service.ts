@@ -121,6 +121,21 @@ export function repairAddsContent(original: string, repaired: string): boolean {
   return novel / words.length > MAX_REPAIR_NEW_WORD_RATIO;
 }
 
+// The other direction: nor may a repair drop part of the answer. Groundedness
+// was checked on the draft, so a repair that turns a verified five-item answer
+// into a two-item list would still be served as verified — and cached. More
+// than this share of the original's distinct content words missing from the
+// repaired text rejects it. Looser than the new-word limit, because a reflow
+// can legitimately drop a lead-in sentence ("There are three types of…").
+export const MAX_REPAIR_LOST_WORD_RATIO = 0.2;
+export function repairDropsContent(original: string, repaired: string): boolean {
+  const kept = new Set(contentWords(repaired));
+  const words = Array.from(new Set(contentWords(original)));
+  if (words.length === 0) return false;
+  const lost = words.filter(w => !kept.has(w)).length;
+  return lost / words.length > MAX_REPAIR_LOST_WORD_RATIO;
+}
+
 // Runs after the groundedness/revision stage above has already decided
 // finalAnswer — see this file's module doc for the full target flow.
 // Deliberately independent of ANSWER_VERIFICATION.ENABLED: format and PII
@@ -178,12 +193,15 @@ async function applyFormatAndPiiGuards(
         // grounded (just unrestructured) answer rather than risk an
         // empty/malformed repair reaching the student.
         // A structurally valid repair is also refused when it adds content —
-        // invented bullets would reach the student unverified.
+        // invented bullets would reach the student unverified — or drops it.
         const structurallyValid = repair.ok && !!repair.repairedAnswer
           && validateResponseFormat(expectedFormat, repair.repairedAnswer).valid;
         if (structurallyValid && repairAddsContent(finalAnswer, repair.repairedAnswer!)) {
           formatRepairRejected = 'NEW_CONTENT';
           logger.warn('[OUTPUT-GUARDRAIL] ⚠️  Format repair added content not in the answer — keeping original grounded answer');
+        } else if (structurallyValid && repairDropsContent(finalAnswer, repair.repairedAnswer!)) {
+          formatRepairRejected = 'LOST_CONTENT';
+          logger.warn('[OUTPUT-GUARDRAIL] ⚠️  Format repair dropped part of the answer — keeping original grounded answer');
         } else if (structurallyValid) {
           finalAnswer = repair.repairedAnswer!;
           formatValid = true;

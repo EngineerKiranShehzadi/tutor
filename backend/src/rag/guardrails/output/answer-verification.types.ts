@@ -103,8 +103,9 @@ export interface OutputGuardrailResult {
   formatRepairSucceeded: boolean;
   // Set when a structurally valid repair was refused because it added words
   // the original answer didn't contain (it was never verified against the
-  // evidence); the original answer is kept.
-  formatRepairRejected: 'NEW_CONTENT' | null;
+  // evidence) — NEW_CONTENT — or left out part of it — LOST_CONTENT. The
+  // original answer is kept either way.
+  formatRepairRejected: 'NEW_CONTENT' | 'LOST_CONTENT' | null;
 
   // ── Output PII Leakage Detection ────────────────────────────────────
   // Never the actual detected value(s) — only category labels, same

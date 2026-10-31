@@ -33,7 +33,7 @@ import { logger } from '../utils/logger';
 import pool from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { askLectureAgent, LECTURE_NOT_FOUND_MESSAGE, type AskLectureAgentDeps } from '../services/chat.service';
-import { VERIFICATION_UNAVAILABLE_MESSAGE, repairAddsContent } from '../rag/guardrails/output/output-guardrail.service';
+import { VERIFICATION_UNAVAILABLE_MESSAGE, repairAddsContent, repairDropsContent } from '../rag/guardrails/output/output-guardrail.service';
 import type { OutputGuardrailResult } from '../rag/guardrails/output/answer-verification.types';
 import type { FinishedTrace } from '../observability/types';
 import { generateLectureSummary, LECTURE_SUMMARY_FAILED_MESSAGE, PARTIAL_SUMMARY_NOTE, buildSummaryBatches, summaryEntryText, MAX_CHARS_PER_BATCH } from '../services/lecture-summary.service';
@@ -994,6 +994,21 @@ cases.push({
     // Every format the detector recognises in these asks must also keep the summary route.
     const formatAsks = SUMMARY_FORMAT_TABLE.filter(r => r.summary && detectExpectedResponseFormat(r.q) !== 'NATURAL_TEXT').length;
     return { pass: wrong.length === 0 && formatAsks >= 10, detail: wrong.length ? wrong.map(w => `"${w.q}"→${got[SUMMARY_FORMAT_TABLE.indexOf(w)]}`).join(' | ') : `ok, ${formatAsks} format-named summary asks` };
+  },
+});
+
+// ── ST4: a format repair may not drop part of the answer either ─────────
+cases.push({
+  label: 'ST4. A repair that turns the 3-item answer into a 2-item list is rejected (LOST_CONTENT, original kept); dropping only a lead-in sentence is accepted',
+  run: async () => {
+    const truncated = '- Zero-shot prompting gives the model no examples.\n- Few-shot prompting gives the model a few worked examples.';
+    const { value: cut, requests } = await formatGuardWith(PROSE, 'List the three types of prompting', truncated);
+    const INTRO = `There are three types of prompting. ${PROSE}`;
+    const { value: intro } = await formatGuardWith(INTRO, 'List the three types of prompting', REFLOW);
+    const pass = requests.length === 1 && cut.finalAnswer === PROSE && cut.formatRepairRejected === 'LOST_CONTENT'
+      && cut.formatRepairSucceeded === false && repairDropsContent(PROSE, truncated)
+      && intro.finalAnswer === REFLOW && intro.formatRepairSucceeded === true && !repairDropsContent(PROSE, REFLOW);
+    return { pass, detail: `cut: rejected=${cut.formatRepairRejected}, kept original=${cut.finalAnswer === PROSE}; intro dropped: succeeded=${intro.formatRepairSucceeded}` };
   },
 });
 
