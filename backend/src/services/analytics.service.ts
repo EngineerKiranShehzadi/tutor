@@ -445,6 +445,8 @@ export const getContentGaps = async () => {
   return results.sort((a, b) => a.coverageScore - b.coverageScore);
 };
 
+// Rankings below order by the numeric aggregate: the ::text aliases (kept for
+// the row types) sorted alphabetically, so "9" ranked above "10".
 export const getMyStats = async (studentId: string) => {
   const [
     totalQs, totalSessions, lecturesEngaged, totalAvailableLectures,
@@ -483,7 +485,7 @@ export const getMyStats = async (studentId: string) => {
        FROM student_questions sq
        JOIN lectures l ON l.id = sq.lecture_id
        WHERE sq.student_id = $1
-       GROUP BY l.title ORDER BY cnt DESC LIMIT 1`, [studentId]
+       GROUP BY l.title ORDER BY COUNT(sq.id) DESC LIMIT 1`, [studentId]
     ),
     query<{ day: string }>(
       `SELECT DISTINCT DATE(created_at) AS day
@@ -501,12 +503,12 @@ export const getMyStats = async (studentId: string) => {
        FROM student_questions sq
        JOIN lectures l ON l.id = sq.lecture_id
        WHERE sq.student_id = $1
-       GROUP BY l.id, l.title ORDER BY cnt DESC LIMIT 6`, [studentId]
+       GROUP BY l.id, l.title ORDER BY COUNT(sq.id) DESC LIMIT 6`, [studentId]
     ),
     query<{ hour: string; count: string }>(
       `SELECT EXTRACT(HOUR FROM created_at)::text AS hour, COUNT(*)::text AS count
        FROM student_questions WHERE student_id = $1
-       GROUP BY hour ORDER BY count DESC LIMIT 1`, [studentId]
+       GROUP BY hour ORDER BY COUNT(*) DESC LIMIT 1`, [studentId]
     ),
   ]);
 

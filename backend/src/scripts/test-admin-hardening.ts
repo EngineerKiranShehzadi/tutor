@@ -37,7 +37,7 @@ import { parse, validate, specifiedRules } from 'graphql';
 import { makeExecutableSchema } from '@graphql-tools/schema';
 import { ApolloServer } from '@apollo/server';
 import { applyMigrations } from './db-setup';
-import { getRecentQuestions, getRecentQuestionsPage, getContentGaps, CONTENT_GAPS_MAX_QUESTIONS } from '../services/analytics.service';
+import { getRecentQuestions, getRecentQuestionsPage, getContentGaps, CONTENT_GAPS_MAX_QUESTIONS, getMyStats } from '../services/analytics.service';
 import { queryLimitsRule } from '../graphql/query-limits';
 import { typeDefs } from '../graphql/typeDefs';
 import datasetRoutes from '../routes/dataset.routes';
@@ -698,6 +698,25 @@ const run = async () => {
     } finally {
       await query('DELETE FROM student_questions WHERE lecture_id = $1', [lec]);
     }
+  }
+
+  // ── AD5: student stats rank by number, not by text ──────────────────
+  {
+    const mk = async (title: string) => (await query<{ id: number }>(`INSERT INTO lectures (title, youtube_url, youtube_video_id) VALUES ($1, 'https://youtu.be/xxxxxxxxxxx', 'xxxxxxxxxxx') RETURNING id`, [title])).rows[0].id;
+    const ten = await mk('[ad5] ten questions');
+    const nine = await mk('[ad5] nine questions');
+    const stu = (await query<{ id: string }>(`INSERT INTO users (name, email, password_hash, is_verified, role) VALUES ('AD5', $1, 'x', TRUE, 'STUDENT') RETURNING id`, [`ad5-${Date.now()}@example.test`])).rows[0].id;
+    // Ten questions in one hour of the day, nine in another.
+    await query(`INSERT INTO student_questions (student_id, lecture_id, question, created_at)
+                 SELECT $1, $2, 'q' || g, date_trunc('day', NOW()) - INTERVAL '1 day' + INTERVAL '3 hours' FROM generate_series(1, 10) g`, [stu, ten]);
+    await query(`INSERT INTO student_questions (student_id, lecture_id, question, created_at)
+                 SELECT $1, $2, 'q' || g, date_trunc('day', NOW()) - INTERVAL '1 day' + INTERVAL '5 hours' FROM generate_series(1, 9) g`, [stu, nine]);
+    const tenHour = Number((await query<{ h: string }>(`SELECT EXTRACT(HOUR FROM date_trunc('day', NOW()) - INTERVAL '1 day' + INTERVAL '3 hours')::text AS h`)).rows[0].h);
+    const stats = await getMyStats(stu);
+    check('AD5-1. A lecture with 10 questions ranks above one with 9 (most-asked topic, lecture breakdown, peak hour)',
+      stats.mostAskedTopic === '[ad5] ten questions' && stats.lectureBreakdown[0]?.lectureId === ten
+        && stats.lectureBreakdown[0]?.count === 10 && stats.peakHour === tenHour,
+      `mostAsked=${stats.mostAskedTopic} breakdown=${stats.lectureBreakdown.map(b => b.count).join(',')} peakHour=${stats.peakHour} (want ${tenHour})`);
   }
 
 };
