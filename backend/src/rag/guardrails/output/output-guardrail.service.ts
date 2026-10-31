@@ -4,7 +4,7 @@ import { logger } from '../../../utils/logger';
 import { verifyAnswerGroundedness } from './answer-groundedness-verifier.service';
 import { reviseAnswer } from './answer-revision.service';
 import { detectExpectedResponseFormat } from './format/response-format.detector';
-import { validateResponseFormat } from './format/response-format.guard';
+import { validateResponseFormat, tableHeaderRows } from './format/response-format.guard';
 import { repairResponseFormat } from './format/response-format-repair.service';
 import { detectOutputPiiLeakage } from './pii/output-pii-leakage.guard';
 import type { ExpectedResponseFormat } from './format/response-format.types';
@@ -113,9 +113,22 @@ function buildResult(args: {
 export const MAX_REPAIR_NEW_WORD_RATIO = 0.05;
 const contentWords = (text: string): string[] =>
   text.toLowerCase().replace(/[^\p{L}\s]/gu, ' ').split(/\s+/).filter(w => w.length >= 4);
+// A table's header row names its columns ("Type | Description", "Metric |
+// Definition"): labels the repair has to make up, not claims. A header whose
+// cells are all this short is left out of the count; a longer one is counted
+// like any other text, so it cannot carry new content.
+export const MAX_HEADER_CELL_WORDS = 4;
+function withoutTableHeaders(text: string): string {
+  let out = text;
+  for (const row of tableHeaderRows(text)) {
+    const cells = row.split('|').map(c => c.trim()).filter(Boolean);
+    if (cells.every(c => c.split(/\s+/).length <= MAX_HEADER_CELL_WORDS)) out = out.replace(row, '');
+  }
+  return out;
+}
 export function repairAddsContent(original: string, repaired: string): boolean {
   const known = new Set(contentWords(original));
-  const words = contentWords(repaired);
+  const words = contentWords(withoutTableHeaders(repaired));
   if (words.length === 0) return false;
   const novel = words.filter(w => !known.has(w)).length;
   return novel / words.length > MAX_REPAIR_NEW_WORD_RATIO;

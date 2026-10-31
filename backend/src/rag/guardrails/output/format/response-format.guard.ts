@@ -20,6 +20,17 @@ function hasListStructure(text: string): boolean {
 const TABLE_ROW = /^\|.*\|$/;
 const TABLE_SEPARATOR_ROW = /^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?$/;
 
+// The header row of each Markdown table in the text (the row right above a
+// separator row), as written.
+export function tableHeaderRows(text: string): string[] {
+  const lines = text.split('\n').map(line => line.trim());
+  const headers: string[] = [];
+  for (let i = 0; i < lines.length - 1; i++) {
+    if (TABLE_ROW.test(lines[i]) && TABLE_SEPARATOR_ROW.test(lines[i + 1])) headers.push(lines[i]);
+  }
+  return headers;
+}
+
 function hasTableStructure(text: string): boolean {
   const lines = text.split('\n').map(line => line.trim()).filter(Boolean);
   for (let i = 0; i < lines.length - 1; i++) {

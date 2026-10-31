@@ -1018,6 +1018,35 @@ cases.push({
   },
 });
 
+// ── R3: a table's column headers are not new content ────────────────────
+const TABLE_BODY = '| Zero-shot prompting | Gives the model no examples |\n| Few-shot prompting | Gives the model a few worked examples |\n'
+  + '| Chain-of-thought prompting | Asks the model to reason step by step before answering |';
+const HEADER_PAIRS = [
+  ['Type', 'Description'], ['Metric', 'Definition'], ['Term', 'Meaning'], ['Concept', 'Explanation'], ['Technique', 'How it works'],
+  ['Method', 'Purpose'], ['Feature', 'Details'], ['Name', 'What the model gets'], ['Category', 'Example'], ['Approach', 'Key idea'],
+];
+const asTable = (h: string[], body = TABLE_BODY) => `| ${h.join(' | ')} |\n|---|---|\n${body}`;
+
+cases.push({
+  label: `R3. A table repair is accepted with any of ${HEADER_PAIRS.length} plausible column headers (was 0 of 10); a new row, or a "header" carrying a claim, is still NEW_CONTENT`,
+  run: async () => {
+    const Q = 'Show the types of prompting in a table';
+    const accepted: string[] = [];
+    for (const h of HEADER_PAIRS) {
+      const { value: r } = await formatGuardWith(PROSE, Q, asTable(h));
+      if (r.formatRepairSucceeded && r.finalAnswer === asTable(h)) accepted.push(h.join('/'));
+    }
+    const newRow = asTable(['Type', 'Description'], `${TABLE_BODY}\n| Self-consistency prompting | Samples several reasoning paths and takes a majority vote |`);
+    const { value: row } = await formatGuardWith(PROSE, Q, newRow);
+    const smuggled = asTable(['Type', 'Description, and self-consistency samples several reasoning paths']);
+    const { value: hdr } = await formatGuardWith(PROSE, Q, smuggled);
+    const pass = accepted.length === HEADER_PAIRS.length
+      && row.formatRepairRejected === 'NEW_CONTENT' && row.finalAnswer === PROSE
+      && hdr.formatRepairRejected === 'NEW_CONTENT' && hdr.finalAnswer === PROSE;
+    return { pass, detail: `accepted ${accepted.length}/${HEADER_PAIRS.length}; new row → ${row.formatRepairRejected}; long header → ${hdr.formatRepairRejected}` };
+  },
+});
+
 // ── ST5: the streamed draft ends up exactly the redacted answer ─────────
 cases.push({
   label: 'ST5. Streaming redaction: ["4111 1111 1111 111", "1 end"] shows "[CREDIT_CARD]end" (was "[CREDIT_CARD] nd"); 5,000 random splits: draft = final, always a prefix of it, no raw value sent, no reset needed',
