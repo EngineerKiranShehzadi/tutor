@@ -14,10 +14,18 @@ cd ../frontend && npm ci
 
 If `npm ci` fails with 403 on `cdn.sheetjs.com`, your network is blocking that site. Switch networks (for example a mobile hotspot) and run it again. The code is fine.
 
-## 2. Set up `backend/.env`
+## 2. Set up `backend/.env` on your own copy of the database
+
+You never point your `.env` at the real database. You work on your own Neon branch: a full copy of the real data that only you change.
+
+1. Get access to the Neon project from the project owner (or ask the owner to create the branch for you and send you its connection string privately).
+2. Neon console → the project → **Branches** → **New branch**. Pick `main` as the parent and name it `dev-<yourname>`.
+3. Open the new branch → **Connect** → copy its connection string.
+
+Then:
 
 - Copy `backend/.env.example` to `backend/.env`.
-- Paste the Neon `DATABASE_URL` you were given privately into `.env`. Never post it in a group chat or commit it.
+- Paste **your branch's** connection string into `DATABASE_URL` in `.env`. Never use the `main` branch's URL, never post a URL in a group chat, and never commit it.
 - Keep `NODE_ENV=development`.
 - Put your own long random values in `JWT_SECRET` and `JWT_REFRESH_SECRET`, and make the two different. You can generate one with `openssl rand -hex 32`.
 
@@ -25,7 +33,7 @@ Never commit `.env`. It is already in `.gitignore`, so just don't force-add it.
 
 ## 3. Do NOT run `npm run db:setup`
 
-The Neon database is already migrated (up to migration 017, on 31 Oct). You have nothing to set up.
+The Neon database is already migrated (up to migration 017, on 31 Oct), and a branch made from `main` gets that schema too. You have nothing to set up.
 
 ## 4. Start the app
 
@@ -50,7 +58,7 @@ The backend starts without them. Leave `EMBEDDING_PROVIDER=local-http` and `RERA
 
 **Never change `EMBEDDING_PROVIDER`** to `openai` or any other value. The vectors in Neon were made with the local BGE model. Another provider makes every lecture read as "not ready".
 
-**Never upload a dataset from your machine.** Without the embedding server the build can't finish. It waits up to 6 hours and then fails, on the real database.
+**Never upload a dataset from your machine.** Without the embedding server the build can't finish. It waits up to 6 hours and then fails.
 
 If you need real chat answers to test something, you need a running embedding server. Put its address in `.env` and restart the backend:
 
@@ -61,16 +69,12 @@ RERANK_SERVER_URL=<server address>/rerank
 
 When you're done, remove both lines.
 
-## ⚠️ You are working on the REAL data
+## ⚠️ The `main` branch in Neon is the REAL data
 
-Neon holds the real users, lectures, datasets and chats. So:
+Neon's `main` branch holds the real users, lectures, datasets and chats. Your `dev-<yourname>` branch is a copy, so a mistake there never reaches real users. Still:
 
-- Don't run `npm test` or any `test-*` script against it. The tests write data. They should refuse a non-local database, but don't rely on that.
-- Don't delete lectures or users, and don't upload or roll back datasets.
-- To try something risky, make your own copy of the database first:
-  1. Neon console → your project → **Branches** → **New branch**.
-  2. Pick `main` as the parent and name it something like `dev-<yourname>`.
-  3. Open the new branch → **Connect** → copy its connection string.
-  4. Put that string in `DATABASE_URL` in your `.env` and restart the backend.
-
-  Now your changes only touch that copy. To go back to the real data, put the original URL back. Delete the branch when you're done.
+- Never put the `main` branch's URL in your `.env`. If you think you need the real data, ask the project owner first.
+- Don't run `npm test` or any `test-*` script against any Neon branch. The tests write data. They should refuse a non-local database, but don't rely on that.
+- Don't delete lectures or users, and don't upload or roll back datasets, even on your branch: your branch is what you test your features against.
+- Your branch does not see changes made to the real data after you created it. To get fresh data, open your branch in the Neon console and use **Reset from parent** (this throws away your changes on the branch), then restart the backend.
+- If your branch gets into a bad state, delete it and create a new one from `main` the same way.
