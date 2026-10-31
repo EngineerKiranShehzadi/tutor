@@ -13,6 +13,7 @@
     "seed:dataset": "ts-node --transpile-only src/scripts/seed-dataset.ts",
     "seed:request-log": "ts-node --transpile-only src/scripts/seed-request-log.ts",
     "seed:retry": "ts-node --transpile-only src/scripts/retry-missing-embeddings.ts",
+    "reembed:all": "ts-node --transpile-only src/scripts/reembed-all.ts",
     "eval:rag": "ts-node --transpile-only src/scripts/evaluate-rag.ts",
     "diagnose:duplicates": "ts-node --transpile-only src/scripts/diagnose-duplicate-answers.ts",
     "validate:reorder": "ts-node --transpile-only src/scripts/validate-reorder.ts",

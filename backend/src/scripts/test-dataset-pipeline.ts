@@ -198,6 +198,17 @@ const workerMain = async () => {
     console.log('WORKER switched ' + JSON.stringify({
       version: EMBEDDING_MODEL_VERSION, readyBefore, chat, prepKind: prep.kind, embedCalls: emb.calls.length, readyAfter, models,
     }));
+  } else if (mode === 'reembed') {
+    // Runs under EMBEDDING_PROVIDER=voyage (V2): the lecture was last built
+    // under another model, so reembed:all must plan and then rebuild all of it.
+    const lectureId = Number(process.argv[5]);
+    const { reembedLectures } = await import('../services/reembed.service');
+    const dry = await reembedLectures({ apply: false, lectureIds: [lectureId] });
+    const versionsBefore = (await query<{ n: number }>('SELECT count(*)::int AS n FROM dataset_versions WHERE lecture_id = $1', [lectureId])).rows[0].n;
+    const applied = await reembedLectures({ apply: true, lectureIds: [lectureId], finish: { embed: emb.embed, ...FAST } });
+    const again = await reembedLectures({ apply: false, lectureIds: [lectureId] });
+    const ready = await getLectureReadiness(lectureId);
+    console.log('WORKER reembedded ' + JSON.stringify({ version: EMBEDDING_MODEL_VERSION, dry, versionsBefore, applied, again, ready, embedCalls: emb.calls.length }));
   } else if (mode === 'finish') {
     const r = await finishDatasetVersion(Number(process.argv[5]), { embed: emb.embed, ...FAST });
     console.log('WORKER finished ' + JSON.stringify(r));
@@ -1170,6 +1181,24 @@ const run = async () => {
       !!o && o.readyAfter.ready && /^OK: /.test(o.readyAfter.reason) && o.readyAfter.reason.includes(NEW)
         && !parentAfter.ready && /^STALE_EMBEDDING_MODEL: /.test(parentAfter.reason),
       `after=${JSON.stringify(o?.readyAfter)} parentNow=${parentAfter.reason}`);
+
+    // V2: the same switch to Voyage, done by reembed:all (dry run, then apply).
+    const vw = spawnSync(TSNODE, ['--transpile-only', __filename, '--worker', 'reembed', '0', String(Ls)], {
+      env: { ...process.env, EMBEDDING_PROVIDER: 'voyage', VOYAGE_API_KEY: 'pa-test-not-used', EMBEDDING_MODEL: '' }, encoding: 'utf8',
+    });
+    const vline = (vw.stdout ?? '').split('\n').find(l => l.startsWith('WORKER reembedded '));
+    type R = { outcome: string; chunksToEmbed: number; qaPairs: number }[];
+    const v = vline ? JSON.parse(vline.slice('WORKER reembedded '.length)) as {
+      version: string; dry: R; versionsBefore: number; applied: R; again: R; ready: { ready: boolean; reason: string }; embedCalls: number;
+    } : null;
+    const versionsAfterDry = v ? v.versionsBefore : -1;
+    check('22e. reembed:all under EMBEDDING_PROVIDER=voyage: the dry run plans every piece and writes nothing; --apply rebuilds and activates; a second dry run finds it up to date and the lecture is ready under voyage:voyage-4:1024',
+      !!v && v.version === 'voyage:voyage-4:1024'
+        && v.dry[0]?.outcome === 'PLANNED' && v.dry[0]?.chunksToEmbed === total && v.dry[0]?.qaPairs === 6
+        && v.applied[0]?.outcome === 'ACTIVATED' && v.embedCalls === total
+        && v.again[0]?.outcome === 'UP_TO_DATE' && v.again[0]?.chunksToEmbed === 0
+        && v.ready.ready && v.ready.reason.includes('voyage:voyage-4:1024') && versionsAfterDry >= 1,
+      v ? `dry=${JSON.stringify(v.dry)} applied=${JSON.stringify(v.applied)} again=${JSON.stringify(v.again)} ready=${v.ready.reason} embedCalls=${v.embedCalls}/${total}` : `no worker output; stderr=${(vw.stderr ?? '').slice(0, 300)}`);
   }
 
   // ─────────────────────────────────────────────────────────────────────
