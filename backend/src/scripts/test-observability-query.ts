@@ -14,7 +14,8 @@ import {
   type RawPhoenixSpan,
 } from '../services/observability/normalize';
 
-interface Case { label: string; run: () => boolean | { pass: boolean; detail?: string } }
+type CaseResult = boolean | { pass: boolean; detail?: string };
+interface Case { label: string; run: () => CaseResult | Promise<CaseResult> }
 const cases: Case[] = [];
 
 function rawSpan(overrides: Partial<RawPhoenixSpan> & { span_id: string; parent_id?: string | null }): RawPhoenixSpan {
@@ -218,11 +219,120 @@ cases.push({
   },
 });
 
-function main() {
+// ── R2: a filtered trace list reads past the first page ────────────────
+// A fake Phoenix list endpoint: `count` traces newest-first, those at the
+// given positions failed. `honoursError` false plays a server that ignores
+// the error=true parameter.
+function fakePhoenix(count: number, failed: Set<number>, honoursError: boolean) {
+  const requests: Record<string, unknown>[] = [];
+  const all = Array.from({ length: count }, (_, i) => {
+    const t0 = new Date(Date.UTC(2026, 0, 1, 12, 0, 0) - i * 1000).toISOString();
+    return {
+      trace_id: `t${i}`, start_time: t0, end_time: t0, failed: failed.has(i),
+      spans: [{ ...rawSpan({ span_id: `r${i}`, name: 'ask-lecture-agent', status_code: failed.has(i) ? 'ERROR' : 'OK',
+        attributes: failed.has(i) ? { errorCode: i % 2 === 0 ? 'TIMEOUT' : 'RATE_LIMITED' } : {} }), context: { trace_id: `t${i}`, span_id: `r${i}` } }],
+    };
+  });
+  const GET = async (_path: string, opts: { params: { query: Record<string, unknown> } }) => {
+    const q = opts.params.query;
+    requests.push(q);
+    const pool = honoursError && q.error === true ? all.filter(t => t.failed) : all;
+    const from = q.cursor ? pool.findIndex(t => t.trace_id === q.cursor) + 1 : 0;
+    const page = pool.slice(from, from + Number(q.limit));
+    const more = from + page.length < pool.length;
+    return { data: { data: page, next_cursor: more ? page[page.length - 1].trace_id : null }, error: undefined };
+  };
+  return { GET, requests };
+}
+
+async function withFakePhoenix<T>(fake: ReturnType<typeof fakePhoenix>, fn: () => Promise<T>): Promise<T> {
+  const { env } = await import('../config/env');
+  const o = env.OBSERVABILITY as { ENABLED: boolean; PHOENIX_ENABLED: boolean };
+  const saved = { e: o.ENABLED, p: o.PHOENIX_ENABLED };
+  o.ENABLED = true; o.PHOENIX_ENABLED = true;
+  const client = (await import('../services/observability/phoenix-client')).getPhoenixClient() as unknown as { GET: unknown };
+  const caps = require('../services/observability/capabilities') as { getPhoenixCapabilities: unknown };
+  const savedGet = client.GET; const savedCaps = caps.getPhoenixCapabilities;
+  client.GET = fake.GET;
+  caps.getPhoenixCapabilities = async () => ({ reachable: true, supportsTraceListing: true });
+  try { return await fn(); } finally {
+    client.GET = savedGet; caps.getPhoenixCapabilities = savedCaps; o.ENABLED = saved.e; o.PHOENIX_ENABLED = saved.p;
+  }
+}
+
+cases.push({
+  label: 'R2a. Errors only, the 3 failures are traces #30, #210, #480 of 600 → all 3 found, scan stops at 500 and says so (server ignores error=true)',
+  run: async () => {
+    const { listTraces, FILTER_SCAN_LIMIT } = await import('../services/observability/traces.service');
+    const fake = fakePhoenix(600, new Set([30, 210, 480, 590]), false);
+    const r = await withFakePhoenix(fake, () => listTraces({ errorOnly: true, limit: 25 }));
+    const pass = r.traces.map(t => t.traceId).join() === 't30,t210,t480' && r.scannedTraces === FILTER_SCAN_LIMIT
+      && r.scanLimitReached === true && r.nextCursor === 't499' && fake.requests.every(q => q.error === true);
+    return { pass, detail: `found=${r.traces.map(t => t.traceId).join()}, scanned=${r.scannedTraces}, limitReached=${r.scanLimitReached}, requests=${fake.requests.length}` };
+  },
+});
+
+cases.push({
+  label: 'R2b. A server that honours error=true answers an errors-only list in one request; the list is never longer than limit and the cursor skips nothing',
+  run: async () => {
+    const { listTraces } = await import('../services/observability/traces.service');
+    const failed = new Set(Array.from({ length: 40 }, (_, i) => i * 3));
+    const fake = fakePhoenix(300, failed, true);
+    const first = await withFakePhoenix(fake, () => listTraces({ errorOnly: true, limit: 25 }));
+    const second = await withFakePhoenix(fake, () => listTraces({ errorOnly: true, limit: 25, cursor: first.nextCursor }));
+    const ids = [...first.traces, ...second.traces].map(t => Number(t.traceId.slice(1)));
+    const pass = fake.requests.length === 2 && first.traces.length === 25 && second.traces.length === 15
+      && ids.join() === [...failed].join() && second.nextCursor === null && !first.scanLimitReached && !second.scanLimitReached;
+    return { pass, detail: `requests=${fake.requests.length}, pages=${first.traces.length}+${second.traces.length}` };
+  },
+});
+
+cases.push({
+  label: 'R2c. Sparse matches on a server that ignores error=true: each page asks only for what is still missing, so a page never overshoots limit and paging finds every failure once',
+  run: async () => {
+    const { listTraces } = await import('../services/observability/traces.service');
+    const failed = new Set(Array.from({ length: 30 }, (_, i) => i * 7 + 2));
+    const fake = fakePhoenix(400, failed, false);
+    const seen: number[] = [];
+    let cursor: string | null = null; let pages = 0; let maxPage = 0;
+    do {
+      const r = await withFakePhoenix(fake, () => listTraces({ errorOnly: true, limit: 10, cursor }));
+      seen.push(...r.traces.map(t => Number(t.traceId.slice(1)))); maxPage = Math.max(maxPage, r.traces.length);
+      cursor = r.nextCursor; pages++;
+    } while (cursor && pages < 20);
+    const pass = seen.join() === [...failed].join() && maxPage <= 10 && fake.requests.every(q => Number(q.limit) <= 10);
+    return { pass, detail: `pages=${pages}, found=${seen.length}/${failed.size}, maxPage=${maxPage}` };
+  },
+});
+
+cases.push({
+  label: 'R2e. The Errors page code drill-down runs on the server: errorCode=RATE_LIMITED lists only those failures, from the whole window',
+  run: async () => {
+    const { listTraces } = await import('../services/observability/traces.service');
+    const fake = fakePhoenix(300, new Set([2, 7, 40, 151, 233, 299]), true);
+    const r = await withFakePhoenix(fake, () => listTraces({ errorOnly: true, errorCode: 'RATE_LIMITED', limit: 25 }));
+    const pass = r.traces.map(t => t.traceId).join() === 't7,t151,t233,t299' && r.traces.every(t => t.errorCode === 'RATE_LIMITED');
+    return { pass, detail: `found=${r.traces.map(t => `${t.traceId}:${t.errorCode}`).join()}` };
+  },
+});
+
+cases.push({
+  label: 'R2d. No in-memory filter: one request of `limit` traces, as before',
+  run: async () => {
+    const { listTraces } = await import('../services/observability/traces.service');
+    const fake = fakePhoenix(100, new Set([1]), false);
+    const r = await withFakePhoenix(fake, () => listTraces({ limit: 25 }));
+    const pass = fake.requests.length === 1 && fake.requests[0].limit === 25 && fake.requests[0].error === undefined
+      && r.traces.length === 25 && r.nextCursor === 't24' && r.scanLimitReached === false;
+    return { pass, detail: `requests=${fake.requests.length}, traces=${r.traces.length}` };
+  },
+});
+
+async function main() {
   let failures = 0;
   for (const c of cases) {
     try {
-      const r = c.run();
+      const r = await c.run();
       const pass = typeof r === 'boolean' ? r : r.pass;
       const detail = typeof r === 'boolean' ? '' : r.detail ? ` (${r.detail})` : '';
       if (pass) console.log(`PASS  ${c.label}${detail}`);
@@ -236,4 +346,4 @@ function main() {
   process.exit(failures > 0 ? 1 : 0);
 }
 
-main();
+void main();

@@ -62,6 +62,7 @@ export const traceListValidators = [
   query('maxLatencyMs').optional().isInt({ min: 0 }).toInt(),
   query('memoryResult').optional().isString().trim().toUpperCase().isIn(MEMORY_RESULT_VALUES),
   query('errorOnly').optional().isBoolean().toBoolean(),
+  query('errorCode').optional().isString().trim().isLength({ max: 80 }),
   query('sort').optional().isIn(SORT_FIELDS),
   query('order').optional().isIn(ORDER_VALUES),
 ];

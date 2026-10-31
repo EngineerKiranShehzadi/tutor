@@ -129,6 +129,10 @@ export interface TraceListResult {
   traces: TraceSummary[];
   nextCursor: string | null;
   appliedFilters: Record<string, unknown>;
+  // Traces read to build the page; scanLimitReached means the search stopped
+  // at its window, so an empty page is "none among those", not "none at all".
+  scannedTraces?: number;
+  scanLimitReached?: boolean;
 }
 
 export interface SpanListResult {

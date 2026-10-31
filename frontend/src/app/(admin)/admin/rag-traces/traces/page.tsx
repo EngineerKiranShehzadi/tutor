@@ -29,6 +29,7 @@ export default function TracesExplorerPage() {
   const [cursorStack, setCursorStack] = useState<(string | null)[]>([null]);
   const [pageIndex, setPageIndex] = useState(0);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [scanned, setScanned] = useState<{ count: number; limitReached: boolean }>({ count: 0, limitReached: false });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
@@ -74,6 +75,7 @@ export default function TracesExplorerPage() {
       }, signal);
       setTraces(result.traces);
       setNextCursor(result.nextCursor);
+      setScanned({ count: result.scannedTraces ?? 0, limitReached: result.scanLimitReached === true });
       setError(null);
       setErrorCode(null);
     } catch (err) {
@@ -132,15 +134,15 @@ export default function TracesExplorerPage() {
           <option value="SUCCESS">Success</option>
           <option value="ERROR">Error</option>
         </select>
-        <select value={filters.route} onChange={(e) => updateFilter('route', e.target.value)} title="Applies only to the currently loaded page of traces, not your full trace history — Phoenix doesn't support server-side route filtering yet." className="text-[13px] rounded-lg border border-slate-200 px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-200">
-          <option value="">All routes (this page)</option>
+        <select value={filters.route} onChange={(e) => updateFilter('route', e.target.value)} title="Phoenix can't filter by route, so the server reads up to 500 traces per page looking for matches." className="text-[13px] rounded-lg border border-slate-200 px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-200">
+          <option value="">All routes</option>
           <option value="FACT_QUESTION">Fact question</option>
           <option value="CONTEXTUAL_FOLLOW_UP">Contextual follow-up</option>
           <option value="LECTURE_SUMMARY">Lecture summary</option>
           <option value="GREETING">Greeting</option>
         </select>
-        <select value={filters.memoryResult} onChange={(e) => updateFilter('memoryResult', e.target.value)} title="Applies only to the currently loaded page of traces, not your full trace history — Phoenix doesn't support server-side memory-result filtering yet." className="text-[13px] rounded-lg border border-slate-200 px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-200">
-          <option value="">Any memory result (this page)</option>
+        <select value={filters.memoryResult} onChange={(e) => updateFilter('memoryResult', e.target.value)} title="Phoenix can't filter by memory result, so the server reads up to 500 traces per page looking for matches." className="text-[13px] rounded-lg border border-slate-200 px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-200">
+          <option value="">Any memory result</option>
           <option value="EXACT_HIT">Exact hit</option>
           <option value="SEMANTIC_HIT">Semantic hit</option>
           <option value="MISS">Miss</option>
@@ -175,6 +177,11 @@ export default function TracesExplorerPage() {
         ) : loading ? (
           <div className="p-6 space-y-3">
             {[1, 2, 3, 4, 5, 6].map(i => <div key={i} className="h-10 bg-slate-100 rounded-lg animate-pulse" />)}
+          </div>
+        ) : traces.length === 0 && scanned.limitReached && nextCursor ? (
+          <div>
+            <EmptyState icon="fa-magnifying-glass" title="No match in the latest traces" message={`None of the ${scanned.count} traces checked matches these filters. Older traces may.`} />
+            <div className="pb-6 text-center"><button onClick={goNext} className="text-[13px] font-semibold text-indigo-600 hover:text-indigo-800">Search older traces <i className="fas fa-arrow-right ml-1 text-[11px]" /></button></div>
           </div>
         ) : traces.length === 0 ? (
           <EmptyState icon="fa-inbox" title="No traces match these filters" message="Try widening your filters, or ask the tutor a question to generate a new trace." />

@@ -1,4 +1,3 @@
-import { getTraces } from '@arizeai/phoenix-client/traces';
 import { getSpans } from '@arizeai/phoenix-client/spans';
 import { getPhoenixClient, phoenixProject, withPhoenixRetry } from './phoenix-client';
 import { getPhoenixCapabilities } from './capabilities';
@@ -31,6 +30,7 @@ export interface TraceListFilters {
   maxLatencyMs?: number;
   memoryResult?: string;
   errorOnly?: boolean;
+  errorCode?: string;
   sort?: 'start_time' | 'latency_ms';
   order?: 'asc' | 'desc';
 }
@@ -39,13 +39,28 @@ export interface TraceListResult {
   traces: TraceSummary[];
   nextCursor: string | null;
   appliedFilters: Record<string, unknown>;
+  // Traces read from Phoenix to build this page. With an in-memory filter set
+  // this can exceed traces.length; scanLimitReached says the search stopped at
+  // FILTER_SCAN_LIMIT, so an empty page means "none in the traces checked",
+  // not "none at all".
+  scannedTraces: number;
+  scanLimitReached: boolean;
 }
 
+// How many traces one filtered request reads at most — the same window the
+// overview's counts (e.g. "Total errors") are computed over.
+export const FILTER_SCAN_LIMIT = 500;
+
 // Fields not natively filterable server-side by Phoenix's getTraces
-// (custom RAG attributes like route/lectureId/memoryResult) are applied as
-// a bounded in-memory pass over the current page only — documented here
-// rather than silently claiming full cross-history filtering. Time range,
-// sort, and cursor pagination ARE always applied server-side.
+// (custom RAG attributes like route/lectureId/memoryResult) are applied in
+// memory. listTraces keeps reading pages until it has `limit` matches or has
+// read FILTER_SCAN_LIMIT traces, so a page is never empty just because the
+// newest traces didn't match. Time range, sort, session and cursor
+// pagination are always applied server-side.
+const hasPageFilters = (f: TraceListFilters): boolean =>
+  !!(f.traceId || f.lectureId || f.userId || f.route || f.status || f.model || f.memoryResult || f.errorOnly || f.errorCode || f.search)
+  || f.minLatencyMs !== undefined || f.maxLatencyMs !== undefined;
+
 function applyPageFilters(traces: TraceSummary[], f: TraceListFilters): TraceSummary[] {
   return traces.filter(t => {
     if (f.traceId && t.traceId !== f.traceId) return false;
@@ -57,6 +72,7 @@ function applyPageFilters(traces: TraceSummary[], f: TraceListFilters): TraceSum
     if (f.model && t.model !== f.model) return false;
     if (f.memoryResult && t.memoryResult !== f.memoryResult) return false;
     if (f.errorOnly && t.status !== 'ERROR') return false;
+    if (f.errorCode && t.errorCode !== f.errorCode) return false;
     if (f.minLatencyMs !== undefined && t.durationMs < f.minLatencyMs) return false;
     if (f.maxLatencyMs !== undefined && t.durationMs > f.maxLatencyMs) return false;
     if (f.search) {
@@ -68,48 +84,86 @@ function applyPageFilters(traces: TraceSummary[], f: TraceListFilters): TraceSum
   });
 }
 
+interface PhoenixTracePage {
+  traces: {
+    trace_id: string; start_time: string; end_time: string; spans?: unknown[] | null;
+    token_count_prompt?: number; token_count_completion?: number; token_count_total?: number;
+  }[];
+  nextCursor: string | null;
+}
+
+// The same request @arizeai/phoenix-client's getTraces sends, plus `error=true`
+// for an errors-only list: Phoenix then returns only traces with an errored
+// span (a superset of ERROR-status traces), so the in-memory check below
+// rarely has to read past the first page. A server that predates the
+// parameter ignores it and the scan still finds the same traces, just slower.
+async function fetchTracePage(filters: TraceListFilters, cursor: string | null, limit: number): Promise<PhoenixTracePage> {
+  const query: Record<string, unknown> = {
+    limit,
+    sort: filters.sort ?? 'start_time',
+    order: filters.order ?? 'desc',
+    include_spans: true,
+  };
+  if (cursor) query.cursor = cursor;
+  if (filters.startTime) query.start_time = filters.startTime;
+  if (filters.endTime) query.end_time = filters.endTime;
+  if (filters.sessionId) query.session_identifier = [filters.sessionId];
+  if (filters.errorOnly || filters.errorCode) query.error = true;
+  const { data, error } = await getPhoenixClient().GET('/v1/projects/{project_identifier}/traces', {
+    params: { path: { project_identifier: phoenixProject().projectName }, query: query as never },
+  });
+  if (error) throw error;
+  return { traces: (data?.data ?? []) as PhoenixTracePage['traces'], nextCursor: data?.next_cursor ?? null };
+}
+
+const toSummary = (t: PhoenixTracePage['traces'][number]): TraceSummary => {
+  const rawSpans = (t.spans ?? []) as unknown as RawPhoenixSpan[];
+  const spans = rawSpans.map(s => mapPhoenixSpan(s, t.trace_id));
+  const root = spans.find(s => !s.parentId) ?? spans[0] ?? null;
+  const durationMs = Number.isFinite(new Date(t.start_time).getTime()) && Number.isFinite(new Date(t.end_time).getTime())
+    ? new Date(t.end_time).getTime() - new Date(t.start_time).getTime()
+    : root?.durationMs ?? 0;
+  return extractTraceSummary(t.trace_id, root, spans, {
+    durationMs,
+    timestamp: t.start_time,
+    cumulativeTokens: {
+      prompt: t.token_count_prompt ?? null,
+      completion: t.token_count_completion ?? null,
+      total: t.token_count_total ?? null,
+    },
+  });
+};
+
 export async function listTraces(filters: TraceListFilters): Promise<TraceListResult> {
   const caps = await getPhoenixCapabilities();
   if (!caps.reachable) throw new ObservabilityError('PHOENIX_UNREACHABLE', 'Phoenix server is unreachable');
   if (!caps.supportsTraceListing) throw new ObservabilityError('PHOENIX_UNSUPPORTED_FEATURE', 'This Phoenix server version does not support trace listing');
 
   const limit = Math.min(Math.max(filters.limit ?? 25, 1), 100);
+  const filtering = hasPageFilters(filters);
 
-  const result = await withPhoenixRetry(() => getTraces({
-    client: getPhoenixClient(),
-    project: phoenixProject(),
-    startTime: filters.startTime ?? undefined,
-    endTime: filters.endTime ?? undefined,
-    sort: filters.sort ?? 'start_time',
-    order: filters.order ?? 'desc',
-    limit,
-    cursor: filters.cursor ?? undefined,
-    includeSpans: true,
-    sessionId: filters.sessionId ?? undefined,
-  }));
-
-  const summaries = result.traces.map(t => {
-    const rawSpans = (t.spans ?? []) as unknown as RawPhoenixSpan[];
-    const spans = rawSpans.map(s => mapPhoenixSpan(s, t.trace_id));
-    const root = spans.find(s => !s.parentId) ?? spans[0] ?? null;
-    const durationMs = Number.isFinite(new Date(t.start_time).getTime()) && Number.isFinite(new Date(t.end_time).getTime())
-      ? new Date(t.end_time).getTime() - new Date(t.start_time).getTime()
-      : root?.durationMs ?? 0;
-    return extractTraceSummary(t.trace_id, root, spans, {
-      durationMs,
-      timestamp: t.start_time,
-      cumulativeTokens: {
-        prompt: t.token_count_prompt ?? null,
-        completion: t.token_count_completion ?? null,
-        total: t.token_count_total ?? null,
-      },
-    });
-  });
+  // Each page asks for no more traces than matches are still needed, so a page
+  // can never hold more than `limit` matches and Phoenix's cursor (which points
+  // past the last trace it returned) never skips one.
+  const matched: TraceSummary[] = [];
+  let cursor: string | null = filters.cursor ?? null;
+  let scanned = 0;
+  for (;;) {
+    const pageSize = Math.min(limit - matched.length, FILTER_SCAN_LIMIT - scanned);
+    const page = await withPhoenixRetry(() => fetchTracePage(filters, cursor, pageSize));
+    scanned += page.traces.length;
+    const summaries = page.traces.map(toSummary);
+    matched.push(...(filtering ? applyPageFilters(summaries, filters) : summaries));
+    cursor = page.nextCursor;
+    if (!filtering || !cursor || matched.length >= limit || scanned >= FILTER_SCAN_LIMIT) break;
+  }
 
   return {
-    traces: applyPageFilters(summaries, filters),
-    nextCursor: result.nextCursor ?? null,
+    traces: matched,
+    nextCursor: cursor,
     appliedFilters: filters as Record<string, unknown>,
+    scannedTraces: scanned,
+    scanLimitReached: filtering && cursor !== null && matched.length < limit,
   };
 }
 

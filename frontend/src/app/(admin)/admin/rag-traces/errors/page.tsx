@@ -21,6 +21,7 @@ export default function ErrorsPage() {
 
   const [metrics, setMetrics] = useState<OverviewMetrics | null>(null);
   const [failedTraces, setFailedTraces] = useState<TraceSummary[]>([]);
+  const [scan, setScan] = useState<{ scanned: number; limitReached: boolean }>({ scanned: 0, limitReached: false });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -29,24 +30,25 @@ export default function ErrorsPage() {
     try {
       const [o, t] = await Promise.all([
         observabilityApi.getOverview({}, signal),
-        observabilityApi.listTraces({ errorOnly: true, limit: 25, sort: 'start_time', order: 'desc' }, signal),
+        // The code filter runs on the server, over the same window as the
+        // counts above — not on the 25 rows already loaded.
+        observabilityApi.listTraces({ errorOnly: true, errorCode: focusCode ?? undefined, limit: 25, sort: 'start_time', order: 'desc' }, signal),
       ]);
       setMetrics(o.metrics);
       setFailedTraces(t.traces);
+      setScan({ scanned: t.scannedTraces ?? 0, limitReached: t.scanLimitReached === true });
       setError(null);
     } catch (err) {
       if (err instanceof ObservabilityApiError) setError(err.message);
       else if ((err as { code?: string }).code !== 'ERR_CANCELED') setError('Failed to load error analytics.');
     } finally { setLoading(false); }
-  }, []);
+  }, [focusCode]);
 
   useEffect(() => {
     const controller = new AbortController();
     load(controller.signal);
     return () => controller.abort();
   }, [load]);
-
-  const displayedTraces = focusCode ? failedTraces.filter(t => t.errorCode === focusCode) : failedTraces;
 
   return (
     <div className="max-w-[1500px]">
@@ -101,7 +103,9 @@ export default function ErrorsPage() {
               {focusCode && <button onClick={() => router.push('/admin/rag-traces/errors')} className="text-[12px] font-semibold text-slate-500 hover:text-red-600"><i className="fas fa-xmark mr-1" />Clear filter</button>}
             </div>
             {loading ? <div className="p-6 space-y-3">{[1, 2, 3].map(i => <div key={i} className="h-10 bg-slate-100 rounded-lg animate-pulse" />)}</div>
-              : displayedTraces.length === 0 ? <EmptyState icon="fa-face-smile" title="No failed traces" message="Nothing to show for this filter." />
+              : failedTraces.length === 0 ? (scan.limitReached
+                ? <EmptyState icon="fa-magnifying-glass" title="None in the latest traces" message={`No failed trace${focusCode ? ` with ${focusCode}` : ''} among the latest ${scan.scanned} traces checked. Older failures are counted above but not listed here.`} />
+                : <EmptyState icon="fa-face-smile" title="No failed traces" message="Nothing to show for this filter." />)
               : (
                 <table className="w-full">
                   <thead><tr className="border-b border-slate-200 bg-slate-50/80">
@@ -112,7 +116,7 @@ export default function ErrorsPage() {
                     <th className="text-left px-4 py-3 text-[11px] font-semibold text-slate-500 uppercase">Trace</th>
                   </tr></thead>
                   <tbody className="divide-y divide-slate-100">
-                    {displayedTraces.map(t => (
+                    {failedTraces.map(t => (
                       <tr key={t.traceId} onClick={() => router.push(`/admin/rag-traces/traces/${encodeURIComponent(t.traceId)}`)} className="hover:bg-slate-50/60 cursor-pointer transition-colors">
                         <td className="px-5 py-3 text-[12px] text-slate-500">{new Date(t.timestamp).toLocaleString()}</td>
                         <td className="px-4 py-3 text-[12px] font-medium text-slate-600">{t.route ?? '—'}</td>
