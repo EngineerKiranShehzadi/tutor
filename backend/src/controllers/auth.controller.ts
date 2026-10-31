@@ -7,6 +7,7 @@ import { asyncHandler } from '../middleware/errorHandler';
 import { AuthenticatedRequest } from '../types';
 import { env } from '../config/env';
 import { logger } from '../utils/logger';
+import { REFRESH_COOKIE, REFRESH_COOKIE_OPTS, VERIFY_TICKET_COOKIE_OPTS, CLEAR_COOKIE_OPTS } from '../utils/auth-cookies';
 
 function httpsPost(url: string, body: string, headers: Record<string, string>): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
@@ -51,15 +52,6 @@ function httpsGet(url: string, headers: Record<string, string>): Promise<{ statu
   });
 }
 
-const COOKIE_OPTS = {
-  httpOnly: true,
-  secure:   env.NODE_ENV === 'production',
-  sameSite: 'strict' as const,
-  maxAge:   7 * 24 * 60 * 60 * 1000,
-};
-// clearCookie only matches a cookie set with the same attributes (minus maxAge).
-const { maxAge: _maxAge, ...CLEAR_COOKIE_OPTS } = COOKIE_OPTS;
-
 // ── Validators ────────────────────────────────────────
 // normalizeEmail() is deliberately NOT used on any of these.
 // Its defaults strip dots and "+tags" out of Gmail addresses, so
@@ -87,17 +79,20 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
   const result = await AuthService.loginUser(email, password);
 
   if (result.status === 'AUTHENTICATED') {
-    res.cookie('refreshToken', result.refreshToken, COOKIE_OPTS);
+    res.cookie(REFRESH_COOKIE, result.refreshToken, REFRESH_COOKIE_OPTS);
     logger.info(`[AUTH] ✅ Login success: "${email}" role=${result.user.role}`);
     sendSuccess(res, 'Logged in successfully', result);
   } else {
+    // The ticket goes in an httpOnly cookie, never in the body.
+    const { verificationTicket, ...body } = result;
+    res.cookie(AuthService.VERIFY_TICKET_COOKIE, verificationTicket, VERIFY_TICKET_COOKIE_OPTS);
     logger.info(`[AUTH] ⚠️  Email verification required for: "${email}"`);
-    sendSuccess(res, 'Email verification required', result, 200);
+    sendSuccess(res, 'Email verification required', body, 200);
   }
 });
 
 export const refreshToken = asyncHandler(async (req: Request, res: Response) => {
-  const token = req.cookies?.refreshToken;
+  const token = req.cookies?.[REFRESH_COOKIE];
   if (!token) {
     logger.warn('[AUTH] Token refresh failed — no refresh token in cookie');
     sendError(res, 'No refresh token', 401);
@@ -105,7 +100,7 @@ export const refreshToken = asyncHandler(async (req: Request, res: Response) => 
   }
   logger.info('[AUTH] Token refresh requested');
   const tokens = await AuthService.refreshAccessToken(token);
-  res.cookie('refreshToken', tokens.refreshToken, COOKIE_OPTS);
+  res.cookie(REFRESH_COOKIE, tokens.refreshToken, REFRESH_COOKIE_OPTS);
   logger.info('[AUTH] ✅ Access token refreshed');
   sendSuccess(res, 'Token refreshed', { accessToken: tokens.accessToken });
 });
@@ -113,18 +108,18 @@ export const refreshToken = asyncHandler(async (req: Request, res: Response) => 
 // No `protect`: the refresh cookie is the credential here, so logout still ends
 // the server-side session when the 15-minute access token has already expired.
 export const logout = asyncHandler(async (req: Request, res: Response) => {
-  const token = req.cookies?.refreshToken;
+  const token = req.cookies?.[REFRESH_COOKIE];
   const userId = token ? await AuthService.logoutUser(token) : null;
-  res.clearCookie('refreshToken', CLEAR_COOKIE_OPTS);
+  res.clearCookie(REFRESH_COOKIE, CLEAR_COOKIE_OPTS);
   logger.info(`[AUTH] ✅ Logged out${userId ? `: user ${userId}` : ' (no live session)'}`);
   sendSuccess(res, 'Logged out successfully');
 });
 
 // Ends every session of the cookie's owner, on every device.
 export const logoutAll = asyncHandler(async (req: Request, res: Response) => {
-  const token = req.cookies?.refreshToken;
+  const token = req.cookies?.[REFRESH_COOKIE];
   const userId = token ? await AuthService.logoutAllSessions(token) : null;
-  res.clearCookie('refreshToken', CLEAR_COOKIE_OPTS);
+  res.clearCookie(REFRESH_COOKIE, CLEAR_COOKIE_OPTS);
   logger.info(`[AUTH] ✅ Logged out everywhere${userId ? `: user ${userId}` : ' (no live session)'}`);
   sendSuccess(res, 'Logged out of all devices');
 });
@@ -144,7 +139,7 @@ export const updateMe = asyncHandler(async (req: AuthenticatedRequest, res: Resp
 export const resendLoginOtp = asyncHandler(async (req: Request, res: Response) => {
   const { email } = req.body;
   logger.info(`[AUTH] Resend login OTP requested for: "${email}"`);
-  const expiresInSeconds = await AuthService.resendLoginOtp(email.toLowerCase());
+  const expiresInSeconds = await AuthService.resendLoginOtp(email.toLowerCase(), req.cookies?.[AuthService.VERIFY_TICKET_COOKIE]);
   logger.info(`[AUTH] ✅ Login OTP resent to "${email}" (expires in ${expiresInSeconds}s)`);
   sendSuccess(res, 'Verification code sent', { email, verificationExpiresInSeconds: expiresInSeconds });
 });
@@ -239,7 +234,7 @@ export const googleCallback = asyncHandler(async (req: Request, res: Response) =
     avatarUrl: googleUser.picture,
   });
 
-  res.cookie('refreshToken', refreshToken, COOKIE_OPTS);
+  res.cookie(REFRESH_COOKIE, refreshToken, REFRESH_COOKIE_OPTS);
   logger.info(`[AUTH] ✅ Google OAuth success: "${googleUser.email}"`);
   res.redirect(`${env.FRONTEND_URL}/auth/google/callback?token=${accessToken}`);
 });

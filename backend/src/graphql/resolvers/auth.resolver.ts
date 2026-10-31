@@ -4,6 +4,7 @@ import { AppError } from '../../middleware/errorHandler';
 import * as AuthService from '../../services/auth.service';
 import { GraphQLContext } from '../context';
 import { logger } from '../../utils/logger';
+import { REFRESH_COOKIE, REFRESH_COOKIE_OPTS, VERIFY_TICKET_COOKIE_OPTS, CLEAR_COOKIE_OPTS } from '../../utils/auth-cookies';
 
 // ── In-memory rate limiter (per mutation, per IP) ─────
 const rateLimitStore = new Map<string, { count: number; resetAt: number }>();
@@ -48,13 +49,6 @@ interface ResetPasswordInput          { email: string; newPassword: string; conf
 interface SignupInput         { name: string; email: string; password: string }
 interface ResendSignupOtpInput { email: string }
 interface VerifySignupOtpInput { email: string; code: string }
-
-const COOKIE_OPTS = {
-  httpOnly: true,
-  secure:   process.env['NODE_ENV'] === 'production',
-  sameSite: 'strict' as const,
-  maxAge:   7 * 24 * 60 * 60 * 1000,
-};
 
 // ── Resolvers ─────────────────────────────────────────
 export const resolvers = {
@@ -131,8 +125,10 @@ export const resolvers = {
       const ip = ctx.req.ip ?? 'unknown';
       logger.info(`[GRAPHQL] signup: "${input.email}" name="${input.name}" from ${ip}`);
       checkRateLimit(ctx.req, 'su', 3, 60_000);
-      const result = await AuthService.signupUser(input.name, input.email, input.password).catch(toGQL);
-      logger.info(`[GRAPHQL] ✅ signup: user created for "${input.email}"`);
+      const { verificationTicket, ...result } =
+        await AuthService.signupUser(input.name, input.email, input.password).catch(toGQL);
+      ctx.res.cookie(AuthService.VERIFY_TICKET_COOKIE, verificationTicket, VERIFY_TICKET_COOKIE_OPTS);
+      logger.info(`[GRAPHQL] ✅ signup: handled for "${input.email}"`);
       return result;
     },
 
@@ -145,7 +141,7 @@ export const resolvers = {
       const ip = ctx.req.ip ?? 'unknown';
       logger.info(`[GRAPHQL] resendSignupOtp: "${input.email}" from ${ip}`);
       checkRateLimit(ctx.req, 'rsuo', 2, 60_000);
-      await AuthService.resendSignupOtp(input.email).catch(toGQL);
+      await AuthService.resendSignupOtp(input.email, ctx.req.cookies?.[AuthService.VERIFY_TICKET_COOKIE]).catch(toGQL);
       logger.info(`[GRAPHQL] ✅ resendSignupOtp: new OTP sent to "${input.email}"`);
       return { success: true, message: 'If a pending signup exists for that email, a new code has been sent.' };
     },
@@ -160,8 +156,9 @@ export const resolvers = {
       logger.info(`[GRAPHQL] verifySignupOtp: "${input.email}" from ${ip}`);
       checkRateLimit(ctx.req, 'vsuo', 3, 60_000);
       const { accessToken, refreshToken, user } =
-        await AuthService.verifySignupOtp(input.email, input.code).catch(toGQL);
-      ctx.res.cookie('refreshToken', refreshToken, COOKIE_OPTS);
+        await AuthService.verifySignupOtp(input.email, input.code, ctx.req.cookies?.[AuthService.VERIFY_TICKET_COOKIE]).catch(toGQL);
+      ctx.res.cookie(REFRESH_COOKIE, refreshToken, REFRESH_COOKIE_OPTS);
+      ctx.res.clearCookie(AuthService.VERIFY_TICKET_COOKIE, CLEAR_COOKIE_OPTS);
       logger.info(`[GRAPHQL] ✅ verifySignupOtp: "${input.email}" verified & logged in`);
       return { accessToken, user: { id: user.id, name: user.name, email: user.email, role: user.role } };
     },

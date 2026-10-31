@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS email_verification_tokens (
   expires_at TIMESTAMPTZ NOT NULL,          -- now + 5 minutes
   used       BOOLEAN     NOT NULL DEFAULT FALSE,
   attempts   INT         NOT NULL DEFAULT 0,    -- wrong-guess counter, burns at 5
+  ticket_hash TEXT,                             -- sha256 of the requesting browser's verify_ticket cookie
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

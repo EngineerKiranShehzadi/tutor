@@ -22,7 +22,7 @@ const DUMMY_PASSWORD_HASH = bcrypt.hashSync(crypto.randomBytes(16).toString('hex
 // ── LOGIN ─────────────────────────────────────────────
 type LoginResult =
   | { status: 'AUTHENTICATED'; user: Omit<User, 'password_hash'>; accessToken: string; refreshToken: string }
-  | { status: 'EMAIL_VERIFICATION_REQUIRED'; email: string; verificationExpiresInSeconds: number };
+  | { status: 'EMAIL_VERIFICATION_REQUIRED'; email: string; verificationExpiresInSeconds: number; verificationTicket: string };
 
 export const loginUser = async (email: string, password: string): Promise<LoginResult> => {
   logger.info(`[AUTH] loginUser: attempt for "${email}"`);
@@ -56,18 +56,24 @@ export const loginUser = async (email: string, password: string): Promise<LoginR
     );
     const existingToken = existingTokens[0];
 
+    // The password was just proven, so this browser may verify the account:
+    // hand it a new ticket (any earlier browser's ticket stops working).
+    const verificationTicket = newVerificationTicket();
+
     if (existingToken && new Date(existingToken.expires_at) > new Date()) {
-      // Valid OTP exists, reuse it and return remaining time
+      // Valid OTP exists: reuse it (no duplicate email), bound to this browser
+      await query('UPDATE email_verification_tokens SET ticket_hash = $2 WHERE id = $1', [existingToken.id, hashToken(verificationTicket)]);
       const expiresInSeconds = Math.ceil((new Date(existingToken.expires_at).getTime() - Date.now()) / 1000);
       return {
         status: 'EMAIL_VERIFICATION_REQUIRED',
         email: user.email,
-        verificationExpiresInSeconds: Math.min(RESEND_COOLDOWN_SECONDS, Math.max(0, expiresInSeconds))
+        verificationExpiresInSeconds: Math.min(RESEND_COOLDOWN_SECONDS, Math.max(0, expiresInSeconds)),
+        verificationTicket,
       };
     }
 
     // No valid OTP, issue a fresh one
-    const otp = await issueEmailVerificationOtp(user.id);
+    const otp = await issueEmailVerificationOtp(user.id, verificationTicket);
 
     if (env.NODE_ENV !== 'production') {
       logger.info(`[DEV] Login Verification OTP for ${user.email}: ${otp}`);
@@ -87,7 +93,8 @@ export const loginUser = async (email: string, password: string): Promise<LoginR
     return {
       status: 'EMAIL_VERIFICATION_REQUIRED',
       email: user.email,
-      verificationExpiresInSeconds: RESEND_COOLDOWN_SECONDS
+      verificationExpiresInSeconds: RESEND_COOLDOWN_SECONDS,
+      verificationTicket,
     };
   }
 
@@ -427,7 +434,25 @@ export const resetPasswordWithOtp = async (
 };
 
 // ── SIGNUP: INTERNAL OTP HELPER ───────────────────────
-const issueEmailVerificationOtp = async (userId: string): Promise<string> => {
+// A verification code is only usable together with the ticket of the browser
+// that asked for it (signup, or a login that proved the password). The ticket
+// travels in the httpOnly verify_ticket cookie, set by the resolver/controller;
+// only its hash is stored.
+export const VERIFY_TICKET_COOKIE = 'verify_ticket';
+const newVerificationTicket = (): string => crypto.randomBytes(32).toString('base64url');
+
+// True when the newest code for this user was issued to the holder of `ticket`.
+const ticketMatchesLatestCode = async (userId: string, ticket: string | undefined): Promise<boolean> => {
+  if (!ticket) return false;
+  const { rows } = await query<{ ticket_hash: string | null }>(
+    `SELECT ticket_hash FROM email_verification_tokens
+     WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1`,
+    [userId]
+  );
+  return !!rows[0]?.ticket_hash && rows[0].ticket_hash === hashToken(ticket);
+};
+
+const issueEmailVerificationOtp = async (userId: string, ticket: string): Promise<string> => {
   const otp = crypto.randomInt(100000, 1000000).toString();
   const codeHash = await bcrypt.hash(otp, 12);
   const expiresAt = new Date(Date.now() + 5 * 60_000); // 5 minutes (NIST SP 800-63B: max 10 min)
@@ -440,8 +465,8 @@ const issueEmailVerificationOtp = async (userId: string): Promise<string> => {
 
   // Store new token
   await query(
-    'INSERT INTO email_verification_tokens (user_id, code_hash, expires_at) VALUES ($1, $2, $3)',
-    [userId, codeHash, expiresAt]
+    'INSERT INTO email_verification_tokens (user_id, code_hash, expires_at, ticket_hash) VALUES ($1, $2, $3, $4)',
+    [userId, codeHash, expiresAt, hashToken(ticket)]
   );
 
   return otp;
@@ -479,7 +504,7 @@ export const signupUser = async (
   name: string,
   email: string,
   password: string
-): Promise<{ email: string; message: string }> => {
+): Promise<{ email: string; message: string; verificationTicket: string }> => {
   // Validate before touching the database: cheaper, and it keeps invalid input
   // from reaching the users table at all.
   validateSignupInput(name, email, password);
@@ -508,7 +533,8 @@ export const signupUser = async (
         logger.warn(`[AUTH] signupUser: account-exists notice failed for "${normalizedEmail}"`, noticeErr);
       }
     }
-    return { email: normalizedEmail, message: SIGNUP_CODE_SENT };
+    // A ticket that matches nothing, so the response looks the same.
+    return { email: normalizedEmail, message: SIGNUP_CODE_SENT, verificationTicket: newVerificationTicket() };
   }
 
   const { rows } = await query<User>(
@@ -519,7 +545,8 @@ export const signupUser = async (
   );
   const user = rows[0];
 
-  const otp = await issueEmailVerificationOtp(user.id);
+  const verificationTicket = newVerificationTicket();
+  const otp = await issueEmailVerificationOtp(user.id, verificationTicket);
 
   if (env.NODE_ENV !== 'production') {
     logger.info(`[DEV] Signup OTP for ${user.email}: ${otp}`);
@@ -535,23 +562,24 @@ export const signupUser = async (
     }
   }
 
-  return { email: user.email, message: SIGNUP_CODE_SENT };
+  return { email: user.email, message: SIGNUP_CODE_SENT, verificationTicket };
 };
 
 // ── SIGNUP: RESEND OTP ────────────────────────────────
-export const resendSignupOtp = async (email: string): Promise<void> => {
+export const resendSignupOtp = async (email: string, ticket: string | undefined): Promise<void> => {
   const { rows } = await query<User>('SELECT * FROM users WHERE email = $1', [email.toLowerCase()]);
   const user = rows[0];
   // Unknown and already-verified addresses get the same silent success as a real
   // pending signup, so this endpoint cannot be used to probe accounts. The real
   // reason stays in the log.
-  if (!user || user.is_verified) {
-    logger.warn(`[AUTH] resendSignupOtp: nothing to resend for "${email}" (${user ? 'already verified' : 'unknown email'})`);
+  // A code is only re-sent to the browser the previous one was issued to.
+  if (!user || user.is_verified || !(await ticketMatchesLatestCode(user.id, ticket))) {
+    logger.warn(`[AUTH] resendSignupOtp: nothing to resend for "${email}" (${!user ? 'unknown email' : user.is_verified ? 'already verified' : 'ticket does not match'})`);
     await bcrypt.compare('x', DUMMY_PASSWORD_HASH);
     return;
   }
 
-  const otp = await issueEmailVerificationOtp(user.id);
+  const otp = await issueEmailVerificationOtp(user.id, ticket!);
 
   if (env.NODE_ENV !== 'production') {
     logger.info(`[DEV] Signup Resend OTP for ${user.email}: ${otp}`);
@@ -570,11 +598,11 @@ export const resendSignupOtp = async (email: string): Promise<void> => {
 };
 
 // ── LOGIN: RESEND EMAIL VERIFICATION OTP ──────────────
-export const resendLoginOtp = async (email: string): Promise<number> => {
+export const resendLoginOtp = async (email: string, ticket: string | undefined): Promise<number> => {
   const { rows } = await query<User>('SELECT * FROM users WHERE email = $1', [email.toLowerCase()]);
   const user = rows[0];
-  if (!user || user.is_verified) {
-    logger.warn(`[AUTH] resendLoginOtp: nothing to resend for "${email}" (${user ? 'already verified' : 'unknown email'})`);
+  if (!user || user.is_verified || !(await ticketMatchesLatestCode(user.id, ticket))) {
+    logger.warn(`[AUTH] resendLoginOtp: nothing to resend for "${email}" (${!user ? 'unknown email' : user.is_verified ? 'already verified' : 'ticket does not match'})`);
     await bcrypt.compare('x', DUMMY_PASSWORD_HASH);
     return RESEND_COOLDOWN_SECONDS;
   }
@@ -595,7 +623,7 @@ export const resendLoginOtp = async (email: string): Promise<number> => {
   }
 
   // Issue fresh OTP
-  const otp = await issueEmailVerificationOtp(user.id);
+  const otp = await issueEmailVerificationOtp(user.id, ticket!);
 
   if (env.NODE_ENV !== 'production') {
     logger.info(`[DEV] Login Resend OTP for ${user.email}: ${otp}`);
@@ -618,7 +646,8 @@ export const resendLoginOtp = async (email: string): Promise<number> => {
 // ── SIGNUP: VERIFY OTP ────────────────────────────────
 export const verifySignupOtp = async (
   email: string,
-  code: string
+  code: string,
+  ticket: string | undefined
 ): Promise<{ user: Omit<User, 'password_hash'>; accessToken: string; refreshToken: string }> => {
   logger.info(`[AUTH] verifySignupOtp: verifying signup OTP for "${email}"`);
   const { rows: userRows } = await query<User>('SELECT * FROM users WHERE email = $1', [email.toLowerCase()]);
@@ -628,14 +657,15 @@ export const verifySignupOtp = async (
     throw new AppError(OTP_REJECTED, 400);
   }
 
+  // Only a code issued to this browser counts (see VERIFY_TICKET_COOKIE).
   const { rows: tokenRows } = await query<EmailVerificationToken>(
     `SELECT * FROM email_verification_tokens
-     WHERE user_id = $1 AND used = FALSE
+     WHERE user_id = $1 AND used = FALSE AND ticket_hash = $2
      ORDER BY created_at DESC LIMIT 1`,
-    [user.id]
+    [user.id, hashToken(ticket ?? '')]
   );
   const token = tokenRows[0];
-  if (!token) throw new AppError(OTP_REJECTED, 400);
+  if (!ticket || !token) throw new AppError(OTP_REJECTED, 400);
 
   if (new Date(token.expires_at) < new Date()) {
     await query('UPDATE email_verification_tokens SET used = TRUE WHERE id = $1', [token.id]);

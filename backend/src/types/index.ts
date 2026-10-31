@@ -33,6 +33,7 @@ export interface EmailVerificationToken {
   expires_at: Date;
   used: boolean;
   attempts: number;
+  ticket_hash: string | null;
   created_at: Date;
 }
 
