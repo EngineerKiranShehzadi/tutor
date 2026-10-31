@@ -83,6 +83,12 @@ export const env = {
   NODE_ENV:      optional('NODE_ENV', 'development'),
   PORT:          parseInt(optional('PORT', '5000'), 10),
   FRONTEND_URL:  optional('FRONTEND_URL', 'http://localhost:3000'),
+  // Domain attribute for the auth cookies. Leave blank when the frontend and the
+  // API share a host (cookies ignore ports, so localhost:3000/5000 is fine). Set
+  // it to the shared parent (e.g. example.com) when they are on different
+  // subdomains: the frontend's middleware.ts must be able to see the refresh
+  // cookie to let a signed-in visitor through.
+  COOKIE_DOMAIN: optional('COOKIE_DOMAIN', '').trim(),
   // Upper bound for a graceful shutdown (SIGTERM/SIGINT): finishing in-flight
   // requests, flushing traces to Phoenix and closing the DB pool. If it is
   // not done by then, the process exits with code 1. See server.ts.

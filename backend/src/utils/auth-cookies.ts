@@ -9,6 +9,7 @@ const base = {
   httpOnly: true,
   secure:   env.NODE_ENV === 'production',
   sameSite: 'strict' as const,
+  ...(env.COOKIE_DOMAIN ? { domain: env.COOKIE_DOMAIN } : {}),
 };
 
 export const REFRESH_COOKIE = 'refreshToken';
