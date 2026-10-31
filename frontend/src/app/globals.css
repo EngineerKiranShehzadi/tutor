@@ -73,3 +73,24 @@ body {
   to   { opacity: 1; transform: translateY(0); }
 }
 .animate-fade-in { animation: fade-in-up 0.25s ease-out both; }
+
+/* Formatted answer text inside chat bubbles — produced by
+   lib/format-answer.ts. Tailwind's preflight removes list styling globally,
+   so lists built from the model's markdown need it restored here. Scoped to
+   .chat-markdown so nothing else on the page is affected. */
+.chat-markdown p { margin: 0 0 0.6em; }
+.chat-markdown p:last-child { margin-bottom: 0; }
+.chat-markdown ul,
+.chat-markdown ol { margin: 0.4em 0 0.6em; padding-left: 1.35em; }
+.chat-markdown ul:last-child,
+.chat-markdown ol:last-child { margin-bottom: 0; }
+.chat-markdown ul { list-style: disc; }
+.chat-markdown ol { list-style: decimal; }
+.chat-markdown li { margin: 0.2em 0; }
+.chat-markdown strong { font-weight: 700; }
+.chat-markdown code {
+  background: rgba(99, 102, 241, 0.09);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  font-size: 0.92em;
+}

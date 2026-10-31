@@ -7,6 +7,116 @@ Newest entry at the top.
 
 ---
 
+## 2026-10-29 — Answer formatting, XSS hole, timeouts and suggestions
+
+**Changed by:** Laiba
+
+Four fixes found while running the first real end-to-end test of the tutor.
+
+### 1. Answers were injected as raw HTML (security)
+
+**File:** `frontend/src/components/chat/MessageBubble.tsx`, new
+`frontend/src/lib/format-answer.ts`, `frontend/src/app/globals.css`
+
+The finished answer was rendered with:
+
+```tsx
+<span dangerouslySetInnerHTML={{ __html: message.content }} />
+```
+
+Two problems came from that one line.
+
+**Security.** Whatever the answer contained was executed by the browser as
+real markup. Answer text is generated from uploaded dataset content, so a
+dataset row containing a `<script>` tag, or an `<img>` with an `onerror`
+attribute, would run code in every student's browser. That is stored
+cross-site scripting, with the dataset upload as its entry point.
+
+**Presentation.** The answer model writes **markdown** (`* item`,
+`**bold**`), not HTML. So every list reached students as literal asterisks:
+
+```
+This means Generative AI can: * Suggest alternative solutions ... * Help you
+model your ideas ...
+```
+
+**Fix:** a new `formatAnswerHtml` helper. It escapes the entire answer first
+and unconditionally, so nothing from the model or the dataset can reach the
+page as live markup, and only then converts a small fixed set of patterns
+(paragraphs, bulleted and numbered lists, bold, inline code) back into tags.
+No new package was added. Tailwind's preflight strips list styling, so the
+matching CSS was added to `globals.css`, scoped to `.chat-markdown`.
+
+Verified against a real answer, a numbered list with bold and code, and a
+`<script>` injection attempt — the last comes out as harmless text.
+
+### 2. "Not reachable" when the server was running fine
+
+**Files:** `backend/src/services/rerank.service.ts`,
+`backend/src/services/embedding.service.ts`
+
+During testing the backend reported:
+
+```
+20:43:00  Local rerank server not reachable at http://localhost:5001/rerank
+```
+
+while the Python server's own log showed:
+
+```
+20:43:04  "POST /rerank HTTP/1.1" 200
+```
+
+The server was running and answered — four seconds after the backend's
+30-second timeout gave up. Both services caught every failure and reported it
+as "not reachable", so a slow answer was indistinguishable from a server that
+was not running. That sent debugging in the wrong direction.
+
+**Fix:** a timeout now says so, states how long it waited, and says to raise
+the limit. A genuine connection failure keeps the old message. The rerank
+message also said `python3 scripts/embedding_server.py`; on Windows the
+command is `python`, so following it as printed failed.
+
+### 3. Timeouts were hardcoded
+
+Both services had `30_000` written into the code. They now read
+`RERANK_TIMEOUT_MS` and `EMBEDDING_TIMEOUT_MS`, **defaulting to the same 30
+seconds**.
+
+The default was deliberately not raised: a slow laptop needs more, but a
+deployed server should not. Raising it globally would hide a genuinely
+unhealthy server. On a constrained machine, set it in `.env` instead:
+
+```
+RERANK_TIMEOUT_MS=90000
+```
+
+### 4. Suggested questions the lecture could not answer
+
+**File:** `frontend/src/lib/constants.ts`
+
+The suggestion chips are one fixed list shown on every lecture, and the first
+one was **"What is a zero-shot prompt?"**. Lecture 1 does not cover zero-shot
+prompting — **0 of its 317 rows mention it** — so the first thing a new
+student clicked returned "I could not find this information in this lecture".
+
+The tutor was behaving correctly. The suggestion was wrong.
+
+**Fix:** replaced the two topic-specific entries with questions answerable
+from any lecture's own content.
+
+**Future work:** generate the suggestions per lecture from that lecture's own
+dataset, instead of one fixed list for all seven.
+
+### Not a bug — worth knowing
+
+Asking the **same** question twice returns the second answer much faster
+(10–15s instead of 30–40s). That is `rag_answer_memory` returning the stored
+answer and skipping search, reranking and generation entirely. When judging
+speed, use questions that have not been asked before.
+
+---
+
 ## 2026-10-29 — User Management could not manage admins
 
 **Changed by:** Laiba

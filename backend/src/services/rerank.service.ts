@@ -3,6 +3,13 @@ import { logger } from '../utils/logger';
 
 export const LOCAL_RERANK_URL = process.env.RERANK_SERVER_URL ?? 'http://localhost:5001/rerank';
 
+// How long to wait for the cross-encoder. Configurable because its speed
+// depends entirely on the host: a memory-constrained laptop can take 30s+ for
+// 15 candidates, while a normal server does it in a couple of seconds. The
+// default stays low on purpose — raising it globally would hide a genuinely
+// unhealthy server instead of surfacing it.
+export const RERANK_TIMEOUT_MS = Number(process.env.RERANK_TIMEOUT_MS ?? 30_000);
+
 // Identifies which cross-encoder model produced a rerank score. The local
 // rerank server exposes no model-metadata endpoint, so this is a
 // manually-maintained constant — bump it if the server's model changes.
@@ -26,12 +33,23 @@ export const rerankChunks = async (
         query: question,
         candidates: candidates.map(c => ({ id: c.id, text: c.chunk_text })),
       }),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(RERANK_TIMEOUT_MS),
     });
   } catch (err) {
+    // AbortSignal.timeout rejects with a TimeoutError; a server that is not
+    // listening rejects with a connection error. Reporting both as "not
+    // reachable" sends whoever is debugging to go and check a server that is
+    // running perfectly well and merely answered late.
+    if ((err as Error)?.name === 'TimeoutError') {
+      throw new Error(
+        `Rerank server at ${LOCAL_RERANK_URL} did not respond within ${RERANK_TIMEOUT_MS}ms. ` +
+        `It IS running, but it is too slow — usually a sign the machine is short of memory. ` +
+        `Raise RERANK_TIMEOUT_MS if this is expected on this machine.`
+      );
+    }
     throw new Error(
       `Local rerank server not reachable at ${LOCAL_RERANK_URL}. ` +
-      `Start it with: python3 scripts/embedding_server.py`
+      `Start it with: python scripts/embedding_server.py`
     );
   }
 

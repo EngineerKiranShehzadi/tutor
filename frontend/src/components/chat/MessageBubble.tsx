@@ -3,6 +3,7 @@ import Image from 'next/image';
 
 import { ChatMessage } from '@/types';
 import { useAuth } from '@/hooks/useAuth';
+import { formatAnswerHtml } from '@/lib/format-answer';
 
 interface Props {
   message:  ChatMessage;
@@ -60,7 +61,14 @@ export const MessageBubble = ({ message, onSpeak, isSpeaking }: Props) => {
               />
             </>
           ) : (
-            <span dangerouslySetInnerHTML={{ __html: message.content }} />
+            /* formatAnswerHtml escapes the answer FIRST, then re-adds only a
+               small fixed set of formatting tags (see lib/format-answer.ts).
+               The answer is model-generated from uploaded dataset content, so
+               it must never be injected as html unescaped. */
+            <span
+              className="chat-markdown break-words"
+              dangerouslySetInnerHTML={{ __html: formatAnswerHtml(message.content) }}
+            />
           )}
         </div>
 

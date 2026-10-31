@@ -18,9 +18,16 @@ export const CHANNEL = {
   subscribers: '3.05K',
 };
 
+// Shown on EVERY lecture, so every entry must be answerable from any
+// lecture's own dataset. Topic-specific prompts do not belong here: the old
+// list led with "What is a zero-shot prompt?", which Lecture 1 does not cover
+// at all (0 of its 317 rows mention it), so the first thing a new student
+// clicked returned "I could not find this information in this lecture".
+// A per-lecture list generated from each dataset would be better still —
+// see the future-work note in CHANGES.md.
 export const AI_SUGGESTIONS = [
-  'What is a zero-shot prompt?',
-  'Give me an example prompt',
-  'Quiz me on this lecture',
   'Summarize key points',
+  'What is this lecture about?',
+  'Explain the main idea in simple terms',
+  'Quiz me on this lecture',
 ];
