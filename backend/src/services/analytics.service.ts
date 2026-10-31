@@ -370,23 +370,28 @@ function tokenize(text: string): Set<string> {
 
 // Content Gaps is bounded: it reads at most the newest CONTENT_GAPS_MAX_QUESTIONS
 // questions from the last CONTENT_GAPS_WINDOW_DAYS days and at most
-// CONTENT_GAPS_MAX_CHUNKS chunks, and tokenises them one by one — it used to load
+// CONTENT_GAPS_MAX_CHUNKS Q&As (shared evenly between the lectures), and
+// tokenises them one by one — it used to load
 // every question ever asked plus every active chunk and tokenise one giant joined
 // string, stalling the shared event loop (and every student's chat) as both grew.
 export const CONTENT_GAPS_WINDOW_DAYS = 90;
 export const CONTENT_GAPS_MAX_QUESTIONS = 20_000;
 export const CONTENT_GAPS_MAX_CHUNKS = 20_000;
 
-export const getContentGaps = async () => {
+// opts.maxChunksPerLecture overrides the even share (tests).
+export const getContentGaps = async (opts: { maxChunksPerLecture?: number } = {}) => {
   logger.info('[ANALYTICS] getContentGaps: comparing student questions vs AI training data');
 
   // Exact per-lecture counts for the window — the headline number never
-  // depends on the sample below. Only lectures with a trained AI agent (READY).
+  // depends on the sample below. Only lectures with a trained AI agent: READY
+  // and serving a published dataset. A legacy READY lecture with no active
+  // version has nothing to compare against (chat refuses it too); scoring it
+  // 0% would label it a "Critical Gap".
   const { rows: askedRows } = await query<{ lecture_id: number; lecture_title: string; asked: string }>(
     `SELECT sq.lecture_id, l.title AS lecture_title, COUNT(*) AS asked
      FROM student_questions sq
      JOIN lectures l ON l.id = sq.lecture_id
-     WHERE l.status = 'READY'
+     WHERE l.status = 'READY' AND l.active_version_id IS NOT NULL
        AND sq.created_at >= NOW() - make_interval(days => $1)
      GROUP BY sq.lecture_id, l.title`,
     [CONTENT_GAPS_WINDOW_DAYS]
@@ -398,7 +403,7 @@ export const getContentGaps = async () => {
     `SELECT sq.lecture_id, sq.question
      FROM student_questions sq
      JOIN lectures l ON l.id = sq.lecture_id
-     WHERE l.status = 'READY'
+     WHERE l.status = 'READY' AND l.active_version_id IS NOT NULL
        AND sq.created_at >= NOW() - make_interval(days => $1)
      ORDER BY sq.created_at DESC
      LIMIT $2`,
@@ -408,28 +413,41 @@ export const getContentGaps = async () => {
 
   const lectureIds = askedRows.map(r => r.lecture_id);
 
-  // Get training data (QNA chunks) for those lectures
+  // Training vocabulary: the question, topic and keywords of each active Q&A.
+  // Its first piece is enough (a long answer is split into pieces; the other
+  // fields are the same on every piece). Capped PER LECTURE, in a fixed order:
+  // a bare LIMIT across all lectures could hand one lecture none of its
+  // vocabulary and score it 0%.
+  const perLectureCap = opts.maxChunksPerLecture ?? Math.max(1, Math.floor(CONTENT_GAPS_MAX_CHUNKS / lectureIds.length));
   const { rows: chunks } = await query<{
     lecture_id: number; topic: string | null; question: string; keywords: string | null;
   }>(
-    `SELECT lecture_id, topic, question, keywords
-     FROM lecture_qna_chunks c
-     WHERE lecture_id = ANY($1::int[])
-       AND c.id IN (SELECT d.chunk_id FROM dataset_version_chunks d JOIN lectures l ON l.active_version_id = d.version_id WHERE l.id = c.lecture_id)
-     LIMIT $2`,
-    [lectureIds, CONTENT_GAPS_MAX_CHUNKS]
+    `SELECT lecture_id, topic, question, keywords FROM (
+       SELECT c.lecture_id, c.topic, c.question, c.keywords,
+              ROW_NUMBER() OVER (PARTITION BY c.lecture_id ORDER BY c.id) AS rn
+       FROM lecture_qna_chunks c
+       JOIN lectures l ON l.id = c.lecture_id
+       JOIN dataset_version_chunks d ON d.chunk_id = c.id AND d.version_id = l.active_version_id AND d.chunk_index = 0
+       WHERE c.lecture_id = ANY($1::int[])
+     ) t
+     WHERE rn <= $2`,
+    [lectureIds, perLectureCap]
   );
 
-  // Get chunk counts per lecture
-  const { rows: countRows } = await query<{ lecture_id: number; count: string }>(
-    `SELECT lecture_id, COUNT(*) AS count
+  // Exact chunk (piece) and Q&A counts per lecture.
+  const { rows: countRows } = await query<{ lecture_id: number; count: string; qas: string }>(
+    `SELECT c.lecture_id, COUNT(*) AS count, COUNT(*) FILTER (WHERE d.chunk_index = 0) AS qas
      FROM lecture_qna_chunks c
-     WHERE lecture_id = ANY($1::int[])
-       AND c.id IN (SELECT d.chunk_id FROM dataset_version_chunks d JOIN lectures l ON l.active_version_id = d.version_id WHERE l.id = c.lecture_id)
-     GROUP BY lecture_id`,
+     JOIN lectures l ON l.id = c.lecture_id
+     JOIN dataset_version_chunks d ON d.chunk_id = c.id AND d.version_id = l.active_version_id
+     WHERE c.lecture_id = ANY($1::int[])
+     GROUP BY c.lecture_id`,
     [lectureIds]
   );
   const chunkCountMap = new Map(countRows.map(r => [r.lecture_id, Number(r.count)]));
+  const qaCountMap = new Map(countRows.map(r => [r.lecture_id, Number(r.qas)]));
+  const vocabRowsRead = new Map<number, number>();
+  for (const c of chunks) vocabRowsRead.set(c.lecture_id, (vocabRowsRead.get(c.lecture_id) ?? 0) + 1);
 
   // Per-lecture sampled questions
   const lectureStudentQs = new Map<number, string[]>();
@@ -500,6 +518,8 @@ export const getContentGaps = async () => {
       // True when the window held more questions than were analysed (the
       // newest CONTENT_GAPS_MAX_QUESTIONS were used).
       sampled,
+      // True when only part of this lecture's Q&As fed the vocabulary.
+      chunksSampled:       (vocabRowsRead.get(lectureId) ?? 0) < (qaCountMap.get(lectureId) ?? 0),
       windowDays:          CONTENT_GAPS_WINDOW_DAYS,
     });
   }

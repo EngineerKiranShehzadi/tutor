@@ -686,6 +686,13 @@ const run = async () => {
   // ── AD4: Content Gaps reads a bounded, windowed sample ───────────────
   {
     const lec = (await query<{ id: number }>(`INSERT INTO lectures (title, youtube_url, youtube_video_id, status) VALUES ('[ad4] gaps', 'https://youtu.be/xxxxxxxxxxx', 'xxxxxxxxxxx', 'READY') RETURNING id`)).rows[0].id;
+    // A published dataset (Content Gaps skips a lecture without one, AD-N6).
+    const ver = (await query<{ id: number }>(
+      `INSERT INTO dataset_versions (lecture_id, version_no, status, mode, embedding_model_version, chunking_config_version, stats)
+       VALUES ($1, 1, 'ACTIVE', 'MERGE', 'm', 'c', '{}'::jsonb) RETURNING id`, [lec])).rows[0].id;
+    const ch = (await query<{ id: number }>(`INSERT INTO lecture_qna_chunks (lecture_id, question, answer, chunk_text) VALUES ($1, 'What is tokenization?', 'a', 'q') RETURNING id`, [lec])).rows[0].id;
+    await query(`INSERT INTO dataset_version_chunks (version_id, chunk_id, qa_id, chunk_index) VALUES ($1, $2, 'ad4-1', 0)`, [ver, ch]);
+    await query('UPDATE lectures SET active_version_id = $2 WHERE id = $1', [lec, ver]);
     const stu = (await query<{ id: string }>(`INSERT INTO users (name, email, password_hash, is_verified, role) VALUES ('AD4', $1, 'x', TRUE, 'STUDENT') RETURNING id`, [`ad4-${Date.now()}@example.test`])).rows[0].id;
     await query(`INSERT INTO student_questions (student_id, lecture_id, question)
                  SELECT $1, $2, 'what is tokenization number ' || g FROM generate_series(1, 25000) g`, [stu, lec]);
@@ -1132,6 +1139,42 @@ const run = async () => {
       (logger as { error: unknown }).error = realError;
       srv.close();
       s3.isS3Configured = realS3.cfg; s3.uploadRawDataset = realS3.up;
+    }
+  }
+
+  // ── AD-N6: Content Gaps reads each lecture's vocabulary fairly ──
+  {
+    const stu = (await query<{ id: string }>(`INSERT INTO users (name, email, password_hash, is_verified, role) VALUES ('ADN6', $1, 'x', TRUE, 'STUDENT') RETURNING id`, [`adn6-${Date.now()}@example.test`])).rows[0].id;
+    // pieces[i] = how many pieces Q&A i is stored as.
+    const mkLecture = async (word: string, pieces: number[] | null) => {
+      const lec = (await query<{ id: number }>(`INSERT INTO lectures (title, youtube_url, youtube_video_id, status) VALUES ($1, 'https://youtu.be/xxxxxxxxxxx', 'xxxxxxxxxxx', 'READY') RETURNING id`, [`[adn6] ${word}`])).rows[0].id;
+      await query(`INSERT INTO student_questions (student_id, lecture_id, question) VALUES ($1, $2, $3)`, [stu, lec, `what is ${word}zz?`]);
+      if (!pieces) return lec; // legacy READY lecture with no published dataset
+      const ver = (await query<{ id: number }>(
+        `INSERT INTO dataset_versions (lecture_id, version_no, status, mode, embedding_model_version, chunking_config_version, stats)
+         VALUES ($1, 1, 'ACTIVE', 'MERGE', 'm', 'c', '{}'::jsonb) RETURNING id`, [lec])).rows[0].id;
+      for (const [i, n] of pieces.entries()) {
+        for (let p = 0; p < n; p++) {
+          const c = (await query<{ id: number }>(`INSERT INTO lecture_qna_chunks (lecture_id, question, answer, chunk_text) VALUES ($1, $2, 'full answer', $3) RETURNING id`,
+            [lec, `${word}zz question ${i}`, `piece ${p}`])).rows[0].id;
+          await query(`INSERT INTO dataset_version_chunks (version_id, chunk_id, qa_id, chunk_index) VALUES ($1, $2, $3, $4)`, [ver, c, `${word}-${i}`, p]);
+        }
+      }
+      await query('UPDATE lectures SET active_version_id = $2 WHERE id = $1', [lec, ver]);
+      return lec;
+    };
+    const big = await mkLecture('alpha', Array.from({ length: 12 }, () => 1));
+    const small = await mkLecture('bravo', [1, 3]);          // 2 Q&As, the second in 3 pieces
+    const legacy = await mkLecture('charlie', null);
+    try {
+      const gaps = await getContentGaps({ maxChunksPerLecture: 5 });
+      const g = (id: number) => gaps.find(x => x.lectureId === id);
+      check('AD-N6-1. Content Gaps: each lecture gets its own vocabulary share (chunksSampled only where the cap cut it), and a READY lecture with no published dataset is left out instead of scored 0%',
+        g(big)?.chunksSampled === true && g(small)?.chunksSampled === false && g(small)?.coverageScore === 100 && g(small)?.chunkCount === 4
+          && g(legacy) === undefined,
+        `big=${JSON.stringify({ s: g(big)?.chunksSampled, cov: g(big)?.coverageScore })} small=${JSON.stringify({ s: g(small)?.chunksSampled, cov: g(small)?.coverageScore, chunks: g(small)?.chunkCount })} legacyListed=${g(legacy) !== undefined}`);
+    } finally {
+      await query('DELETE FROM student_questions WHERE lecture_id = ANY($1::int[])', [[big, small, legacy]]);
     }
   }
 

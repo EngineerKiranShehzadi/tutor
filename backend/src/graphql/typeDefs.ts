@@ -257,6 +257,8 @@ export const typeDefs = `#graphql
     # Analysis covers questions from the last windowDays days; sampled = the
     # window held more questions than were analysed (newest 20,000 used).
     sampled:             Boolean!
+    # Only part of the lecture's Q&As were compared (the per-lecture cap).
+    chunksSampled:       Boolean!
     windowDays:          Int!
   }
 

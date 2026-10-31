@@ -108,6 +108,7 @@ export const GET_CONTENT_GAPS = gql`
       answeredFromLecture
       notInLecture
       sampled
+      chunksSampled
       windowDays
     }
   }
