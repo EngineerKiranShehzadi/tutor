@@ -1,14 +1,15 @@
 import { classifyErrorCode } from './tracer';
 
-// Passive health signal from REAL provider calls (embedding, rerank). Used by
-// the readiness probe for hosted providers that have no free endpoint to probe
-// (e.g. Voyage rerank): a config check alone would report a dead provider as
-// healthy. Costs nothing — it only records outcomes of calls already made.
+// Passive health signal from REAL provider calls (embedding, rerank, the
+// answer LLM). Used by the readiness probe for hosted providers that have no
+// free endpoint to probe (e.g. Voyage rerank, Groq): a config check alone
+// would report a dead provider as healthy. Costs nothing — it only records
+// outcomes of calls already made.
 //
 // Only availability failures count (unreachable, timeout, rate limit/quota,
 // 5xx); a bad input is not the provider being down. A success resets it.
 
-export type ProviderComponent = 'embeddingServer' | 'reranker';
+export type ProviderComponent = 'embeddingServer' | 'reranker' | 'answerLlm';
 
 const AVAILABILITY_CODES = new Set(['TIMEOUT', 'SERVICE_UNREACHABLE', 'RATE_LIMITED', 'SERVICE_UNAVAILABLE', 'CONNECTION_ERROR']);
 // Two failures in a row, the last within this window, mean "down".

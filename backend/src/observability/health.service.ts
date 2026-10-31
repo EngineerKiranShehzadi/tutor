@@ -42,11 +42,24 @@ export const requiredComponents = (): ComponentName[] => [
 ];
 
 // Probes the provider that answers questions. Only Gemini has a probe; for any
-// other provider readiness must not claim it is healthy.
+// other provider readiness must not claim it is healthy. Whatever the
+// provider, recent REAL answer calls are consulted too (provider-signal.ts,
+// fed by generateAnswer): if they keep failing the answer LLM is unhealthy —
+// otherwise a Groq outage left /health/ready at 200 while every question failed.
 export async function checkAnswerLlm(provider = env.LLM.RAG_ANSWER.PROVIDER): Promise<ComponentHealth> {
-  if (provider === 'gemini') return checkGemini();
-  return { status: 'degraded', latencyMs: 0, errorCode: 'UNVERIFIED_PROVIDER' };
+  const base: ComponentHealth = provider === 'gemini'
+    ? await checkGemini()
+    : { status: 'degraded', latencyMs: 0, errorCode: 'UNVERIFIED_PROVIDER' };
+  return withProviderSignal('answerLlm')(base);
 }
+
+// A component whose recent real calls keep failing is unhealthy, whatever its
+// probe or config check said.
+const withProviderSignal = (c: ProviderComponent) => (h: ComponentHealth): ComponentHealth => {
+  if (h.status === 'unhealthy') return h;
+  const down = providerDownSignal(c);
+  return down ? { status: 'unhealthy', latencyMs: h.latencyMs, errorCode: down } : h;
+};
 
 interface CacheEntry { result: ComponentHealth; checkedAtMs: number; }
 const cache = new Map<string, CacheEntry>();
@@ -185,12 +198,18 @@ export function checkLiveness(): { status: 'ok'; timestamp: string } {
 export async function checkReadiness(): Promise<ReadinessResult> {
   const ttl = env.HEALTH.CACHE_TTL_MS;
 
+  // The passive signal is a map lookup, so it is applied again AFTER the cache:
+  // real calls that start failing show up at once, not when the cached
+  // probe expires.
   const [database, pgvector, embeddingServer, reranker, answerLlm] = await Promise.all([
     cached('database', ttl, checkDatabase),
     cached('pgvector', ttl, checkPgvector),
-    cached('embeddingServer', ttl, () => checkProviderHealth(resolveEmbeddingProvider(env.RETRIEVAL.EMBEDDING_PROVIDER), 'embeddingServer')),
-    cached('reranker', ttl, () => checkProviderHealth(resolveRerankProvider(env.RETRIEVAL.RERANK_PROVIDER), 'reranker')),
-    cached(`answerLlm:${env.LLM.RAG_ANSWER.PROVIDER}`, ttl, () => checkAnswerLlm()),
+    cached('embeddingServer', ttl, () => checkProviderHealth(resolveEmbeddingProvider(env.RETRIEVAL.EMBEDDING_PROVIDER), 'embeddingServer'))
+      .then(withProviderSignal('embeddingServer')),
+    cached('reranker', ttl, () => checkProviderHealth(resolveRerankProvider(env.RETRIEVAL.RERANK_PROVIDER), 'reranker'))
+      .then(withProviderSignal('reranker')),
+    cached(`answerLlm:${env.LLM.RAG_ANSWER.PROVIDER}`, ttl, () => checkAnswerLlm())
+      .then(withProviderSignal('answerLlm')),
   ]);
 
   const components = { database, pgvector, embeddingServer, reranker, answerLlm };

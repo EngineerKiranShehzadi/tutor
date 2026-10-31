@@ -2,6 +2,7 @@ import { AppError } from '../middleware/errorHandler';
 import { QnaChunk, LectureAgentProfile } from '../types';
 import { logger } from '../utils/logger';
 import { logSafeText } from '../observability/sanitize';
+import { tracked } from '../observability/provider-signal';
 import { env } from '../config/env';
 import { resolveLlmProvider } from '../llm/llm-provider.resolver';
 import { withLlmDiagnostic, extractLlmUsage } from '../llm/llm-observability.service';
@@ -242,9 +243,10 @@ ${question}${uncoveredBlock}${unavailableBlock}`;
       // history + question) is sent as one user prompt, exactly as before —
       // no separate systemPrompt field, so this doesn't change what the
       // model actually sees.
-      () => stream && provider.generateStream
+      // tracked(): each outcome feeds the readiness signal for the answer LLM.
+      () => tracked('answerLlm', () => (stream && provider.generateStream
         ? provider.generateStream(request, piece => { streamedAny = true; stream.onDelta(piece); })
-        : provider.generate(request),
+        : provider.generate(request))),
       extractLlmUsage
     );
     const finishReason = result.finishReason;

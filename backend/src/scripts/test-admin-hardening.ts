@@ -55,6 +55,8 @@ import { startMaintenanceScheduler, stopMaintenanceScheduler, maintenanceSchedul
 import { finishDatasetVersion, rollbackDataset, failDatasetVersion, reconcileLectureStatuses } from '../services/dataset-version.service';
 import { EMBEDDING_MODEL_VERSION } from '../services/embedding.service';
 import observabilityRoutes from '../routes/observability.routes';
+import { resolveLlmProvider } from '../llm/llm-provider.resolver';
+import { generateAnswer } from '../services/llm-gemini.service';
 import { STAGE_SPAN_KIND, OpenInferenceSpanKind } from '../observability/otel-semconv';
 import { OUTPUT_GUARDRAIL_REASONS } from '../rag/guardrails/output/answer-verification.types';
 
@@ -1179,6 +1181,36 @@ const run = async () => {
         `total=${page.total} items=${page.items.length}`);
     } finally {
       await query('DELETE FROM student_questions WHERE lecture_id = ANY($1::int[])', [[big, small, legacy]]);
+    }
+  }
+
+  // ── AD-N8: real answer-call failures make readiness say the answer LLM is down ──
+  {
+    const rag = env.LLM.RAG_ANSWER as { PROVIDER: string };
+    const saved = rag.PROVIDER;
+    rag.PROVIDER = 'groq';
+    const provider = resolveLlmProvider('groq') as { generate: (...a: unknown[]) => Promise<unknown> };
+    const realGenerate = provider.generate;
+    resetProviderSignals();
+    try {
+      provider.generate = async () => { throw new Error('Request timeout after 30000ms'); };
+      const answers = [];
+      for (let i = 0; i < 2; i++) answers.push(await generateAnswer('What is a prompt?', [], 'Lecture', []).catch(e => e as Error));
+      const down = await checkAnswerLlm();
+      const ready = await checkReadiness();
+      provider.generate = async (req: unknown) => ({ raw: 'ok', provider: 'groq', model: (req as { model: string }).model, finishReason: 'STOP' });
+      await generateAnswer('What is a prompt?', [], 'Lecture', []);
+      const healed = await checkAnswerLlm();
+      // (Overall readiness is unhealthy here anyway — no local embedding server — so the component is what is checked.)
+      check('AD-N8-1. RAG_LLM_PROVIDER=groq: two timed-out answer calls → answerLlm unhealthy (TIMEOUT) in /health/ready (a required component → 503); one success → back to degraded/UNVERIFIED_PROVIDER',
+        answers.every(a => a instanceof Error) && down.status === 'unhealthy' && down.errorCode === 'TIMEOUT'
+          && ready.components.answerLlm.status === 'unhealthy' && ready.status === 'unhealthy'
+          && healed.status === 'degraded' && healed.errorCode === 'UNVERIFIED_PROVIDER',
+        `down=${JSON.stringify(down)} readiness.answerLlm=${JSON.stringify(ready.components.answerLlm)} healed=${JSON.stringify(healed)}`);
+    } finally {
+      provider.generate = realGenerate;
+      rag.PROVIDER = saved;
+      resetProviderSignals();
     }
   }
 
