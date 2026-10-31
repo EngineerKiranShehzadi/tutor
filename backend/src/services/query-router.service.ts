@@ -75,10 +75,11 @@ const isGreeting = (trimmed: string): boolean => {
 // summary path skips.
 const SUMMARY_SIGNAL = /\b(?:summar(?:y|ize|ise|izing|ising|ies)|key\s+(?:points|takeaways|ideas)|main\s+(?:points|topics|ideas)|overview|recap|tl;?dr)\b/gi;
 const WHOLE_LECTURE = /\b(?:this|the|whole|entire|full|today'?s)\s+(?:lecture|video|class|session|lesson)\b/gi;
-const SUMMARY_FILLER = /\b(?:give|me|a|an|the|please|can|could|you|of|it|this|quick|short|brief|lecture)\b/gi;
+const SUMMARY_FILLER = /\b(?:give|me|a|an|the|please|can|could|you|of|it|this|quick|short|brief|lecture|what|are|is)\b/gi;
 // "about X", "on X", "of X", "in X", "for X", "regarding X" — unless X is the
-// whole lecture itself ("of this lecture", "in today's class").
-const TOPIC_QUALIFIER = /\b(?:about|regarding|concerning)\b|\b(?:of|on|in|for)\s+(?!(?:this|the|whole|entire|full|today'?s)\s+(?:lecture|video|class|session|lesson)\b)[a-z0-9]/i;
+// whole lecture itself ("of this lecture") or only shapes the answer
+// ("for me", "in 5 bullet points", "in simple words", "in detail").
+const TOPIC_QUALIFIER = /\b(?:about|regarding|concerning)\b|\b(?:of|on|in|for)\s+(?!(?:this|the|whole|entire|full|today'?s)\s+(?:lecture|video|class|session|lesson)\b)(?!(?:me|us|\d+|a\s+few|simple|short|brief|bullets?|points?|detail|one|two|three|five|english|urdu)\b)[a-z0-9]/i;
 
 const isLectureSummaryRequest = (trimmed: string): boolean => {
   const lower = trimmed.toLowerCase();

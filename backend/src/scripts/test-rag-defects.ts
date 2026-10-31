@@ -706,10 +706,22 @@ const SUMMARY_TABLE: { q: string; summary: boolean }[] = [
   { q: 'What are the main topics in chain-of-thought prompting?', summary: false },
   { q: 'Can you summarize what the lecture said about tokenization?', summary: false },
   { q: 'Give an overview of zero-shot prompting', summary: false },
+  // Whole-lecture asks whose extra words only shape the answer ("for me",
+  // "in 5 bullet points", …) and bare "key points?" stay summaries.
+  { q: 'Summarize the lecture for me', summary: true },
+  { q: 'Can you summarize this video for me?', summary: true },
+  { q: 'Summarize this lecture in 5 bullet points', summary: true },
+  { q: 'Summarize the whole lecture in simple words', summary: true },
+  { q: 'Summary of this lecture in detail', summary: true },
+  { q: 'What are the key points?', summary: true },
+  { q: 'What are the main topics?', summary: true },
+  { q: 'Summarize the part on tokenization in this lecture', summary: false },
+  { q: 'What is the summary of few-shot prompting?', summary: false },
+  { q: 'Is there a summary of RAG?', summary: false },
 ];
 
 cases.push({
-  label: 'S8. Summary routing needs a summary-type ask AND the whole lecture as its target (table of 12 inputs)',
+  label: `S8. Summary routing needs a summary-type ask AND the whole lecture as its target (table of ${SUMMARY_TABLE.length} inputs)`,
   run: async () => {
     // Any input that fell through to the LLM classifier would get FACT_QUESTION here.
     const { value: got } = await withFakeLlm(env.LLM.QUERY_ROUTER.PROVIDER, ['{"route":"FACT_QUESTION"}'], async () => {
