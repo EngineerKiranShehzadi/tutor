@@ -100,9 +100,25 @@ function buildResult(args: {
     formatValid: true,
     formatRepairAttempted: false,
     formatRepairSucceeded: false,
+    formatRepairRejected: null,
     piiDetected: false,
     piiCategories: [],
   };
+}
+
+// A format repair is a rewrite nobody verified against the evidence, so it may
+// only rearrange the answer, not add to it: lowercase words of 4+ letters
+// (markdown/punctuation stripped), and more than this share of the repaired
+// text's words missing from the original rejects it.
+export const MAX_REPAIR_NEW_WORD_RATIO = 0.05;
+const contentWords = (text: string): string[] =>
+  text.toLowerCase().replace(/[^\p{L}\s]/gu, ' ').split(/\s+/).filter(w => w.length >= 4);
+export function repairAddsContent(original: string, repaired: string): boolean {
+  const known = new Set(contentWords(original));
+  const words = contentWords(repaired);
+  if (words.length === 0) return false;
+  const novel = words.filter(w => !known.has(w)).length;
+  return novel / words.length > MAX_REPAIR_NEW_WORD_RATIO;
 }
 
 // Runs after the groundedness/revision stage above has already decided
@@ -114,7 +130,8 @@ function buildResult(args: {
 async function applyFormatAndPiiGuards(
   effectiveQuery: string,
   groundedness: OutputGuardrailResult,
-  draftAnswer: string
+  draftAnswer: string,
+  notFoundMessage: string
 ): Promise<OutputGuardrailResult> {
   // Format validation only ever applies to real generated content. When the
   // groundedness stage fell back to its deterministic conservative message
@@ -124,9 +141,15 @@ async function applyFormatAndPiiGuards(
   // this..." apology would be pointless and could look like fabrication.
   // A fail-open draft is real generated content (unverified, but not a
   // static fallback), so it still gets format validation.
-  const isFallbackAnswer = !groundedness.verified
-    && groundedness.reason !== 'VERIFICATION_DISABLED'
-    && groundedness.finalAnswer !== draftAnswer;
+  // The model is told to answer with exactly the not-found sentence when the
+  // evidence is missing, so that refusal often IS the draft (even a verified
+  // one): it is never sent for a LIST/TABLE "repair" either, which would invite
+  // invented bullets.
+  const isFallbackAnswer = groundedness.verificationUnavailable
+    || groundedness.finalAnswer.trim() === notFoundMessage.trim()
+    || (!groundedness.verified
+      && groundedness.reason !== 'VERIFICATION_DISABLED'
+      && groundedness.finalAnswer !== draftAnswer);
 
   let finalAnswer = groundedness.finalAnswer;
   let expectedFormat: ExpectedResponseFormat = 'NATURAL_TEXT';
@@ -134,6 +157,7 @@ async function applyFormatAndPiiGuards(
   let formatValid = true;
   let formatRepairAttempted = false;
   let formatRepairSucceeded = false;
+  let formatRepairRejected: OutputGuardrailResult['formatRepairRejected'] = null;
 
   if (env.OUTPUT_FORMAT_VALIDATION.ENABLED && !isFallbackAnswer) {
     expectedFormat = detectExpectedResponseFormat(effectiveQuery);
@@ -153,8 +177,15 @@ async function applyFormatAndPiiGuards(
         // produced the requested structure; otherwise keep the original
         // grounded (just unrestructured) answer rather than risk an
         // empty/malformed repair reaching the student.
-        if (repair.ok && repair.repairedAnswer && validateResponseFormat(expectedFormat, repair.repairedAnswer).valid) {
-          finalAnswer = repair.repairedAnswer;
+        // A structurally valid repair is also refused when it adds content —
+        // invented bullets would reach the student unverified.
+        const structurallyValid = repair.ok && !!repair.repairedAnswer
+          && validateResponseFormat(expectedFormat, repair.repairedAnswer).valid;
+        if (structurallyValid && repairAddsContent(finalAnswer, repair.repairedAnswer!)) {
+          formatRepairRejected = 'NEW_CONTENT';
+          logger.warn('[OUTPUT-GUARDRAIL] ⚠️  Format repair added content not in the answer — keeping original grounded answer');
+        } else if (structurallyValid) {
+          finalAnswer = repair.repairedAnswer!;
           formatValid = true;
           formatRepairSucceeded = true;
         } else {
@@ -184,6 +215,7 @@ async function applyFormatAndPiiGuards(
     formatValid,
     formatRepairAttempted,
     formatRepairSucceeded,
+    formatRepairRejected,
     piiDetected,
     piiCategories,
   };
@@ -327,7 +359,7 @@ async function runGroundednessVerification(params: OutputGuardrailParams): Promi
 export async function runOutputGuardrail(params: OutputGuardrailParams): Promise<OutputGuardrailResult> {
   const run = async (): Promise<OutputGuardrailResult> => {
     const groundedness = await runGroundednessVerification(params);
-    return applyFormatAndPiiGuards(params.effectiveQuery, groundedness, params.draftAnswer);
+    return applyFormatAndPiiGuards(params.effectiveQuery, groundedness, params.draftAnswer, params.notFoundMessage);
   };
 
   const trace = getActiveTrace();
@@ -354,6 +386,7 @@ export async function runOutputGuardrail(params: OutputGuardrailParams): Promise
       'output_guardrail.format_valid': r.formatValid,
       'output_guardrail.format_repair_attempted': r.formatRepairAttempted,
       'output_guardrail.format_repair_success': r.formatRepairSucceeded,
+      'output_guardrail.format_repair_rejected': r.formatRepairRejected,
 
       'output_guardrail.pii_detected': r.piiDetected,
       'output_guardrail.pii_categories': r.piiCategories.join(','),

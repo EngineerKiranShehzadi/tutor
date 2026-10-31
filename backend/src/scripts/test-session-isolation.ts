@@ -145,7 +145,7 @@ function makeDeps(route: 'FACT_QUESTION' | 'GREETING' | 'LECTURE_SUMMARY' | 'CON
     runOutputGuardrail: async p => { spies.output++; return {
       finalAnswer: p.draftAnswer, verified: true, decision: 'VERIFIED', reason: 'VERIFIED', revisionAttempted: false, revisionSucceeded: false,
       verificationUnavailable: false, unsupportedClaimCount: 0, missingAspectCount: 0, expectedFormat: 'NATURAL_TEXT', formatValidationRequired: false, formatValid: true,
-      formatRepairAttempted: false, formatRepairSucceeded: false, piiDetected: false, piiCategories: [] }; },
+      formatRepairAttempted: false, formatRepairSucceeded: false, formatRepairRejected: null, piiDetected: false, piiCategories: [] }; },
     lookupAnswerMemory: async () => { spies.memLookup++; return { hit: null, embedding: [0.1, 0.2], datasetVersionId: 1, lookupFailed: false }; },
     writeAnswerMemory: async () => { spies.memWrite++; },
     generateGreeting: async () => { spies.greeting++; return 'hello'; },

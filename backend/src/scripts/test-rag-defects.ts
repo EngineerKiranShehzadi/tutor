@@ -28,7 +28,7 @@ import { runInputGuardrails } from '../rag/guardrails/input/input-guardrail.serv
 import pool from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { askLectureAgent, LECTURE_NOT_FOUND_MESSAGE, type AskLectureAgentDeps } from '../services/chat.service';
-import { VERIFICATION_UNAVAILABLE_MESSAGE } from '../rag/guardrails/output/output-guardrail.service';
+import { VERIFICATION_UNAVAILABLE_MESSAGE, repairAddsContent } from '../rag/guardrails/output/output-guardrail.service';
 import type { OutputGuardrailResult } from '../rag/guardrails/output/answer-verification.types';
 import type { FinishedTrace } from '../observability/types';
 import { generateLectureSummary, LECTURE_SUMMARY_FAILED_MESSAGE, PARTIAL_SUMMARY_NOTE, buildSummaryBatches, summaryEntryText, MAX_CHARS_PER_BATCH } from '../services/lecture-summary.service';
@@ -394,7 +394,7 @@ async function withFakeDb<T>(fn: (db: FakeDb) => Promise<T>): Promise<{ value: T
 const verifiedOutcome = (finalAnswer: string): OutputGuardrailResult => ({
   finalAnswer, verified: true, decision: 'VERIFIED', reason: 'VERIFIED', revisionAttempted: false, revisionSucceeded: false,
   verificationUnavailable: false, unsupportedClaimCount: 0, missingAspectCount: 0, expectedFormat: 'NATURAL_TEXT',
-  formatValidationRequired: false, formatValid: true, formatRepairAttempted: false, formatRepairSucceeded: false,
+  formatValidationRequired: false, formatValid: true, formatRepairAttempted: false, formatRepairSucceeded: false, formatRepairRejected: null,
   piiDetected: false, piiCategories: [],
 });
 
@@ -631,6 +631,57 @@ cases.push({
       && summaryEntryText(first).length + 2 <= MAX_CHARS_PER_BATCH && cs[0].answer.length === 30_000
       && prompt0.endsWith(summaryEntryText(first)) && prompt0.length < MAX_CHARS_PER_BATCH + 100;
     return { pass, detail: `batches=${batches.map(b => b.length).join(',')}, firstEntry=${summaryEntryText(first).length}, prompt0=${prompt0.length}` };
+  },
+});
+
+// ── S7: a refusal is never "reformatted"; a repair may not add content ──
+// Verification is off here so only the format-repair provider is involved.
+async function formatGuardWith(draftAnswer: string, question: string, repairReply: string) {
+  const av = env.ANSWER_VERIFICATION as { ENABLED: boolean };
+  const fv = env.OUTPUT_FORMAT_VALIDATION as { ENABLED: boolean; REPAIR_ENABLED: boolean };
+  const saved = { av: av.ENABLED, fv: fv.ENABLED, rep: fv.REPAIR_ENABLED };
+  av.ENABLED = false; fv.ENABLED = true; fv.REPAIR_ENABLED = true;
+  try {
+    return await withFakeLlm(env.LLM.OUTPUT_FORMAT_REPAIR.PROVIDER, [repairReply], () =>
+      runOutputGuardrail({
+        question, effectiveQuery: question, uncoveredAspects: [], evidenceTexts: ['e'],
+        draftAnswer, notFoundMessage: LECTURE_NOT_FOUND_MESSAGE,
+      }));
+  } finally {
+    av.ENABLED = saved.av; fv.ENABLED = saved.fv; fv.REPAIR_ENABLED = saved.rep;
+  }
+}
+const PROSE = 'Zero-shot prompting gives the model no examples. Few-shot prompting gives the model a few worked examples. '
+  + 'Chain-of-thought prompting asks the model to reason step by step before answering.';
+const REFLOW = '- Zero-shot prompting gives the model no examples.\n- Few-shot prompting gives the model a few worked examples.\n'
+  + '- Chain-of-thought prompting asks the model to reason step by step before answering.';
+
+cases.push({
+  label: 'S7a. A refusal draft for a LIST question is never sent to format repair (no repair call)',
+  run: async () => {
+    const { value: r, requests } = await formatGuardWith(LECTURE_NOT_FOUND_MESSAGE, 'List the three types of prompting', '- invented\n- bullets');
+    const pass = requests.length === 0 && r.finalAnswer === LECTURE_NOT_FOUND_MESSAGE && r.formatRepairAttempted === false;
+    return { pass, detail: `repairCalls=${requests.length}, final="${r.finalAnswer.slice(0, 40)}"` };
+  },
+});
+
+cases.push({
+  label: 'S7b. A structurally valid repair that adds a new bullet is rejected (original kept, formatRepairRejected=NEW_CONTENT)',
+  run: async () => {
+    const added = `${REFLOW}\n- Self-consistency prompting samples several reasoning paths and takes a majority vote.`;
+    const { value: r, requests } = await formatGuardWith(PROSE, 'List the three types of prompting', added);
+    const pass = requests.length === 1 && r.finalAnswer === PROSE && r.formatRepairRejected === 'NEW_CONTENT'
+      && r.formatRepairSucceeded === false && repairAddsContent(PROSE, added);
+    return { pass, detail: `repairCalls=${requests.length}, rejected=${r.formatRepairRejected}` };
+  },
+});
+
+cases.push({
+  label: 'S7c. A pure reflow (the same sentences turned into bullets) is accepted',
+  run: async () => {
+    const { value: r } = await formatGuardWith(PROSE, 'List the three types of prompting', REFLOW);
+    const pass = r.finalAnswer === REFLOW && r.formatRepairSucceeded === true && r.formatRepairRejected === null && !repairAddsContent(PROSE, REFLOW);
+    return { pass, detail: `succeeded=${r.formatRepairSucceeded}, rejected=${r.formatRepairRejected}` };
   },
 });
 

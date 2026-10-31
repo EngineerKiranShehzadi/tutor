@@ -1007,6 +1007,7 @@ export const askLectureAgent = async (
       outputFormatValid: guardrailOutcome.formatValid,
       outputFormatRepairAttempted: guardrailOutcome.formatRepairAttempted,
       outputFormatRepairSucceeded: guardrailOutcome.formatRepairSucceeded,
+      formatRepairRejected: guardrailOutcome.formatRepairRejected,
       outputPiiDetected: guardrailOutcome.piiDetected,
       outputPiiCategories: guardrailOutcome.piiCategories.join(','),
     });

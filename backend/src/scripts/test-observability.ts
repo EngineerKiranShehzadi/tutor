@@ -82,7 +82,7 @@ const stubOutputGuardrail = async (params: OutputGuardrailParams): Promise<Outpu
   formatValidationRequired: false,
   formatValid: true,
   formatRepairAttempted: false,
-  formatRepairSucceeded: false,
+  formatRepairSucceeded: false, formatRepairRejected: null,
   piiDetected: false,
   piiCategories: [],
 });
