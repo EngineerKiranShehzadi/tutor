@@ -243,13 +243,13 @@ page shows pgvector, the row-limit message names `DATASET_MAX_ROWS`.
 ## 2026-10-31 — Time zones on five columns, welcome-message clock, retired Gemini models
 
 **Changed by:** Laiba
-**Files:** `backend/src/db/migrations/018_timestamptz_columns.sql` (new),
+**Files:** `backend/src/db/migrations/019_timestamptz_columns.sql` (new; `018` on feature/laiba-ui),
 `frontend/src/lib/format-answer.tsx` (new),
 `frontend/src/app/(dashboard)/courses/page.tsx`,
 `frontend/src/hooks/useChat.ts`, `frontend/src/components/chat/MessageBubble.tsx`,
 `backend/.env` (not committed)
 
-**Deploy note:** run migration `018` on the database. After any `.env` edit the
+**Deploy note:** run migration `019` on the database (`db:setup` applies it). After any `.env` edit the
 backend must be stopped and started again — `ts-node-dev --respawn` watches
 source files, not `.env`, so a saved `.env` is not picked up by a reload.
 
@@ -264,7 +264,7 @@ source files, not `.env`, so a saved `.env` is not picked up by a reload.
   `gemini-2.5-flash`, the model already proven working in the logs. This also
   explains several failures in the 2026-10-30 test session that were previously
   attributed to the Gemini free-tier quota.
-- **Migration 018 — five columns to `timestamptz`.** `chat_history.created_at`,
+- **Migration 019 — five columns to `timestamptz`.** `chat_history.created_at`,
   `lecture_qna_chunks.created_at`, `lectures.created_at`, `lectures.updated_at`
   and `student_questions.created_at` were `timestamp without time zone`.
   `CURRENT_TIMESTAMP` writes the UTC wall-clock numbers into such a column and

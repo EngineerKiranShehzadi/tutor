@@ -1,4 +1,5 @@
--- 018. Idempotent.
+-- 019. Idempotent. (Written as 018 on feature/laiba-ui; renumbered on merge,
+-- since feature/integration already has 018_request_log_quality_signals.sql.)
 --
 -- Five columns were created as `timestamp without time zone` while the rest of
 -- the schema uses `timestamptz`. CURRENT_TIMESTAMP stores the UTC wall-clock
