@@ -240,6 +240,96 @@ page shows pgvector, the row-limit message names `DATASET_MAX_ROWS`.
 
 ---
 
+## 2026-10-31 — Time zones on five columns, welcome-message clock, retired Gemini models
+
+**Changed by:** Laiba
+**Files:** `backend/src/db/migrations/018_timestamptz_columns.sql` (new),
+`frontend/src/lib/format-answer.tsx` (new),
+`frontend/src/app/(dashboard)/courses/page.tsx`,
+`frontend/src/hooks/useChat.ts`, `frontend/src/components/chat/MessageBubble.tsx`,
+`backend/.env` (not committed)
+
+**Deploy note:** run migration `018` on the database. After any `.env` edit the
+backend must be stopped and started again — `ts-node-dev --respawn` watches
+source files, not `.env`, so a saved `.env` is not picked up by a reload.
+
+- **Eight `.env` model names pointed at `gemini-2.0-flash`, which Google has
+  retired.** Every call to it returned `404 ... no longer available`. The
+  answer generator was unaffected (it uses `RAG_ANSWER_MODEL`), but the query
+  router, greeting, lecture summary, guardrail, query decomposition, adaptive
+  retrieval, answer verification and output-format repair all failed. Answer
+  verification failing is the visible one: `OUTPUT-GUARDRAIL` fails closed, so a
+  correct, generated answer was discarded and the student saw *"I couldn't check
+  this answer against the lecture right now."* All eight are now
+  `gemini-2.5-flash`, the model already proven working in the logs. This also
+  explains several failures in the 2026-10-30 test session that were previously
+  attributed to the Gemini free-tier quota.
+- **Migration 018 — five columns to `timestamptz`.** `chat_history.created_at`,
+  `lecture_qna_chunks.created_at`, `lectures.created_at`, `lectures.updated_at`
+  and `student_questions.created_at` were `timestamp without time zone`.
+  `CURRENT_TIMESTAMP` writes the UTC wall-clock numbers into such a column and
+  the zone is discarded, so every reader interprets them as its own local time
+  and Pakistan (UTC+5) sees them five hours early. A question asked at 16:13
+  displayed as 11:13 AM after a page reload. `chat_sessions` was already
+  `timestamptz`, which is why the sidebar's "11m ago" was correct while the
+  message times were not. The migration relabels the same instants; no value is
+  changed and nothing is deleted. It skips columns already converted, so it is
+  safe to re-run. It rewrites each table and takes a brief exclusive lock, so it
+  must not run during a dataset upload.
+- **Welcome message showed 05:00 AM; it now shows no time at all.**
+  `useChat.ts` built it with `timestamp: new Date(0)` — zero milliseconds since
+  1970, which displays as 05:00 in UTC+5. The greeting is not a stored message:
+  the browser rebuilds it on every page load and it is not in `chat_history`, so
+  it cannot carry the time the conversation actually began. Stamping it with
+  `new Date()` placed a later time above older messages — worse than the original
+  bug. `MessageBubble.tsx` therefore omits the time line for the welcome message,
+  as a system notice rather than something a participant said; every real message
+  keeps its time. `useChat.ts` still builds the greeting inside a `useMemo` keyed
+  on the agent name and lecture title, because the hook re-runs on every keystroke
+  and an unmemoised object would be rebuilt continuously. The greeting's text, its
+  `richContent` React elements and their escaping are unchanged.
+
+- **Tutor answers showed their Markdown marks as characters.** The model
+  replies in Markdown (`**Relevance:**`, `1. `, `- `), and `MessageBubble.tsx`
+  printed the answer as plain text, so a student saw the stars and dashes.
+  `format-answer.tsx` now turns the small subset the model actually produces
+  — bold, inline code, bulleted and numbered lists, paragraph breaks — into
+  React elements. React escapes every text node it is handed, so this keeps the
+  property the plain-text rendering was chosen for: dataset content and model
+  output can never become markup, and `dangerouslySetInnerHTML` is not used
+  anywhere. Anything unrecognised is printed exactly as written. Applied to
+  tutor messages only: a student's own text stays literal (typing `**hi**`
+  shows `**hi**`), and the streaming view stays plain text because half-written
+  marks would flicker as the answer arrives. The greeting still uses its own
+  `richContent` elements.
+
+- **Courses page: wrong order, two conflicting numbers, hidden lectures, and a
+  hardcoded player.** The list is whatever order the server returns, which put
+  Lecture 6 first and Lecture 1 last; it is now sorted by the lecture number read
+  from the title, because the `lectures` table has no ordering column. The real
+  titles are not uniform, so the parser handles all three forms in the data:
+  “Lecture 2| …” and “Lecture 6 — …” give 2 and 6; “Lecture -1 Introduction …”
+  has a dash before the number and gives 1; “Introductory Lecture — …” has no
+  number and is placed at 0, before Lecture 1. Anything still unrecognised sorts
+  last rather than breaking the list. No title is modified — this only decides
+  the order rows are drawn in. Renaming the lectures to a consistent format in
+  the admin screen would remove the need for the parser entirely. The grey number beside each row
+  was the position in the list, so row 1 read “Lecture 6” — removed, since the
+  title already carries the number. The list had a fixed 340px cap and cut off at
+  the fourth lecture with nothing indicating more existed, while the page below it
+  was empty — cap removed. The video player used a playlist address written into
+  the file; it now embeds the first lecture that has a `youtubeVideoId`, from the
+  database, with that lecture's title beneath it, so a lecture added or removed by
+  an admin is reflected without a code change. Apollo's result array is frozen, so
+  it is copied before sorting. No backend, schema or query change.
+
+**Checked, not changed:** migrations 001–017 are all applied on the live Neon
+database (verified column-by-column, not from the runbook text, which still
+says 006/007 are pending). `preflight.sql` was clean apart from 8 pre-existing
+`chat_history` rows citing chunks replaced by a later dataset upload.
+
+---
+
 ## 2026-10-31 — Post-merge audit of feature/integration: open items after PR #1 (ST1–ST6, AD-N1–AD-N8, X1–X5)
 
 **Changed by:** Kiran

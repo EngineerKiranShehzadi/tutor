@@ -1,5 +1,5 @@
 'use client';
-import { useState, useCallback, useRef, useEffect, createElement, Fragment } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo, createElement, Fragment } from 'react';
 import { useMutation, useLazyQuery } from '@apollo/client';
 import { ChatMessage, ChunkSource } from '@/types';
 import { v4 as uuidv4 } from 'uuid';
@@ -99,7 +99,7 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
   const [askLectureAgent]      = useMutation(ASK_LECTURE_AGENT_MUTATION);
   const [createSessionMut]     = useMutation(CREATE_CHAT_SESSION_MUTATION);
 
-  const welcomeMsg: ChatMessage = {
+  const welcomeMsg: ChatMessage = useMemo(() => ({
     id:        'welcome',
     role:      'ai',
     type:      'text',
@@ -110,8 +110,10 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
       "Hi! I'm ", createElement('strong', null, agentName),
       ', your AI tutor for ', createElement('strong', null, lectureTitle),
       '. Ask me anything covered in this lecture!'),
-    timestamp: new Date(0),
-  };
+    // Built once per lecture. This hook re-runs on every keystroke, so a
+    // bare new Date() here would reset the greeting's clock each time.
+    timestamp: new Date(),
+  }), [agentName, lectureTitle]);
 
   // ── Load messages for a session into state ────────────────
   const loadSessionMessages = useCallback(async (sessionId: number) => {

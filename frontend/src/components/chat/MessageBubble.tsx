@@ -3,6 +3,7 @@ import Image from 'next/image';
 
 import { ChatMessage } from '@/types';
 import { useAuth } from '@/hooks/useAuth';
+import { renderAnswer } from '@/lib/format-answer';
 
 interface Props {
   message:  ChatMessage;
@@ -59,10 +60,14 @@ export const MessageBubble = ({ message, onSpeak, isSpeaking }: Props) => {
                 className="inline-block w-[2px] h-[14px] bg-indigo-500 ml-[3px] align-middle rounded-sm animate-pulse"
               />
             </>
+          ) : isUser ? (
+            // A student's own text is never interpreted: what they typed is
+            // exactly what they see.
+            <span className="whitespace-pre-wrap break-words">{message.content}</span>
           ) : (
-            // Plain text, never HTML: answers come from admin-uploaded datasets
-            // and the model, so markup in them must show as text, not run.
-            <span className="whitespace-pre-wrap break-words">{message.richContent ?? message.content}</span>
+            // React elements, never an HTML string: React escapes every text
+            // node, so dataset content and model output cannot become markup.
+            message.richContent ?? renderAnswer(message.content)
           )}
         </div>
 
@@ -102,7 +107,13 @@ export const MessageBubble = ({ message, onSpeak, isSpeaking }: Props) => {
           </div>
         )}
 
-        <span className="text-[12px] text-[var(--muted2)] px-0.5">{time}</span>
+        {/* The welcome message is a system notice, not something anyone said:
+            the browser rebuilds it on every page load and it is not in
+            chat_history, so it cannot carry the time the conversation began.
+            Stamping it with "now" would put a later time above older messages. */}
+        {message.id !== 'welcome' && (
+          <span className="text-[12px] text-[var(--muted2)] px-0.5">{time}</span>
+        )}
       </div>
     </div>
   );

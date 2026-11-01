@@ -13,6 +13,21 @@ const STATUS_BADGE: Record<string, { label: string; color: string }> = {
   FAILED:           { label: 'Failed',       color: 'bg-red-100 text-red-700' },
 };
 
+// The lectures table has no explicit ordering column and the server returns
+// rows in insertion order, which put Lecture 6 first, so the order is taken
+// from the lecture number in the title. The real titles are not uniform, and
+// both exceptions are handled here rather than by renaming anyone's data:
+//   "Lecture 2| ...", "Lecture 6 — ..."      -> 2, 6
+//   "Lecture -1 Introduction to ..."         -> 1  (a dash before the number)
+//   "Introductory Lecture - Introduction ..." -> 0  (no number; it precedes 1)
+// Anything still unrecognised sorts last instead of breaking the list.
+const lectureNumber = (title: string): number => {
+  const t = title ?? '';
+  if (/introductor/i.test(t)) return 0;
+  const m = /lecture\s*[-–—#:]?\s*0*(\d+)/i.exec(t);
+  return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER;
+};
+
 export default function CoursesPage() {
   const router = useRouter();
   const { data, loading, error } = useQuery(GET_LECTURES);
@@ -37,23 +52,46 @@ export default function CoursesPage() {
     );
   }
 
-  const firstReady = lectures.find((l) => l.status === 'READY');
+  // Apollo's result array is frozen: copy before sorting.
+  const ordered = [...lectures].sort((a, b) => {
+    const d = lectureNumber(a.title) - lectureNumber(b.title);
+    return d !== 0 ? d : (a.title ?? '').localeCompare(b.title ?? '');
+  });
+
+  const firstReady = ordered.find((l) => l.status === 'READY');
+  // The player used to point at a playlist address written into this file.
+  // It now shows the first lecture that has a video, straight from the
+  // database, so a lecture added or removed by an admin is reflected here
+  // with no code change.
+  const featured = ordered.find((l) => l.youtubeVideoId);
 
   return (
     <div className="px-6 py-8">
       <div className="flex gap-5 items-start">
 
-      {/* LEFT — Playlist embed */}
+      {/* LEFT — Featured lecture video (from the database) */}
       <div className="w-[55%] shrink-0">
         <div className="relative w-full aspect-video rounded-xl overflow-hidden bg-black shadow-md">
-          <iframe
-            src="https://www.youtube.com/embed/videoseries?list=PL4kipppqKObLmh-ZpCqp8iXj1V2guWyhj&rel=0&modestbranding=1"
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-            allowFullScreen
-            className="w-full h-full border-0"
-            title="Course Playlist"
-          />
+          {featured?.youtubeVideoId ? (
+            <iframe
+              src={`https://www.youtube.com/embed/${featured.youtubeVideoId}?rel=0&modestbranding=1`}
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              allowFullScreen
+              className="w-full h-full border-0"
+              title={featured.title}
+            />
+          ) : (
+            <div className="w-full h-full flex flex-col items-center justify-center text-white/60 gap-2">
+              <i className="fas fa-video-slash text-3xl" />
+              <p className="text-sm">No video available yet</p>
+            </div>
+          )}
         </div>
+        {featured && (
+          <p className="mt-3 text-[15px] font-semibold text-[var(--text)] leading-snug">
+            {featured.title}
+          </p>
+        )}
       </div>
 
       {/* RIGHT — Lecture list */}
@@ -65,7 +103,7 @@ export default function CoursesPage() {
             <div>
               <h1 className="text-[21px] font-bold text-[var(--text)]">Course Lectures</h1>
               <p className="text-[14px] text-[var(--muted)] mt-0.5">
-                {lectures.length} lecture{lectures.length !== 1 ? 's' : ''} available
+                {ordered.length} lecture{ordered.length !== 1 ? 's' : ''} available
               </p>
             </div>
             {firstReady && (
@@ -79,16 +117,16 @@ export default function CoursesPage() {
           </div>
         </div>
 
-        {/* List */}
-        <div className="overflow-y-auto" style={{ maxHeight: '340px' }}>
-          {lectures.length === 0 ? (
+        {/* List — no height cap: all lectures are visible instead of being cut off */}
+        <div>
+          {ordered.length === 0 ? (
             <div className="text-center py-16 text-[var(--muted)]">
               <i className="fas fa-video-slash text-3xl mb-3 block" />
               <p className="text-sm font-semibold">No lectures yet</p>
               <p className="text-xs mt-1">Check back soon.</p>
             </div>
           ) : (
-            lectures.map((lec, i) => {
+            ordered.map((lec) => {
               const badge   = STATUS_BADGE[lec.status] ?? STATUS_BADGE.NO_DATASET;
               const isReady = lec.status === 'READY';
               return (
@@ -99,11 +137,6 @@ export default function CoursesPage() {
                     isReady ? 'cursor-pointer hover:bg-[var(--surface)]' : 'opacity-60 cursor-default'
                   }`}
                 >
-                  {/* Number */}
-                  <span className="w-5 text-[13px] font-bold text-[var(--muted)] shrink-0 mt-1 text-center">
-                    {i + 1}
-                  </span>
-
                   {/* Thumbnail */}
                   {lec.youtubeVideoId ? (
                     <div className="w-[100px] shrink-0 aspect-video rounded-md overflow-hidden bg-black">
