@@ -12,6 +12,7 @@ import { env } from '../config/env';
 import { parseExcel, toFileRowsReport, buildChunkPiecesReport, CHUNKING_CONFIG_VERSION, MAX_PIECES_PER_ROW, SkippedRow } from './chunk.service';
 import { getLectureById, updateLectureProgress, updateLectureStatus } from './lecture.service';
 import { matchRows, fieldsEqual, findPossibleDuplicates, PossibleDuplicate, ActiveQa, QaFields, FileRow } from './dataset-plan';
+import { notifyAllStudents } from './notification.service';
 
 // Incremental, resumable, safely-published dataset pipeline.
 //
@@ -705,6 +706,22 @@ const activateVersion = async (versionId: number): Promise<{ activated: boolean;
       [versionId, v[0].lecture_id]
     );
     await client.query('COMMIT');
+
+    // The lecture can now be asked about, which is the notification a student
+    // acts on. Sent after COMMIT so a notification problem can never roll back
+    // an activation, and notifyAllStudents never throws. The unique index on
+    // (user_id, lecture_id, type) means re-activating the same lecture does not
+    // announce it a second time.
+    const { rows: titleRows } = await query<{ title: string }>(
+      `SELECT title FROM lectures WHERE id = $1`, [v[0].lecture_id]
+    );
+    await notifyAllStudents(
+      'TUTOR_READY',
+      'Tutor ready',
+      titleRows[0]?.title ?? `Lecture #${v[0].lecture_id}`,
+      v[0].lecture_id
+    );
+
     return { activated: true, status: 'ACTIVE' };
   } catch (err) {
     await client.query('ROLLBACK').catch(() => undefined);

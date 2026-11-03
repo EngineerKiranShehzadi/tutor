@@ -4,20 +4,63 @@ import { useAuth } from '@/hooks/useAuth';
 import { authApi } from '@/lib/api';
 import { cn } from '@/lib/cn';
 
-const FIELD = 'w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-800 outline-none focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-100 transition-all placeholder:text-slate-400';
+/**
+ * Profile — account details and password.
+ *
+ * Rewritten onto the product theme. The previous version used indigo, violet,
+ * emerald and slate (98 colour classes, none of them from the theme), four
+ * gradients, 2xl/3xl corner radii, drop shadows and uppercase micro-labels, so
+ * it was the one student page that looked like a different product.
+ *
+ * All of the behaviour is unchanged: avatar upload with a 2 MB limit, name with
+ * a 100-character limit, read-only email, the four password rules and the
+ * strength meter, and the Google-account case where there is no password tab.
+ *
+ * One fault fixed: pressing Save without changing anything used to report
+ * "Profile updated successfully". It now says there is nothing to save.
+ */
+
+const FIELD =
+  'w-full h-11 px-3.5 bg-white border border-[var(--border)] rounded-control text-body ' +
+  'text-[var(--text)] outline-none transition-colors placeholder:text-[var(--muted2)] ' +
+  'focus:border-[var(--accent)]';
 
 const RULES = [
-  { label: 'At least 8 characters',        test: (p: string) => p.length >= 8           },
-  { label: 'At least one uppercase letter', test: (p: string) => /[A-Z]/.test(p)         },
-  { label: 'At least one number',           test: (p: string) => /[0-9]/.test(p)         },
-  { label: 'At least one special character',test: (p: string) => /[^A-Za-z0-9]/.test(p) },
+  { label: 'At least 8 characters',          test: (p: string) => p.length >= 8          },
+  { label: 'At least one uppercase letter',  test: (p: string) => /[A-Z]/.test(p)        },
+  { label: 'At least one number',            test: (p: string) => /[0-9]/.test(p)        },
+  { label: 'At least one special character', test: (p: string) => /[^A-Za-z0-9]/.test(p) },
 ];
 
-function strengthLabel(score: number): { label: string; color: string } {
-  if (score <= 1) return { label: 'Weak',   color: 'bg-red-500'     };
-  if (score === 2) return { label: 'Fair',   color: 'bg-amber-400'   };
-  if (score === 3) return { label: 'Good',   color: 'bg-blue-500'    };
-  return                  { label: 'Strong', color: 'bg-emerald-500' };
+// Weak and fair stay red and amber because they are warnings and must not be
+// mistaken for progress. Good and strong use the brand colour rather than a
+// second green, so the meter never introduces a colour the theme does not have.
+function strengthLabel(score: number): { label: string; bar: string; text: string } {
+  if (score <= 1)  return { label: 'Weak',   bar: 'bg-red-500',           text: 'text-red-600' };
+  if (score === 2) return { label: 'Fair',   bar: 'bg-amber-500',         text: 'text-amber-600' };
+  if (score === 3) return { label: 'Good',   bar: 'bg-[var(--accent-dim)]', text: 'text-[var(--accent)]' };
+  return             { label: 'Strong', bar: 'bg-[var(--accent)]',     text: 'text-[var(--accent)]' };
+}
+
+function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label className="text-label font-medium text-[var(--muted)]">{label}</label>
+      {children}
+      {hint && <p className="text-caption text-[var(--muted)]">{hint}</p>}
+    </div>
+  );
+}
+
+function Card({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="bg-white border border-[var(--border)] rounded-card">
+      <div className="px-6 py-4 border-b border-[var(--border)]">
+        <h2 className="text-h3 font-semibold text-[var(--text)]">{title}</h2>
+      </div>
+      <div className="p-6 flex flex-col gap-5">{children}</div>
+    </section>
+  );
 }
 
 export default function ProfilePage() {
@@ -42,7 +85,7 @@ export default function ProfilePage() {
   const initials = user?.name?.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() ?? 'U';
 
   const passScore      = RULES.filter(r => r.test(newPassword)).length;
-  const { label: strengthText, color: strengthColor } = strengthLabel(passScore);
+  const strength       = strengthLabel(passScore);
   const passwordsMatch = confirmPassword === newPassword;
 
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -66,19 +109,28 @@ export default function ProfilePage() {
       if (passScore < 3)    { setErrorMsg('New password is too weak. Follow the rules below.'); return; }
       if (!passwordsMatch)  { setErrorMsg('Passwords do not match.'); return; }
     }
+
+    const payload: Record<string, string> = {};
+    if (name.trim() && name.trim() !== user?.name) payload.name = name.trim();
+    if (avatarBase64) payload.avatarUrl = avatarBase64;
+    if (activeTab === 'password' && newPassword) {
+      payload.currentPassword = currentPassword;
+      payload.newPassword     = newPassword;
+    }
+
+    // Nothing was actually edited. Saying "updated successfully" here was a lie:
+    // the request carried no changes and the database was never touched.
+    if (Object.keys(payload).length === 0) {
+      setErrorMsg('Nothing to save. Change your name, your photo or your password first.');
+      return;
+    }
+
     setSaving(true);
     try {
-      const payload: Record<string, string> = {};
-      if (name.trim() && name.trim() !== user?.name) payload.name = name.trim();
-      if (avatarBase64) payload.avatarUrl = avatarBase64;
-      if (activeTab === 'password' && newPassword) {
-        payload.currentPassword = currentPassword;
-        payload.newPassword     = newPassword;
-      }
       const res = await authApi.updateProfile(payload);
       const updated = res.data?.data;
       if (updated) setUser({ ...user!, name: updated.name, avatar_url: updated.avatar_url });
-      setSuccessMsg('Profile updated successfully.');
+      setSuccessMsg('Profile updated.');
       setCurrentPassword(''); setNewPassword(''); setConfirmPassword('');
       setAvatarBase64(null);
     } catch (err: unknown) {
@@ -94,324 +146,312 @@ export default function ProfilePage() {
     ? new Date(user.created_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
     : null;
 
+  // 'STUDENT' -> 'Student'. This used to be the word "Student" written into
+  // the markup, which would have shown "Student" to an admin as well.
+  const roleLabel = user?.role
+    ? user.role.charAt(0) + user.role.slice(1).toLowerCase()
+    : '—';
+
   const tabs = [
-    { key: 'profile',  label: 'Profile',         icon: 'fa-user' },
-    ...(!isGoogleUser ? [{ key: 'password', label: 'Change Password', icon: 'fa-lock' }] : []),
+    { key: 'profile',  label: 'Profile',  icon: 'fa-user' },
+    ...(!isGoogleUser ? [{ key: 'password', label: 'Password', icon: 'fa-lock' }] : []),
   ] as { key: 'profile' | 'password'; label: string; icon: string }[];
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white">
+    <div className="max-w-[760px] mx-auto px-6 py-10">
 
-      {/* ── Hero banner ── */}
-      <div className="relative bg-gradient-to-r from-slate-800 via-slate-700 to-indigo-800 overflow-hidden">
-        <div className="absolute -top-10 -right-10 w-56 h-56 rounded-full bg-white/5" />
-        <div className="absolute bottom-0 left-1/3 w-40 h-40 rounded-full bg-white/5" />
+      <h1 className="text-h1 font-semibold text-[var(--text)]">Profile</h1>
+      <p className="text-body text-[var(--muted)] mt-2 mb-6">
+        Your account details, and the password you sign in with.
+      </p>
 
-        <div className="relative max-w-3xl mx-auto px-6 pt-10 pb-16 flex items-center gap-6">
-          {/* Avatar */}
-          <div className="relative shrink-0 group cursor-pointer" onClick={() => fileRef.current?.click()}>
-            {avatarPreview ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={avatarPreview} alt="Profile" className="w-24 h-24 rounded-3xl object-cover border-4 border-white/30 shadow-2xl" />
-            ) : (
-              <div className="w-24 h-24 rounded-3xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white text-3xl font-bold border-4 border-white/20 shadow-2xl">
-                {initials}
-              </div>
-            )}
-            <div className="absolute inset-0 rounded-3xl flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity">
-              <div className="flex flex-col items-center gap-1 text-white">
-                <i className="fas fa-camera text-lg" />
-                <span className="text-[11px] font-semibold">Change</span>
-              </div>
+      {/* Identity. Flat --ink-soft, the same colour as the header, instead of
+          the three-stop slate-to-indigo gradient this used to carry. */}
+      <div className="bg-[var(--ink-soft)] rounded-card px-6 py-6 flex items-center gap-5">
+        <button
+          type="button"
+          onClick={() => fileRef.current?.click()}
+          className="relative shrink-0 group rounded-card"
+          aria-label="Change profile photo"
+        >
+          {avatarPreview ? (
+            /* eslint-disable-next-line @next/next/no-img-element */
+            <img src={avatarPreview} alt="" className="w-20 h-20 rounded-card object-cover" />
+          ) : (
+            <div className="w-20 h-20 rounded-card bg-[var(--accent)] flex items-center justify-center text-white text-h2 font-semibold">
+              {initials}
             </div>
-            <div className="absolute -bottom-1.5 -right-1.5 w-7 h-7 rounded-xl bg-indigo-400 border-2 border-white flex items-center justify-center shadow">
-              <i className="fas fa-pen text-white text-[9px]" />
-            </div>
-          </div>
-          <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={handleAvatarChange} />
+          )}
+          <span className="absolute inset-0 rounded-card flex items-center justify-center bg-black/45 opacity-0 group-hover:opacity-100 transition-opacity">
+            <i className="fas fa-camera text-white text-body" />
+          </span>
+        </button>
+        <input
+          ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp"
+          className="hidden" onChange={handleAvatarChange}
+        />
 
-          {/* Identity */}
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2.5 flex-wrap">
-              <h1 className="text-2xl font-extrabold text-white truncate">{user?.name}</h1>
-              <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-white/20 text-white border border-white/30 uppercase tracking-widest">
-                Student
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <p className="text-h3 font-semibold text-white truncate">{user?.name}</p>
+            <span className="text-caption font-medium px-2 py-0.5 rounded-full bg-white/15 text-white">
+              Student
+            </span>
+            {isGoogleUser && (
+              <span className="text-caption font-medium px-2 py-0.5 rounded-full bg-white/15 text-white flex items-center gap-1.5">
+                <i className="fab fa-google text-[10px]" /> Google
               </span>
-              {isGoogleUser && (
-                <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-blue-500/30 text-blue-200 border border-blue-400/30 uppercase tracking-widest flex items-center gap-1">
-                  <i className="fab fa-google text-[9px]" /> Google
-                </span>
-              )}
-            </div>
-            <p className="text-slate-300 text-sm mt-0.5 truncate">{user?.email}</p>
-            {joinedDate && (
-              <p className="text-slate-400 text-xs mt-2 flex items-center gap-1.5">
-                <i className="fas fa-calendar-days" />
-                Member since {joinedDate}
-              </p>
             )}
           </div>
+          <p className="text-label mt-1 truncate" style={{ color: '#a7b3ad' }}>{user?.email}</p>
+          {joinedDate && (
+            <p className="text-caption mt-2" style={{ color: '#7b8781' }}>
+              Member since {joinedDate}
+            </p>
+          )}
         </div>
       </div>
 
-      {/* ── Tab bar ── */}
-      <div className="sticky top-0 z-20 max-w-3xl mx-auto px-6">
-        <div className="flex gap-1 bg-white rounded-2xl shadow-lg border border-slate-200 p-1.5 -mt-6">
-          {tabs.map(t => (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => { setActiveTab(t.key); setSuccessMsg(''); setErrorMsg(''); }}
-              className={cn(
-                'flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-semibold transition-all',
-                activeTab === t.key
-                  ? 'bg-indigo-600 text-white shadow-sm'
-                  : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
-              )}
-            >
-              <i className={cn('fas', t.icon, 'text-[11px]')} />
-              {t.label}
-            </button>
-          ))}
+      {/* Tabs. An underline, the same language the header uses for the current
+          section — not a filled indigo pill, which read as a pressed button. */}
+      {tabs.length > 1 && (
+        <div className="flex gap-7 border-b border-[var(--border)] mt-8 mb-6">
+          {tabs.map(t => {
+            const active = activeTab === t.key;
+            return (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => { setActiveTab(t.key); setSuccessMsg(''); setErrorMsg(''); }}
+                className={cn(
+                  'relative flex items-center gap-2 pb-3 text-label font-semibold transition-colors',
+                  active
+                    ? 'text-[var(--text)] after:absolute after:left-0 after:right-0 after:-bottom-px after:h-[2px] after:bg-[var(--accent)]'
+                    : 'text-[var(--muted)] hover:text-[var(--text)]'
+                )}
+              >
+                <i className={cn('fas', t.icon, 'text-[12px]')} />
+                {t.label}
+              </button>
+            );
+          })}
         </div>
-      </div>
+      )}
 
-      {/* ── Main content ── */}
-      <form onSubmit={handleSave}>
-        <div className="max-w-3xl mx-auto px-6 py-6 flex flex-col gap-5">
+      <form onSubmit={handleSave} className="flex flex-col gap-4">
 
-          {/* ── Profile tab ── */}
-          {activeTab === 'profile' && (
-            <>
-              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                <div className="flex items-center gap-2.5 px-6 py-4 border-b border-slate-100 bg-slate-50/60">
-                  <div className="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center">
-                    <i className="fas fa-id-card text-white text-[11px]" />
-                  </div>
-                  <span className="text-[14px] font-semibold text-slate-700">Personal Information</span>
+        {activeTab === 'profile' && (
+          <>
+            <Card title="Personal information">
+              <Field label="Display name" hint={`${name.length}/100 characters`}>
+                <input
+                  value={name}
+                  onChange={e => setName(e.target.value)}
+                  maxLength={100} minLength={2} required
+                  className={FIELD}
+                  placeholder="Your full name"
+                />
+              </Field>
+
+              <Field label="Email address" hint="Your email address cannot be changed.">
+                <div className="relative">
+                  <input
+                    value={user?.email ?? ''}
+                    disabled
+                    className={cn(FIELD, 'bg-[var(--surface)] text-[var(--muted)] cursor-not-allowed pr-10')}
+                  />
+                  <i className="fas fa-lock absolute right-3.5 top-1/2 -translate-y-1/2 text-[var(--muted2)] text-caption" />
                 </div>
-                <div className="p-6 flex flex-col gap-5">
-                  {/* Avatar upload row */}
-                  <div className="flex items-center gap-5 p-4 rounded-xl bg-gradient-to-r from-indigo-50 to-violet-50 border border-indigo-100">
-                    <div className="relative shrink-0 group cursor-pointer" onClick={() => fileRef.current?.click()}>
-                      {avatarPreview ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={avatarPreview} alt="Profile" className="w-16 h-16 rounded-2xl object-cover border-2 border-indigo-200" />
-                      ) : (
-                        <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white text-xl font-bold border-2 border-indigo-200">
-                          {initials}
-                        </div>
-                      )}
-                      <div className="absolute inset-0 rounded-2xl flex items-center justify-center bg-black/35 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <i className="fas fa-camera text-white text-sm" />
-                      </div>
-                    </div>
-                    <div>
-                      <p className="text-[13px] font-semibold text-slate-800">Profile photo</p>
-                      <p className="text-[11px] text-slate-500 mt-0.5">JPG, PNG or WebP · max 2 MB</p>
-                      <button type="button" onClick={() => fileRef.current?.click()} className="mt-2 inline-flex items-center gap-1.5 text-[12px] font-semibold text-indigo-600 hover:text-indigo-700 transition-colors">
-                        <i className="fas fa-upload text-[10px]" /> Upload new photo
-                      </button>
-                    </div>
-                  </div>
+              </Field>
 
-                  {/* Name */}
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Display Name</label>
-                    <input
-                      value={name}
-                      onChange={e => setName(e.target.value)}
-                      maxLength={100} minLength={2} required
-                      className={FIELD}
-                      placeholder="Your full name"
-                    />
-                    <p className="text-[11px] text-slate-400 mt-1">{name.length}/100 characters</p>
-                  </div>
+              <Field label="Profile photo" hint="JPG, PNG or WebP, up to 2 MB.">
+                <button
+                  type="button"
+                  onClick={() => fileRef.current?.click()}
+                  className="self-start inline-flex items-center gap-2 h-10 px-4 rounded-control border border-[var(--border)] text-label font-medium text-[var(--text)] transition-colors hover:bg-[var(--surface)]"
+                >
+                  <i className="fas fa-upload text-caption" />
+                  Upload a new photo
+                </button>
+              </Field>
+            </Card>
 
-                  {/* Email (read-only) */}
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Email Address</label>
-                    <div className="relative">
-                      <input value={user?.email ?? ''} disabled className={cn(FIELD, 'opacity-60 cursor-not-allowed pr-10')} />
-                      <i className="fas fa-lock absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-[11px]" />
-                    </div>
-                    <p className="text-[11px] text-slate-400 mt-1.5">Email address cannot be changed.</p>
+            <Card title="Account details">
+              {/* Every row below is read from the signed-in account. A fifth
+                  row, "Status: Active", used to sit here with the word written
+                  into the code: there is no status field on the user record, so
+                  it was the one invented line on this page. It is removed
+                  rather than left to be asked about. */}
+              <dl className="grid sm:grid-cols-2 gap-x-6 gap-y-5">
+                {[
+                  { label: 'Role',           value: roleLabel,         icon: 'fa-user-graduate', brand: false },
+                  { label: 'Member since',   value: joinedDate ?? '—', icon: 'fa-calendar-days', brand: false },
+                  { label: 'Sign-in method', value: isGoogleUser ? 'Google account' : 'Email and password',
+                                             icon: isGoogleUser ? 'fa-google' : 'fa-key', brand: isGoogleUser },
+                ].map(item => (
+                  // The icon sits inline with the label at the label's own
+                  // size. It was a 32px bordered tile, which made a decorative
+                  // box heavier than the fact it was labelling.
+                  <div key={item.label} className="min-w-0">
+                    <dt className="flex items-center gap-2 text-caption text-[var(--muted)]">
+                      <i className={cn(item.brand ? 'fab' : 'fas', item.icon, 'text-[11px] w-3.5 text-center text-[var(--muted2)]')} />
+                      {item.label}
+                    </dt>
+                    <dd className="text-label font-medium text-[var(--text)] mt-1 pl-[22px]">{item.value}</dd>
                   </div>
-                </div>
+                ))}
+              </dl>
+            </Card>
+          </>
+        )}
+
+        {activeTab === 'password' && !isGoogleUser && (
+          <Card title="Change password">
+            <Field label="Current password">
+              <div className="relative">
+                <input
+                  type={showCurrent ? 'text' : 'password'}
+                  value={currentPassword}
+                  onChange={e => setCurrentPassword(e.target.value)}
+                  className={cn(FIELD, 'pr-10')}
+                  placeholder="Your current password"
+                  required
+                />
+                <button
+                  type="button" onClick={() => setShowCurrent(v => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted2)] hover:text-[var(--text)] text-caption"
+                  aria-label={showCurrent ? 'Hide password' : 'Show password'}
+                >
+                  <i className={cn('fas', showCurrent ? 'fa-eye-slash' : 'fa-eye')} />
+                </button>
               </div>
+            </Field>
 
-              {/* Account details */}
-              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                <div className="flex items-center gap-2.5 px-6 py-4 border-b border-slate-100 bg-slate-50/60">
-                  <div className="w-7 h-7 rounded-lg bg-violet-600 flex items-center justify-center">
-                    <i className="fas fa-circle-info text-white text-[11px]" />
-                  </div>
-                  <span className="text-[14px] font-semibold text-slate-700">Account Details</span>
-                </div>
-                <div className="p-6 grid grid-cols-2 gap-4">
-                  {[
-                    { label: 'Role',         value: 'Student',                               icon: 'fa-graduation-cap', color: 'indigo'  },
-                    { label: 'Member Since', value: joinedDate ?? '—',                        icon: 'fa-calendar-check', color: 'emerald' },
-                    { label: 'Account Type', value: isGoogleUser ? 'Google OAuth' : 'Standard', icon: 'fa-id-badge',    color: 'violet'  },
-                    { label: 'Status',       value: 'Active',                                icon: 'fa-circle-check',   color: 'green'   },
-                  ].map(item => (
-                    <div key={item.label} className="flex items-start gap-3 p-3.5 rounded-xl bg-slate-50 border border-slate-100">
-                      <div className={cn('w-8 h-8 rounded-lg flex items-center justify-center shrink-0',
-                        item.color === 'indigo'  && 'bg-indigo-100',
-                        item.color === 'emerald' && 'bg-emerald-100',
-                        item.color === 'violet'  && 'bg-violet-100',
-                        item.color === 'green'   && 'bg-green-100',
-                      )}>
-                        <i className={cn('fas text-[12px]', item.icon,
-                          item.color === 'indigo'  && 'text-indigo-600',
-                          item.color === 'emerald' && 'text-emerald-600',
-                          item.color === 'violet'  && 'text-violet-600',
-                          item.color === 'green'   && 'text-green-600',
-                        )} />
-                      </div>
-                      <div>
-                        <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide">{item.label}</p>
-                        <p className="text-[13px] font-semibold text-slate-800 mt-0.5">{item.value}</p>
-                      </div>
-                    </div>
+            <Field label="New password">
+              <div className="relative">
+                <input
+                  type={showNew ? 'text' : 'password'}
+                  value={newPassword}
+                  onChange={e => setNewPassword(e.target.value)}
+                  className={cn(FIELD, 'pr-10')}
+                  placeholder="At least 8 characters"
+                  required
+                />
+                <button
+                  type="button" onClick={() => setShowNew(v => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted2)] hover:text-[var(--text)] text-caption"
+                  aria-label={showNew ? 'Hide password' : 'Show password'}
+                >
+                  <i className={cn('fas', showNew ? 'fa-eye-slash' : 'fa-eye')} />
+                </button>
+              </div>
+            </Field>
+
+            {newPassword && (
+              <div className="-mt-2">
+                <div className="flex gap-1.5 mb-2">
+                  {[0, 1, 2, 3].map(i => (
+                    <div
+                      key={i}
+                      className={cn(
+                        'h-1 flex-1 rounded-full transition-colors',
+                        i < passScore ? strength.bar : 'bg-[var(--border)]'
+                      )}
+                    />
                   ))}
                 </div>
+                <p className={cn('text-caption font-medium', strength.text)}>
+                  Password strength: {strength.label}
+                </p>
+                <ul className="mt-3 flex flex-col gap-1.5">
+                  {RULES.map(r => {
+                    const met = r.test(newPassword);
+                    return (
+                      <li
+                        key={r.label}
+                        className={cn(
+                          'flex items-center gap-2 text-caption',
+                          met ? 'text-[var(--text)]' : 'text-[var(--muted)]'
+                        )}
+                      >
+                        <i
+                          className={cn(
+                            'fas text-[11px]',
+                            met ? 'fa-circle-check text-[var(--accent)]' : 'fa-circle text-[var(--muted2)]'
+                          )}
+                        />
+                        {r.label}
+                      </li>
+                    );
+                  })}
+                </ul>
               </div>
-            </>
-          )}
+            )}
 
-          {/* ── Change Password tab ── */}
-          {activeTab === 'password' && !isGoogleUser && (
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-              <div className="flex items-center gap-2.5 px-6 py-4 border-b border-slate-100 bg-slate-50/60">
-                <div className="w-7 h-7 rounded-lg bg-emerald-600 flex items-center justify-center">
-                  <i className="fas fa-lock text-white text-[11px]" />
-                </div>
-                <span className="text-[14px] font-semibold text-slate-700">Change Password</span>
-              </div>
-              <div className="p-6 flex flex-col gap-5">
-
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Current Password</label>
-                  <div className="relative">
-                    <input
-                      type={showCurrent ? 'text' : 'password'}
-                      value={currentPassword}
-                      onChange={e => setCurrentPassword(e.target.value)}
-                      className={cn(FIELD, 'pr-10')}
-                      placeholder="Your current password"
-                      required
-                    />
-                    <button type="button" onClick={() => setShowCurrent(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-[12px]">
-                      <i className={cn('fas', showCurrent ? 'fa-eye-slash' : 'fa-eye')} />
-                    </button>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1.5">New Password</label>
-                  <div className="relative">
-                    <input
-                      type={showNew ? 'text' : 'password'}
-                      value={newPassword}
-                      onChange={e => setNewPassword(e.target.value)}
-                      className={cn(FIELD, 'pr-10')}
-                      placeholder="Min. 8 characters"
-                      required
-                    />
-                    <button type="button" onClick={() => setShowNew(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-[12px]">
-                      <i className={cn('fas', showNew ? 'fa-eye-slash' : 'fa-eye')} />
-                    </button>
-                  </div>
-                  {newPassword && (
-                    <>
-                      <div className="flex gap-1 mt-2.5 mb-1.5">
-                        {[0,1,2,3].map(i => (
-                          <div key={i} className={cn('h-1.5 flex-1 rounded-full transition-all', i < passScore ? strengthColor : 'bg-slate-200')} />
-                        ))}
-                      </div>
-                      <p className={cn('text-[11px] font-semibold',
-                        passScore <= 1 ? 'text-red-500' : passScore === 2 ? 'text-amber-500' : passScore === 3 ? 'text-blue-500' : 'text-emerald-600'
-                      )}>
-                        Password strength: {strengthText}
-                      </p>
-                      <ul className="mt-2 flex flex-col gap-1">
-                        {RULES.map(r => (
-                          <li key={r.label} className={cn('flex items-center gap-2 text-[11px]', r.test(newPassword) ? 'text-emerald-600' : 'text-slate-400')}>
-                            <i className={cn('fas text-[10px]', r.test(newPassword) ? 'fa-circle-check text-emerald-500' : 'fa-circle-xmark text-slate-300')} />
-                            {r.label}
-                          </li>
-                        ))}
-                      </ul>
-                    </>
+            <Field label="Confirm new password">
+              <div className="relative">
+                <input
+                  type={showConfirm ? 'text' : 'password'}
+                  value={confirmPassword}
+                  onChange={e => setConfirmPassword(e.target.value)}
+                  className={cn(
+                    FIELD, 'pr-10',
+                    confirmPassword && !passwordsMatch && 'border-red-400 focus:border-red-500',
+                    confirmPassword &&  passwordsMatch && 'border-[var(--accent)]'
                   )}
-                </div>
-
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Confirm New Password</label>
-                  <div className="relative">
-                    <input
-                      type={showConfirm ? 'text' : 'password'}
-                      value={confirmPassword}
-                      onChange={e => setConfirmPassword(e.target.value)}
-                      className={cn(FIELD, 'pr-10',
-                        confirmPassword && !passwordsMatch ? 'border-red-300 focus:border-red-400 focus:ring-red-100' : '',
-                        confirmPassword &&  passwordsMatch ? 'border-emerald-300 focus:border-emerald-400 focus:ring-emerald-100' : '',
-                      )}
-                      placeholder="Repeat new password"
-                      required
-                    />
-                    <button type="button" onClick={() => setShowConfirm(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-[12px]">
-                      <i className={cn('fas', showConfirm ? 'fa-eye-slash' : 'fa-eye')} />
-                    </button>
-                  </div>
-                  {confirmPassword && !passwordsMatch && (
-                    <p className="text-[11px] text-red-500 mt-1.5 flex items-center gap-1">
-                      <i className="fas fa-circle-exclamation text-[10px]" /> Passwords do not match
-                    </p>
-                  )}
-                  {confirmPassword && passwordsMatch && (
-                    <p className="text-[11px] text-emerald-600 mt-1.5 flex items-center gap-1">
-                      <i className="fas fa-circle-check text-[10px]" /> Passwords match
-                    </p>
-                  )}
-                </div>
+                  placeholder="Repeat the new password"
+                  required
+                />
+                <button
+                  type="button" onClick={() => setShowConfirm(v => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted2)] hover:text-[var(--text)] text-caption"
+                  aria-label={showConfirm ? 'Hide password' : 'Show password'}
+                >
+                  <i className={cn('fas', showConfirm ? 'fa-eye-slash' : 'fa-eye')} />
+                </button>
               </div>
-            </div>
-          )}
+              {confirmPassword && !passwordsMatch && (
+                <p className="text-caption text-red-600 flex items-center gap-1.5">
+                  <i className="fas fa-circle-exclamation text-[11px]" /> The passwords do not match
+                </p>
+              )}
+              {confirmPassword && passwordsMatch && (
+                <p className="text-caption text-[var(--accent)] flex items-center gap-1.5">
+                  <i className="fas fa-circle-check text-[11px]" /> The passwords match
+                </p>
+              )}
+            </Field>
+          </Card>
+        )}
 
-          {/* Feedback */}
-          {successMsg && (
-            <div className="flex items-center gap-3 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3.5 text-[13px] text-emerald-800">
-              <div className="w-7 h-7 rounded-lg bg-emerald-100 flex items-center justify-center shrink-0">
-                <i className="fas fa-circle-check text-emerald-600 text-[12px]" />
-              </div>
-              {successMsg}
-            </div>
-          )}
-          {errorMsg && (
-            <div className="flex items-center gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3.5 text-[13px] text-red-700">
-              <div className="w-7 h-7 rounded-lg bg-red-100 flex items-center justify-center shrink-0">
-                <i className="fas fa-circle-exclamation text-red-600 text-[12px]" />
-              </div>
-              {errorMsg}
-            </div>
-          )}
-
-          {/* Save */}
-          <div className="flex items-center gap-4">
-            <button
-              type="submit"
-              disabled={saving || (activeTab === 'password' && (!passwordsMatch || passScore < 3))}
-              className="flex items-center gap-2 px-7 py-3 bg-indigo-600 text-white rounded-xl text-[14px] font-semibold hover:bg-indigo-700 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm shadow-indigo-200"
-            >
-              {saving
-                ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Saving…</>
-                : <><i className="fas fa-check text-[12px]" /> Save Changes</>
-              }
-            </button>
+        {successMsg && (
+          <div className="flex items-center gap-2.5 bg-[var(--accent-soft)] border border-[var(--border)] rounded-card px-4 py-3 text-label text-[var(--accent-deep)]">
+            <i className="fas fa-circle-check text-[var(--accent)] shrink-0" />
+            {successMsg}
           </div>
+        )}
+        {errorMsg && (
+          <div className="flex items-center gap-2.5 bg-red-50 border border-red-200 rounded-card px-4 py-3 text-label text-red-700">
+            <i className="fas fa-circle-exclamation text-red-600 shrink-0" />
+            {errorMsg}
+          </div>
+        )}
 
+        <div>
+          <button
+            type="submit"
+            disabled={saving || (activeTab === 'password' && (!passwordsMatch || passScore < 3))}
+            className="inline-flex items-center gap-2 h-11 px-6 rounded-control bg-[var(--accent)] text-white text-label font-semibold transition-colors hover:bg-[var(--accent-deep)] disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {saving ? (
+              <>
+                <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                Saving…
+              </>
+            ) : (
+              'Save changes'
+            )}
+          </button>
         </div>
       </form>
     </div>

@@ -1,4 +1,5 @@
 import { query } from '../config/database';
+import { notifyAllStudents } from './notification.service';
 import { AppError } from '../middleware/errorHandler';
 import { Lecture } from '../types';
 import { logger } from '../utils/logger';
@@ -67,6 +68,13 @@ export const createLecture = async (input: {
 
   const lecture = rows[0];
   logger.info(`[LECTURE] ✅ Created lecture #${lecture.id}: "${lecture.title}" (videoId=${videoId})`);
+
+  // Tell every student the lecture exists. Its tutor is not ready yet — that
+  // is a second notification, sent from dataset-version.service once a version
+  // is activated. notifyAllStudents never throws, so a notification problem
+  // cannot undo a lecture that has already been created.
+  await notifyAllStudents('LECTURE_ADDED', 'New lecture added', lecture.title, lecture.id);
+
   return lecture;
 };
 

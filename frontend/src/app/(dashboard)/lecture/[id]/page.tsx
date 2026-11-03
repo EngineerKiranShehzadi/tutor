@@ -14,6 +14,7 @@ import { TeacherAvatarPanel } from '@/components/avatar/TeacherAvatarPanel';
 import { deriveAvatarState } from '@/lib/avatar/avatar-state';
 import { resolveAgentName } from '@/lib/avatar/agent-identity';
 import { cn }              from '@/lib/cn';
+import { sortLectures, statusBadge, isLectureReady, notReadyMessage } from '@/lib/lectures';
 import { useRouter }       from 'next/navigation';
 
 const CHANNEL = {
@@ -36,7 +37,10 @@ export default function LecturePage({ params }: Props) {
   const { data: allData } = useQuery(GET_LECTURES);
 
   const lecture: DBLecture | undefined = lectureData?.lecture;
-  const allLectures: DBLecture[]       = allData?.lectures ?? [];
+  // Course order, not insertion order. Unsorted, this list opened with
+  // Lecture 6 at the top and numbered the rows 1..7 by position, so the
+  // numbers described the accident of insertion rather than the course.
+  const allLectures: DBLecture[]       = sortLectures(allData?.lectures ?? []);
 
   // Displayed agent identity — resolved from the lecture's YouTube id via the
   // existing lecture -> agent mapping (no database ids hardcoded). The agent
@@ -62,8 +66,23 @@ export default function LecturePage({ params }: Props) {
     {
       // Returning true tells useChat the avatar speaks this answer, so the
       // built-in auto-speak is skipped (never two voices).
-      onFinalAnswer: (answer) => {
+      //
+      // An answer is only spoken on its own when the question was asked out
+      // loud, or when the student has turned auto-speak on. Every answer used
+      // to be read aloud the moment the avatar was on screen, which meant a
+      // typed question got an unasked-for voice — and the student's own
+      // auto-speak setting was ignored.
+      onFinalAnswer: (answer, { spokenQuestion }) => {
         if (!avatarSpeaksRef.current) return false;
+        // The avatar speaks only what was asked out loud. It used to also
+        // obey the auto-speak preference — but that preference's toggle is
+        // rendered only while the avatar is HIDDEN, so with the avatar on
+        // screen the setting was stuck at whatever it had been left at and
+        // there was no control anywhere to turn it off. A typed question is
+        // answered in silence; the speaker under the answer reads it on
+        // request. Auto-speak still governs the plain browser voice, which is
+        // used when the avatar is hidden — exactly when its toggle is visible.
+        if (!spokenQuestion) return false;
         setAvatarError(false);
         speech.speak(answer);
         return true;
@@ -77,6 +96,11 @@ export default function LecturePage({ params }: Props) {
   const [recSecs,       setRecSecs]       = useState(0);
   const [showSidebar,   setShowSidebar]   = useState(true);
   const [speakingMsgId, setSpeakingMsgId] = useState<string | null>(null);
+
+  // "Ask again" sits under each of the student's own questions, so any one of
+  // them can be re-asked — not just the latest. The answer arrives as a new
+  // exchange at the bottom; the original stays where it is. Hidden while an
+  // answer is in flight, so a second pipeline cannot be stacked on the first.
 
   // Clear speakingMsgId when TTS finishes (built-in voice, or the avatar's voice when it is shown)
   const anySpeaking = avatarVisible ? speech.isSpeaking : chat.isSpeaking;
@@ -142,7 +166,7 @@ export default function LecturePage({ params }: Props) {
 
   if (!lecture || isNaN(lectureId)) notFound();
 
-  const isReady = lecture.status === 'READY';
+  const isReady = isLectureReady(lecture.status);
 
   return (
     <div className="px-4 py-5">
@@ -151,7 +175,7 @@ export default function LecturePage({ params }: Props) {
         {/* ── LEFT: Video + info (55%) ─────────────── */}
         <div className="w-[55%] shrink-0 overflow-y-auto" style={{ maxHeight: 'calc(100vh - 100px)' }}>
           {/* Player */}
-          <div className="relative w-full aspect-video rounded-xl overflow-hidden bg-black shadow-md">
+          <div className="relative w-full aspect-video rounded-card overflow-hidden bg-black shadow-md">
             {lecture.youtubeVideoId ? (
               <iframe
                 src={`https://www.youtube.com/embed/${lecture.youtubeVideoId}?rel=0&modestbranding=1`}
@@ -171,31 +195,31 @@ export default function LecturePage({ params }: Props) {
 
           {/* AI Status warning */}
           {!isReady && (
-            <div className="mb-3 flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3.5 py-2.5">
-              <i className="fas fa-clock text-amber-500" />
-              <span className="text-sm text-amber-700 font-medium">
-                AI Tutor not yet available for this lecture (status: {lecture.status}).
+            <div className="mb-3 flex items-center gap-2 bg-[var(--gold-soft)] border border-[#e6dcc0] rounded-card px-3.5 py-2.5">
+              <i className="fas fa-clock text-[var(--gold)]" />
+              <span className="text-sm text-[var(--gold)] font-medium">
+                {notReadyMessage(lecture.status)}
               </span>
             </div>
           )}
 
           {/* Channel */}
           <div className="flex items-center gap-3 py-3 border-t border-b border-[var(--border)] mb-3">
-            <div className="w-10 h-10 rounded-full bg-purple-600 flex items-center justify-center text-white text-sm font-bold shrink-0">
+            <div className="w-10 h-10 rounded-full bg-[var(--accent)] flex items-center justify-center text-white text-sm font-bold shrink-0">
               {CHANNEL.initials}
             </div>
             <div className="flex-1">
               <p className="text-[15px] font-bold">{CHANNEL.name}</p>
               <p className="text-[13px] text-[var(--muted)]">{CHANNEL.subscribers} subscribers</p>
             </div>
-            <button className="px-4 py-2 bg-[var(--text)] text-white rounded-xl text-[13px] font-bold hover:bg-gray-800 transition-colors">
+            <button className="px-4 py-2 bg-[var(--text)] text-white rounded-card text-[13px] font-bold hover:bg-gray-800 transition-colors">
               Subscribe
             </button>
           </div>
 
           {/* Description */}
           {lecture.description && (
-            <div className="bg-[var(--surface)] rounded-xl p-3.5 text-[14px] text-[var(--muted)] leading-relaxed mb-4">
+            <div className="bg-[var(--surface)] rounded-card p-3.5 text-[14px] text-[var(--muted)] leading-relaxed mb-4">
               {lecture.description}
             </div>
           )}
@@ -209,15 +233,16 @@ export default function LecturePage({ params }: Props) {
               <div className="flex flex-col gap-1.5">
                 {allLectures.map((lec, i) => {
                   const isActive = lec.id === params.id;
-                  const isReady  = lec.status === 'READY';
+                  const isReady  = isLectureReady(lec.status);
+                  const badge    = statusBadge(lec.status);
                   return (
                     <div
                       key={lec.id}
                       onClick={() => isReady && !isActive && router.push(`/lecture/${lec.id}`)}
                       className={cn(
-                        'flex gap-3 p-2.5 rounded-xl border transition-colors',
+                        'flex gap-3 p-2.5 rounded-card border transition-colors',
                         isActive
-                          ? 'bg-blue-50 border-blue-200 cursor-default'
+                          ? 'bg-[var(--accent-soft)] border-[var(--border)] cursor-default'
                           : isReady
                           ? 'bg-white border-[var(--border)] hover:bg-[var(--surface)] cursor-pointer'
                           : 'bg-white border-[var(--border)] opacity-60 cursor-default'
@@ -229,7 +254,7 @@ export default function LecturePage({ params }: Props) {
                           : i + 1}
                       </span>
                       {lec.youtubeVideoId ? (
-                        <div className="w-24 shrink-0 aspect-video rounded-lg overflow-hidden bg-black">
+                        <div className="w-24 shrink-0 aspect-video rounded-control overflow-hidden bg-black">
                           {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img
                             src={`https://i.ytimg.com/vi/${lec.youtubeVideoId}/hqdefault.jpg`}
@@ -238,7 +263,7 @@ export default function LecturePage({ params }: Props) {
                           />
                         </div>
                       ) : (
-                        <div className="w-24 shrink-0 aspect-video rounded-lg bg-[var(--surface)] flex items-center justify-center">
+                        <div className="w-24 shrink-0 aspect-video rounded-control bg-[var(--surface)] flex items-center justify-center">
                           <i className="fas fa-video text-[var(--muted)]" />
                         </div>
                       )}
@@ -246,9 +271,23 @@ export default function LecturePage({ params }: Props) {
                         <p className={cn('text-[14px] font-semibold line-clamp-2 leading-snug', isActive && 'text-[var(--accent)]')}>
                           {lec.title}
                         </p>
-                        <p className="text-[12px] text-[var(--muted)] mt-1">
-                          {isReady ? '🟢 AI Ready' : '⏳ Preparing'}
-                        </p>
+                        {/* Identical to the courses page: ready is stated
+                            quietly with a dot, and only a lecture that is NOT
+                            ready gets a real badge, because that is the case
+                            worth noticing. Seven green pills read as
+                            decoration, and "AI Ready" here against "Tutor
+                            ready" there described one thing two ways. */}
+                        {isReady ? (
+                          <span className="mt-1 inline-flex items-center gap-1.5 text-[12px] font-medium text-[var(--muted)]">
+                            <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)]" />
+                            Tutor ready
+                          </span>
+                        ) : (
+                          <span className={`mt-1 inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium ${badge.color}`}>
+                            <i className="fas fa-clock text-[9px]" />
+                            {badge.label}
+                          </span>
+                        )}
                       </div>
                     </div>
                   );
@@ -260,28 +299,11 @@ export default function LecturePage({ params }: Props) {
 
         {/* ── RIGHT: Chat + Sidebar — one unified panel ── */}
         <div
-          className="flex flex-1 min-w-0 bg-white rounded-xl border border-[var(--border)] shadow-md overflow-hidden"
+          className="flex flex-1 min-w-0 bg-white rounded-card border border-[var(--border)] shadow-md overflow-hidden"
           style={{ height: 'calc(100vh - 100px)' }}
         >
           {/* Chat panel */}
           <div className="flex-1 min-w-0 flex flex-col overflow-hidden relative">
-          {/* Speaking indicator */}
-          {chat.isSpeaking && (
-            <div className="flex items-center gap-2 bg-indigo-50 border-b border-indigo-100 px-5 py-2.5 shrink-0">
-              <div className="flex items-end gap-[3px] h-5">
-                {[1,2,3,4].map(i => (
-                  <div key={i} className="w-[3px] bg-indigo-600 rounded-full animate-bounce"
-                    style={{ height: `${8 + i * 3}px`, animationDelay: `${i * 0.1}s` }} />
-                ))}
-              </div>
-              <span className="text-[14px] font-semibold text-indigo-700 flex-1">AI Tutor is speaking…</span>
-              <button onClick={chat.stopSpeaking}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-100 hover:bg-indigo-200 text-indigo-700 text-[13px] font-semibold transition-colors">
-                <i className="fas fa-stop text-[10px]" /> Stop
-              </button>
-            </div>
-          )}
-
           {/* AI teacher avatar — shown on the right, at the top of the chat column.
               Additional to the text chat, never a replacement for it. */}
           {isReady && (
@@ -310,23 +332,11 @@ export default function LecturePage({ params }: Props) {
                 <button
                   type="button"
                   onClick={() => toggleAvatar(true)}
-                  className="text-[13px] font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-100 rounded-xl px-3.5 py-1.5 transition-colors"
+                  className="text-[13px] font-semibold text-[var(--accent-deep)] bg-[var(--accent-soft)] hover:bg-[var(--accent-soft)] border border-[var(--border)] rounded-card px-3.5 py-1.5 transition-colors"
                 >
                   <i className="fas fa-chalkboard-user mr-2 text-[12px]" />Show AI teacher
                 </button>
-                <span className="flex-1" />
-                <button
-                  onClick={chat.toggleAutoSpeak}
-                  title={chat.autoSpeak ? 'Auto-speak on — click to turn off' : 'Auto-speak off — click to turn on'}
-                  className={cn(
-                    'w-9 h-9 rounded-xl flex items-center justify-center transition-colors',
-                    chat.autoSpeak
-                      ? 'bg-indigo-600 text-white'
-                      : 'bg-[var(--surface)] text-[var(--muted)] hover:bg-indigo-50 hover:text-indigo-600'
-                  )}
-                >
-                  <i className={`fas ${chat.autoSpeak ? 'fa-volume-high' : 'fa-volume-xmark'} text-[13px]`} />
-                </button>
+
               </div>
             )
           )}
@@ -334,12 +344,12 @@ export default function LecturePage({ params }: Props) {
           {/* Not ready state */}
           {!isReady ? (
             <div className="flex-1 flex flex-col items-center justify-center text-[var(--muted)] gap-3 px-6">
-              <div className="w-14 h-14 rounded-2xl bg-amber-50 flex items-center justify-center">
-                <i className="fas fa-clock text-amber-400 text-2xl" />
+              <div className="w-14 h-14 rounded-card bg-[var(--gold-soft)] flex items-center justify-center">
+                <i className="fas fa-clock text-[var(--gold)] text-2xl" />
               </div>
-              <p className="text-[16px] font-semibold text-slate-600 text-center">AI Agent Not Ready</p>
-              <p className="text-[13px] text-center leading-relaxed">
-                The AI tutor for this lecture is still being prepared. Check back once the status is <strong>AI Ready</strong>.
+              <p className="text-[16px] font-semibold text-[var(--muted)] text-center">Tutor not ready yet</p>
+              <p className="text-[13px] text-center leading-relaxed max-w-[320px]">
+                {notReadyMessage(lecture.status)}
               </p>
             </div>
           ) : (
@@ -347,15 +357,15 @@ export default function LecturePage({ params }: Props) {
               {/* Messages */}
               <div ref={chatMessagesRef} className="flex-1 min-h-[180px] overflow-y-auto px-5 py-4 flex flex-col gap-4">
                 <div className="flex items-center justify-center">
-                  <span className="bg-indigo-50 border border-indigo-100 text-indigo-700 text-[13px] font-medium px-4 py-2 rounded-xl flex items-center gap-2">
-                    <i className="fas fa-circle-check text-indigo-500 text-[11px]" />
+                  <span className="bg-[var(--accent-soft)] border border-[var(--border)] text-[var(--accent-deep)] text-[13px] font-medium px-4 py-2 rounded-card flex items-center gap-2">
+                    <i className="fas fa-circle-check text-[var(--accent)] text-[11px]" />
                     Agent ready — <strong>scoped to this lecture only</strong>
                   </span>
                 </div>
 
                 {chat.isLoadingSession ? (
                   <div className="flex items-center justify-center py-6">
-                    <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                    <div className="w-6 h-6 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
                     <span className="ml-2.5 text-[14px] text-[var(--muted)]">Loading history…</span>
                   </div>
                 ) : (
@@ -364,6 +374,15 @@ export default function LecturePage({ params }: Props) {
                       <MessageBubble
                         message={msg}
                         onSpeak={msg.role === 'ai' ? (text) => {
+                          // A second press stops it. The button reads "Stop
+                          // reading" while speaking, but used to restart the
+                          // answer from the beginning instead of stopping it.
+                          if (speakingMsgId === msg.id && anySpeaking) {
+                            speech.stop();
+                            chat.stopSpeaking();
+                            setSpeakingMsgId(null);
+                            return;
+                          }
                           setSpeakingMsgId(msg.id);
                           if (avatarSpeaksRef.current) {
                             chat.stopSpeaking();      // never two voices
@@ -373,6 +392,11 @@ export default function LecturePage({ params }: Props) {
                           }
                         } : undefined}
                         isSpeaking={speakingMsgId === msg.id && anySpeaking}
+                        onAskAgain={
+                          msg.role === 'user' && !chat.isAnswerPending
+                            ? () => chat.sendMessage(msg.content)
+                            : undefined
+                        }
                       />
                     </div>
                   ))
@@ -415,7 +439,7 @@ export default function LecturePage({ params }: Props) {
           <button
             onClick={() => setShowSidebar(true)}
             title="Open chat history"
-            className="w-7 h-7 shrink-0 self-start mt-[10px] rounded-lg flex items-center justify-center text-[var(--muted)] hover:bg-purple-50 hover:text-[var(--accent)] transition-colors"
+            className="w-7 h-7 shrink-0 self-start mt-[10px] rounded-control flex items-center justify-center text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] transition-colors"
           >
             <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
               <rect x="1.5" y="1.5" width="13" height="13" rx="2" stroke="currentColor" strokeWidth="1.4"/>

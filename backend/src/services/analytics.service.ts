@@ -3,6 +3,20 @@ import { logger } from '../utils/logger';
 import { AppError } from '../middleware/errorHandler';
 import { getAllLectureReadiness } from './dataset-version.service';
 import { clampInt, likePattern, pageArgs } from '../utils/paging';
+import { env } from '../config/env';
+
+/**
+ * Turn a stored timestamp into a calendar day in the reporting timezone.
+ *
+ * Postgres keeps timestamps in UTC. `x AT TIME ZONE 'Asia/Karachi'` converts
+ * one into the wall-clock time in that zone, so ::date then gives the day the
+ * student experienced rather than the UTC day. The ::timestamptz cast makes
+ * the expression behave the same whether the column is already timestamptz or
+ * still a plain timestamp (which Postgres reads as UTC on this server).
+ *
+ * $tz is passed as a bind parameter, never interpolated.
+ */
+const localDay = (col: string, tzParam: string) => `((${col})::timestamptz AT TIME ZONE ${tzParam})::date`;
 
 export const getAnalyticsSummary = async () => {
   const [students, lectures, questions, readyAgents] = await Promise.all([
@@ -539,10 +553,15 @@ export const getContentGaps = async (opts: { maxChunksPerLecture?: number } = {}
 // Rankings below order by the numeric aggregate: the ::text aliases (kept for
 // the row types) sorted alphabetically, so "9" ranked above "10".
 export const getMyStats = async (studentId: string) => {
+  // $1 is always the student id, $2 always the reporting timezone.
+  const p = [studentId, env.REPORTING_TIMEZONE];
+  const day = localDay('created_at', '$2::text');          // day a question was asked
+  const today = `(NOW() AT TIME ZONE $2::text)::date`;     // today, in that same zone
+
   const [
     totalQs, totalSessions, lecturesEngaged, totalAvailableLectures,
     lastActiveRes, memberSinceRes, weekQs, lastWeekQs, topicRes,
-    streakRes, dailyRes, lectureBreakdownRes, peakHourRes,
+    streakRes, dailyRes, lectureBreakdownRes, peakHourRes, todayRes,
   ] = await Promise.all([
     query<{ count: string }>(
       `SELECT COUNT(*) FROM student_questions WHERE student_id = $1`, [studentId]
@@ -565,11 +584,20 @@ export const getMyStats = async (studentId: string) => {
     query<{ created_at: Date }>(
       `SELECT created_at FROM users WHERE id = $1`, [studentId]
     ),
+    // The 7 calendar days ending today, in the reporting timezone — exactly the
+    // seven bars the chart draws, so the figure and the chart can never
+    // disagree. A rolling "NOW() - 7 days" would have covered part of an
+    // eighth day and counted questions the chart does not show.
     query<{ count: string }>(
-      `SELECT COUNT(*) FROM student_questions WHERE student_id = $1 AND created_at >= NOW() - INTERVAL '7 days'`, [studentId]
+      `SELECT COUNT(*) FROM student_questions
+        WHERE student_id = $1 AND ${day} > ${today} - 7`, p
     ),
+    // The 7 calendar days immediately before those.
     query<{ count: string }>(
-      `SELECT COUNT(*) FROM student_questions WHERE student_id = $1 AND created_at >= NOW() - INTERVAL '14 days' AND created_at < NOW() - INTERVAL '7 days'`, [studentId]
+      `SELECT COUNT(*) FROM student_questions
+        WHERE student_id = $1
+          AND ${day} > ${today} - 14
+          AND ${day} <= ${today} - 7`, p
     ),
     query<{ title: string; cnt: string }>(
       `SELECT l.title, COUNT(sq.id)::text AS cnt
@@ -579,49 +607,74 @@ export const getMyStats = async (studentId: string) => {
        GROUP BY l.title ORDER BY COUNT(sq.id) DESC LIMIT 1`, [studentId]
     ),
     query<{ day: string }>(
-      `SELECT DISTINCT DATE(created_at) AS day
+      `SELECT DISTINCT ${day}::text AS day
        FROM student_questions WHERE student_id = $1
-       ORDER BY day DESC`, [studentId]
+       ORDER BY day DESC`, p
     ),
     query<{ day: string; count: string }>(
-      `SELECT DATE(created_at)::text AS day, COUNT(*)::text AS count
+      `SELECT ${day}::text AS day, COUNT(*)::text AS count
        FROM student_questions
-       WHERE student_id = $1 AND created_at >= NOW() - INTERVAL '7 days'
-       GROUP BY day ORDER BY day ASC`, [studentId]
+       WHERE student_id = $1 AND ${day} > ${today} - 7
+       GROUP BY 1 ORDER BY 1 ASC`, p
     ),
+    // No LIMIT. It used to be LIMIT 6, which silently dropped a student's
+    // seventh and later lectures from the breakdown with nothing on screen to
+    // say anything was missing.
     query<{ lecture_id: number; title: string; cnt: string }>(
       `SELECT l.id AS lecture_id, l.title, COUNT(sq.id)::text AS cnt
        FROM student_questions sq
        JOIN lectures l ON l.id = sq.lecture_id
        WHERE sq.student_id = $1
-       GROUP BY l.id, l.title ORDER BY COUNT(sq.id) DESC LIMIT 6`, [studentId]
+       GROUP BY l.id, l.title
+       ORDER BY COUNT(sq.id) DESC, l.id ASC`, [studentId]
     ),
     query<{ hour: string; count: string }>(
-      `SELECT EXTRACT(HOUR FROM created_at)::text AS hour, COUNT(*)::text AS count
+      `SELECT EXTRACT(HOUR FROM (created_at)::timestamptz AT TIME ZONE $2::text)::text AS hour,
+              COUNT(*)::text AS count
        FROM student_questions WHERE student_id = $1
-       GROUP BY hour ORDER BY COUNT(*) DESC LIMIT 1`, [studentId]
+       GROUP BY 1 ORDER BY COUNT(*) DESC LIMIT 1`, p
+    ),
+    // Today's date in the reporting timezone, read from the database so the
+    // seven-day window is built from the same clock the grouping used. Taking
+    // it from the Node process instead would drift whenever the server runs in
+    // a different timezone from the one being reported on.
+    query<{ today: string }>(
+      `SELECT (NOW() AT TIME ZONE $1::text)::date::text AS today`, [env.REPORTING_TIMEZONE]
     ),
   ]);
 
-  // Compute streak — compare ISO date strings in UTC to avoid timezone mismatch
-  // DB returns DATE(created_at) as "YYYY-MM-DD" in UTC; we compare using UTC dates too.
+  // Every day below is a "YYYY-MM-DD" string already expressed in the
+  // reporting timezone, so day maths is done by shifting the date string and
+  // never by subtracting milliseconds from the current instant: the old
+  // version did the latter, which produced UTC days and put anything asked
+  // between midnight and 05:00 Pakistan time on the wrong day.
+  const todayStr = todayRes.rows[0]?.today ?? new Date().toISOString().slice(0, 10);
+  const shiftDay = (isoDate: string, days: number) => {
+    // Noon UTC, so adding whole days can never cross a boundary by accident.
+    const d = new Date(`${isoDate}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + days);
+    return d;
+  };
+  const dayKey = (d: Date) => d.toISOString().slice(0, 10);
+
+  // Streak = consecutive days up to and including today on which something was
+  // asked. streakRes is already ordered newest first.
   const dayStrings = streakRes.rows.map(r => String(r.day).slice(0, 10));
   let streak = 0;
-  const nowMs = Date.now();
-  const MS_DAY = 86400000;
   for (let i = 0; i < dayStrings.length; i++) {
-    const expectedStr = new Date(nowMs - i * MS_DAY).toISOString().split('T')[0];
-    if (dayStrings[i] === expectedStr) streak++;
+    if (dayStrings[i] === dayKey(shiftDay(todayStr, -i))) streak++;
     else break;
   }
 
-  // Build 7-day activity array using UTC dates (consistent with DB DATE() output)
-  const dailyMap = new Map(dailyRes.rows.map(r => [r.day, parseInt(r.count, 10)]));
+  const dailyMap = new Map(dailyRes.rows.map(r => [String(r.day).slice(0, 10), parseInt(r.count, 10)]));
   const weeklyActivity = Array.from({ length: 7 }, (_, i) => {
-    const dateStr = new Date(nowMs - (6 - i) * MS_DAY).toISOString().split('T')[0];
-    const d = new Date(dateStr + 'T12:00:00Z'); // noon UTC → stable weekday name
+    const d = shiftDay(todayStr, -(6 - i));
+    const dateStr = dayKey(d);
     return {
-      day:   d.toLocaleDateString('en-US', { weekday: 'short' }),
+      // timeZone: 'UTC' is required. Without it the weekday is read off the
+      // server's own timezone while the date was built at noon UTC, so a
+      // server west of UTC would label every bar with the previous weekday.
+      day:   d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }),
       date:  dateStr,
       count: dailyMap.get(dateStr) ?? 0,
     };
@@ -653,5 +706,55 @@ export const getMyStats = async (studentId: string) => {
       count:        parseInt(r.cnt, 10),
     })),
     peakHour: peakHourRes.rows[0] ? parseInt(peakHourRes.rows[0].hour, 10) : null,
+  };
+};
+
+/**
+ * One page of the signed-in student's own questions, newest first.
+ *
+ * getMyStats returns counts only, so the activity page could say how many
+ * questions had been asked but never show one. This returns the question text
+ * itself with the lecture it belongs to, which is what a student revising is
+ * actually looking for.
+ *
+ * Scoped by student_id on every statement, so one student can never read
+ * another's questions. The answer text is deliberately not selected: answers
+ * run to several paragraphs and the list only needs the question.
+ */
+export const getMyRecentQuestions = async (
+  studentId: string,
+  pageIn: { limit?: number | null; offset?: number | null }
+) => {
+  const limit  = clampInt(pageIn.limit, 10, 1, 50);
+  const offset = clampInt(pageIn.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+
+  const from = `FROM student_questions sq
+     JOIN lectures l ON l.id = sq.lecture_id
+     WHERE sq.student_id = $1`;
+
+  const [{ rows }, { rows: cnt }] = await Promise.all([
+    query<{ id: number; lecture_id: number; title: string; question: string; created_at: Date }>(
+      `SELECT sq.id, sq.lecture_id, l.title, sq.question, sq.created_at
+       ${from}
+       ORDER BY sq.created_at DESC, sq.id DESC
+       LIMIT $2 OFFSET $3`,
+      [studentId, limit, offset]
+    ),
+    query<{ n: string }>(`SELECT COUNT(*) AS n ${from}`, [studentId]),
+  ]);
+
+  const total = Number(cnt[0]?.n ?? 0);
+  logger.info(`[ANALYTICS] myRecentQuestions: ${rows.length} of ${total} (offset ${offset})`);
+
+  return {
+    items: rows.map(r => ({
+      id:           r.id,
+      question:     r.question,
+      lectureId:    r.lecture_id,
+      lectureTitle: r.title,
+      createdAt:    new Date(r.created_at).toISOString(),
+    })),
+    total,
+    hasMore: offset + rows.length < total,
   };
 };

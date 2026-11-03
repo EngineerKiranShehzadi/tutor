@@ -27,8 +27,12 @@ interface Props {
  *   Primary read: AI neural network.  Secondary read: "A" brand monogram for AskAI.
  */
 export const Logo = ({ variant = 'dark', size = 'full', className = '' }: Props) => {
-  const textMain   = variant === 'dark' ? '#ffffff' : '#0f172a';
-  const textAccent = variant === 'dark' ? '#93c5fd' : '#065fd4';
+  const onDark     = variant === 'dark';
+  const textMain   = variant === 'dark' ? '#ffffff' : '#15201c';
+  // On the dark band the accent is lightened so it stays legible; on white
+  // it is the brand colour itself.
+  const textAccent = variant === 'dark' ? '#74c4a4' : '#15664f';
+  const wordmarkFont = "var(--font-sans), 'Segoe UI', system-ui, sans-serif";
 
   // ViewBox width tightens for compact and icon variants
   const vbW = size === 'icon' ? 46 : size === 'compact' ? 148 : 158;
@@ -42,10 +46,11 @@ export const Logo = ({ variant = 'dark', size = 'full', className = '' }: Props)
       aria-label="AskAI Tutor"
     >
       <defs>
-        {/* Brand gradient — blue #065fd4 → indigo #4f46e5 */}
+        {/* Brand gradient - one hue in two stops, so the tile has depth
+            without bringing a second colour into the theme. */}
         <linearGradient id="lg-askai" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%"   stopColor="#065fd4" />
-          <stop offset="100%" stopColor="#4f46e5" />
+          <stop offset="0%"   stopColor="#1b7259" />
+          <stop offset="100%" stopColor="#104534" />
         </linearGradient>
 
         {/* Inner depth — top-left radial glow for glass/depth feel */}
@@ -57,10 +62,9 @@ export const Logo = ({ variant = 'dark', size = 'full', className = '' }: Props)
 
       {/* ─── ICON ──────────────────────────────────────────── */}
 
-      {/* Base rounded square */}
-      <rect x="1" y="4" width="44" height="44" rx="11" fill="url(#lg-askai)" />
-      {/* Depth overlay */}
-      <rect x="1" y="4" width="44" height="44" rx="11" fill="url(#rg-askai)" />
+      {/* Brand tile - the same deep green everywhere. */}
+      <rect x="1" y="4" width="44" height="44" rx="12" fill="url(#lg-askai)" />
+      <rect x="1" y="4" width="44" height="44" rx="12" fill="url(#rg-askai)" />
 
       {/* ── Neural "A" traces — rendered below nodes ── */}
 
@@ -110,7 +114,7 @@ export const Logo = ({ variant = 'dark', size = 'full', className = '' }: Props)
         <text
           x="57"
           y="27"
-          fontFamily="'Segoe UI', system-ui, -apple-system, sans-serif"
+          style={{ fontFamily: wordmarkFont }}
           fontSize="22"
           fontWeight="800"
           fill={textMain}
@@ -124,11 +128,10 @@ export const Logo = ({ variant = 'dark', size = 'full', className = '' }: Props)
         <text
           x="58"
           y="43"
-          fontFamily="'Segoe UI', system-ui, -apple-system, sans-serif"
           fontSize="13"
           fontWeight="700"
           fill={textAccent}
-          style={{ letterSpacing: '3px' }}
+          style={{ fontFamily: wordmarkFont, letterSpacing: '3px' }}
         >
           TUTOR
         </text>

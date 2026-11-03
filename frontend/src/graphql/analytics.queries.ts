@@ -137,6 +137,24 @@ export const GET_REGISTERED_STUDENTS = gql`
 `;
 
 
+// The signed-in student's own questions, newest first. The server reads the
+// student id from the auth token, so this query takes no student argument.
+export const MY_RECENT_QUESTIONS_QUERY = gql`
+  query MyRecentQuestions($limit: Int, $offset: Int) {
+    myRecentQuestions(limit: $limit, offset: $offset) {
+      items {
+        id
+        question
+        lectureId
+        lectureTitle
+        createdAt
+      }
+      total
+      hasMore
+    }
+  }
+`;
+
 export const MY_STATS_QUERY = gql`
   query MyStats {
     myStats {

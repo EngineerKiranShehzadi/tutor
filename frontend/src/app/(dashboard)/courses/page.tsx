@@ -3,30 +3,9 @@ import { useRouter } from 'next/navigation';
 import { useQuery } from '@apollo/client';
 import { GET_LECTURES } from '@/graphql/lecture.queries';
 import { DBLecture } from '@/types';
-
-const STATUS_BADGE: Record<string, { label: string; color: string }> = {
-  READY:            { label: 'AI Ready',     color: 'bg-green-100 text-green-700' },
-  PROCESSING:       { label: 'Processing',   color: 'bg-blue-100 text-blue-700' },
-  EMBEDDING:        { label: 'Embedding',    color: 'bg-purple-100 text-purple-700' },
-  DATASET_UPLOADED: { label: 'Uploaded',     color: 'bg-yellow-100 text-yellow-700' },
-  NO_DATASET:       { label: 'No Dataset',   color: 'bg-gray-100 text-gray-500' },
-  FAILED:           { label: 'Failed',       color: 'bg-red-100 text-red-700' },
-};
-
-// The lectures table has no explicit ordering column and the server returns
-// rows in insertion order, which put Lecture 6 first, so the order is taken
-// from the lecture number in the title. The real titles are not uniform, and
-// both exceptions are handled here rather than by renaming anyone's data:
-//   "Lecture 2| ...", "Lecture 6 — ..."      -> 2, 6
-//   "Lecture -1 Introduction to ..."         -> 1  (a dash before the number)
-//   "Introductory Lecture - Introduction ..." -> 0  (no number; it precedes 1)
-// Anything still unrecognised sorts last instead of breaking the list.
-const lectureNumber = (title: string): number => {
-  const t = title ?? '';
-  if (/introductor/i.test(t)) return 0;
-  const m = /lecture\s*[-–—#:]?\s*0*(\d+)/i.exec(t);
-  return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER;
-};
+// Ordering and readiness come from one shared file so this page and the
+// lecture page can never disagree about either again.
+import { sortLectures, statusBadge, isLectureReady } from '@/lib/lectures';
 
 export default function CoursesPage() {
   const router = useRouter();
@@ -52,13 +31,9 @@ export default function CoursesPage() {
     );
   }
 
-  // Apollo's result array is frozen: copy before sorting.
-  const ordered = [...lectures].sort((a, b) => {
-    const d = lectureNumber(a.title) - lectureNumber(b.title);
-    return d !== 0 ? d : (a.title ?? '').localeCompare(b.title ?? '');
-  });
+  const ordered = sortLectures(lectures);
 
-  const firstReady = ordered.find((l) => l.status === 'READY');
+  const firstReady = ordered.find((l) => isLectureReady(l.status));
   // The player used to point at a playlist address written into this file.
   // It now shows the first lecture that has a video, straight from the
   // database, so a lecture added or removed by an admin is reflected here
@@ -71,7 +46,7 @@ export default function CoursesPage() {
 
       {/* LEFT — Featured lecture video (from the database) */}
       <div className="w-[55%] shrink-0">
-        <div className="relative w-full aspect-video rounded-xl overflow-hidden bg-black shadow-md">
+        <div className="relative w-full aspect-video rounded-card overflow-hidden bg-black shadow-md">
           {featured?.youtubeVideoId ? (
             <iframe
               src={`https://www.youtube.com/embed/${featured.youtubeVideoId}?rel=0&modestbranding=1`}
@@ -88,30 +63,30 @@ export default function CoursesPage() {
           )}
         </div>
         {featured && (
-          <p className="mt-3 text-[15px] font-semibold text-[var(--text)] leading-snug">
+          <p className="mt-3 text-h3 font-semibold text-[var(--text)] leading-snug">
             {featured.title}
           </p>
         )}
       </div>
 
       {/* RIGHT — Lecture list */}
-      <div className="flex-1 min-w-0 bg-white rounded-xl border border-[var(--border)] shadow-md flex flex-col overflow-hidden">
+      <div className="flex-1 min-w-0 bg-white rounded-card border border-[var(--border)] shadow-md flex flex-col overflow-hidden">
 
         {/* Header */}
         <div className="px-4 py-4 border-b border-[var(--border)]">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-[21px] font-bold text-[var(--text)]">Course Lectures</h1>
-              <p className="text-[14px] text-[var(--muted)] mt-0.5">
+              <h1 className="text-h2 font-semibold text-[var(--text)]">Course Lectures</h1>
+              <p className="text-label text-[var(--muted)] mt-1">
                 {ordered.length} lecture{ordered.length !== 1 ? 's' : ''} available
               </p>
             </div>
             {firstReady && (
               <button
                 onClick={() => router.push(`/lecture/${firstReady.id}`)}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-[var(--text)] text-white rounded-full text-[13px] font-bold hover:bg-gray-800 transition-colors shrink-0"
+                className="flex items-center gap-2 h-10 px-5 bg-[var(--ink-soft)] hover:bg-[var(--ink)] text-white rounded-control text-label font-semibold transition-colors shrink-0"
               >
-                <i className="fas fa-play text-[8px]" /> Start Learning
+                <i className="fas fa-play text-[10px]" /> Start Learning
               </button>
             )}
           </div>
@@ -127,8 +102,8 @@ export default function CoursesPage() {
             </div>
           ) : (
             ordered.map((lec) => {
-              const badge   = STATUS_BADGE[lec.status] ?? STATUS_BADGE.NO_DATASET;
-              const isReady = lec.status === 'READY';
+              const badge   = statusBadge(lec.status);
+              const isReady = isLectureReady(lec.status);
               return (
                 <div
                   key={lec.id}
@@ -155,13 +130,25 @@ export default function CoursesPage() {
 
                   {/* Info */}
                   <div className="flex-1 min-w-0">
-                    <p className="text-[15px] font-semibold leading-snug line-clamp-2 mb-1.5 text-[var(--text)]">
+                    <p className="text-label font-semibold leading-snug line-clamp-2 mb-2 text-[var(--text)]">
                       {lec.title}
                     </p>
-                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[12px] font-bold ${badge.color}`}>
-                      <i className={`fas ${isReady ? 'fa-robot' : 'fa-clock'} text-[8px]`} />
-                      {badge.label}
-                    </span>
+                    {/* Ready is the normal case, so it is stated quietly: a
+                        dot and grey text rather than a filled pill. Seven
+                        identical green pills read as decoration. Anything
+                        that is NOT ready still gets a real badge, because
+                        that is the case worth noticing. */}
+                    {isReady ? (
+                      <span className="inline-flex items-center gap-2 text-caption font-medium text-[var(--muted)]">
+                        <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)]" />
+                        Tutor ready
+                      </span>
+                    ) : (
+                      <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-caption font-medium ${badge.color}`}>
+                        <i className="fas fa-clock text-[9px]" />
+                        {badge.label}
+                      </span>
+                    )}
                   </div>
 
                   {isReady && (

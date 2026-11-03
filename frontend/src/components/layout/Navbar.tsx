@@ -5,10 +5,30 @@ import { Logo } from '@/components/ui/Logo';
 import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { cn } from '@/lib/cn';
+import { NotificationBell } from '@/components/layout/NotificationBell';
 
+// `section` lists every URL that belongs under this nav item, so the item stays
+// marked while the student is anywhere inside it. A lecture lives at
+// /lecture/4, not /courses/4, so matching on href alone left nothing underlined
+// the moment a lecture was opened — the header then gave no clue where you were.
 const NAV_LINKS = [
-  { href: '/courses',  label: 'Courses', icon: 'fas fa-graduation-cap' },
+  {
+    href: '/courses',
+    label: 'Lectures',
+    icon: 'fas fa-circle-play',
+    section: ['/courses', '/lecture'],
+  },
+  {
+    href: '/profile/activity',
+    label: 'My Activity',
+    icon: 'fas fa-clock-rotate-left',
+    section: ['/profile/activity'],
+  },
 ];
+
+/** True when the current URL is the path itself or anything beneath it. */
+const isUnder = (pathname: string, path: string) =>
+  pathname === path || pathname.startsWith(`${path}/`);
 
 export const Navbar = () => {
   const { user, logout } = useAuth();
@@ -16,9 +36,7 @@ export const Navbar = () => {
   const pathname = usePathname();
 
   const [dropdownOpen,  setDropdownOpen]  = useState(false);
-  const [bellOpen,      setBellOpen]      = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
-  const bellRef     = useRef<HTMLDivElement>(null);
 
   const initials = user?.name?.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() ?? 'U';
 
@@ -27,37 +45,37 @@ export const Navbar = () => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
         setDropdownOpen(false);
       }
-      if (bellRef.current && !bellRef.current.contains(e.target as Node)) {
-        setBellOpen(false);
-      }
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  useEffect(() => { setDropdownOpen(false); setBellOpen(false); }, [pathname]);
+  useEffect(() => { setDropdownOpen(false); }, [pathname]);
 
   return (
     <nav
-      className="sticky top-0 z-50 border-b border-white/10 flex items-center px-8 h-[80px] gap-4 bg-gradient-to-r from-slate-800 via-slate-700 to-indigo-800"
+      className="sticky top-0 z-50 flex items-center px-8 h-[72px] gap-4 bg-[var(--ink-soft)]"
       style={{ backdropFilter: 'blur(12px)' }}
     >
       {/* Logo */}
       <Link href="/courses" className="flex items-center shrink-0">
-        <Logo variant="dark" className="h-12 w-auto" />
+        <Logo variant="dark" className="h-11 w-auto" />
       </Link>
 
       {/* Nav links */}
-      <div className="flex items-center gap-1 ml-4">
-        {NAV_LINKS.map(({ href, label, icon }) => {
-          const active = pathname === href || pathname.startsWith(href + '/');
+      <div className="flex items-center gap-6 ml-6">
+        {NAV_LINKS.map(({ href, label, icon, section }) => {
+          const active = section.some(path => isUnder(pathname, path));
           return (
             <Link key={href} href={href}
               className={cn(
-                'flex items-center gap-2 px-4 py-2 rounded-lg text-[18px] font-semibold transition-colors',
+                // With two destinations the current one is worth marking: a
+                // quiet underline, not a filled panel, because a nav item is
+                // not a button and should not look pressable.
+                'relative flex items-center gap-2 py-2 text-label font-semibold transition-colors',
                 active
-                  ? 'bg-white/10 text-white'
-                  : 'text-slate-300 hover:bg-white/8 hover:text-white'
+                  ? 'text-white after:absolute after:left-0 after:right-0 after:-bottom-1 after:h-[2px] after:rounded-full after:bg-white'
+                  : 'text-white/65 hover:text-white'
               )}>
               <i className={cn(icon, 'text-[12px]')} />
               {label}
@@ -72,43 +90,17 @@ export const Navbar = () => {
       {/* Right: bell + profile dropdown */}
       <div className="flex items-center gap-2">
 
-        {/* Notification bell */}
-        <div className="relative" ref={bellRef}>
-          <button
-            onClick={() => { setBellOpen(v => !v); setDropdownOpen(false); }}
-            className="relative w-11 h-11 rounded-xl flex items-center justify-center hover:bg-white/10 transition-colors text-slate-300 hover:text-white border border-white/10"
-          >
-            <i className="fas fa-bell text-[18px]" />
-          </button>
-
-          {bellOpen && (
-            <div
-              className="absolute right-0 top-[calc(100%+8px)] w-72 rounded-2xl border border-white/10 shadow-2xl z-50 overflow-hidden"
-              style={{ background: 'linear-gradient(135deg,#1e293b,#312e81)', backdropFilter: 'blur(16px)' }}
-            >
-              <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
-                <span className="text-[14px] font-semibold text-white">Notifications</span>
-                <span className="text-[11px] text-slate-400">0 new</span>
-              </div>
-              <div className="flex flex-col items-center justify-center py-10 gap-3">
-                <div className="w-12 h-12 rounded-2xl bg-white/8 flex items-center justify-center">
-                  <i className="fas fa-bell-slash text-slate-400 text-[20px]" />
-                </div>
-                <p className="text-[13px] text-slate-400">No recent notifications</p>
-              </div>
-            </div>
-          )}
-        </div>
+        <NotificationBell />
 
         {/* Profile dropdown */}
         <div className="relative" ref={dropdownRef}>
           <button
             onClick={() => setDropdownOpen(v => !v)}
             className={cn(
-              'flex items-center gap-2 pl-2 pr-3 py-1.5 rounded-xl border transition-colors',
+              'flex items-center gap-2 pl-2 pr-3 py-1.5 rounded-card border transition-colors',
               dropdownOpen
-                ? 'bg-white/10 border-white/20'
-                : 'border-white/10 hover:bg-white/8 hover:border-white/20'
+                ? 'bg-white/15 border-white/25'
+                : 'border-white/20 hover:bg-white/10 hover:border-white/30'
             )}
           >
             {/* Avatar */}
@@ -117,19 +109,19 @@ export const Navbar = () => {
               <img
                 src={user.avatar_url}
                 alt={user.name}
-                className="w-8 h-8 rounded-lg object-cover shrink-0"
+                className="w-8 h-8 rounded-control object-cover shrink-0"
               />
             ) : (
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white text-[12px] font-bold shrink-0">
+              <div className="w-8 h-8 rounded-control bg-white/20 flex items-center justify-center text-white text-[12px] font-bold shrink-0">
                 {initials}
               </div>
             )}
             <div className="text-left hidden sm:block">
-              <p className="text-[14px] font-semibold text-white leading-none">{user?.name}</p>
-              <p className="text-[11px] text-slate-400 mt-0.5">Student</p>
+              <p className="text-label font-semibold text-white leading-none">{user?.name}</p>
+              <p className="text-[11px] text-white/70 mt-0.5">Student</p>
             </div>
             <i className={cn(
-              'fas fa-chevron-down text-[9px] text-slate-400 ml-0.5 transition-transform',
+              'fas fa-chevron-down text-[9px] text-white/70 ml-0.5 transition-transform',
               dropdownOpen && 'rotate-180'
             )} />
           </button>
@@ -137,23 +129,23 @@ export const Navbar = () => {
           {/* Dropdown panel */}
           {dropdownOpen && (
             <div
-              className="absolute right-0 top-[calc(100%+6px)] w-56 rounded-2xl border border-white/10 shadow-2xl z-50 overflow-hidden"
-              style={{ background: 'linear-gradient(135deg,#1e293b,#312e81)', backdropFilter: 'blur(16px)' }}
+              className="absolute right-0 top-[calc(100%+6px)] w-56 rounded-card border border-[var(--border)] shadow-lg z-50 overflow-hidden"
+              style={{ background: '#ffffff' }}
             >
               {/* User info header */}
-              <div className="px-4 py-3 border-b border-white/10" style={{ background: 'rgba(255,255,255,0.04)' }}>
+              <div className="px-4 py-3 border-b border-[var(--border)]" style={{ background: 'var(--surface)' }}>
                 <div className="flex items-center gap-2.5">
                   {user?.avatar_url ? (
                     /* eslint-disable-next-line @next/next/no-img-element */
-                    <img src={user.avatar_url} alt={user?.name} className="w-9 h-9 rounded-xl object-cover shrink-0" />
+                    <img src={user.avatar_url} alt={user?.name} className="w-9 h-9 rounded-card object-cover shrink-0" />
                   ) : (
-                    <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white text-[13px] font-bold shrink-0">
+                    <div className="w-9 h-9 rounded-card bg-[var(--accent)] flex items-center justify-center text-white text-[13px] font-bold shrink-0">
                       {initials}
                     </div>
                   )}
                   <div className="min-w-0">
-                    <p className="text-[13px] font-semibold text-white truncate">{user?.name}</p>
-                    <p className="text-[11px] text-slate-400 truncate">{user?.email}</p>
+                    <p className="text-[13px] font-semibold text-[var(--text)] truncate">{user?.name}</p>
+                    <p className="text-[11px] text-[var(--muted2)] truncate">{user?.email}</p>
                   </div>
                 </div>
               </div>
@@ -162,22 +154,22 @@ export const Navbar = () => {
               <div className="py-1.5">
                 <Link
                   href="/profile"
-                  className="flex items-center gap-3 px-4 py-2.5 text-[13px] text-slate-300 hover:bg-white/8 hover:text-white transition-colors"
+                  className="flex items-center gap-3 px-4 py-2.5 text-[13px] text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--text)] transition-colors"
                 >
-                  <div className="w-7 h-7 rounded-lg bg-white/10 flex items-center justify-center shrink-0">
-                    <i className="fas fa-user text-slate-300 text-[11px]" />
+                  <div className="w-7 h-7 rounded-control bg-white/10 flex items-center justify-center shrink-0">
+                    <i className="fas fa-user text-[var(--muted)] text-[11px]" />
                   </div>
-                  Dashboard
+                  My profile
                 </Link>
               </div>
 
               {/* Divider + logout */}
-              <div className="border-t border-white/10 py-1.5">
+              <div className="border-t border-[var(--border)] py-1.5">
                 <button
                   onClick={() => { setDropdownOpen(false); logout(); }}
                   className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-red-400 hover:bg-red-500/10 hover:text-red-300 transition-colors"
                 >
-                  <div className="w-7 h-7 rounded-lg bg-red-500/10 flex items-center justify-center shrink-0">
+                  <div className="w-7 h-7 rounded-control bg-red-500/10 flex items-center justify-center shrink-0">
                     <i className="fas fa-right-from-bracket text-red-400 text-[11px]" />
                   </div>
                   Sign Out

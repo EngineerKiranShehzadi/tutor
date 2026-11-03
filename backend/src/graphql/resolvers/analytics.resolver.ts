@@ -13,6 +13,7 @@ import {
   getStudentJourney,
   getContentGaps,
   getMyStats,
+  getMyRecentQuestions,
 } from '../../services/analytics.service';
 import { logger } from '../../utils/logger';
 
@@ -32,6 +33,19 @@ export const analyticsResolvers = {
       if (!user) throw new GraphQLError('Unauthorized', { extensions: { code: 'UNAUTHENTICATED' } });
       logger.info(`[GRAPHQL] myStats query by "${user.email}"`);
       return getMyStats(user.id);
+    },
+
+    // The student's own questions. The id comes from the verified token, never
+    // from an argument, so there is no way to ask for someone else's.
+    myRecentQuestions: (
+      _: unknown,
+      args: { limit?: number | null; offset?: number | null },
+      ctx: GraphQLContext
+    ) => {
+      const user = (ctx.req as AuthenticatedRequest).user;
+      if (!user) throw new GraphQLError('Unauthorized', { extensions: { code: 'UNAUTHENTICATED' } });
+      logger.info(`[GRAPHQL] myRecentQuestions(limit=${args.limit ?? 'default'}, offset=${args.offset ?? 0}) by "${user.email}"`);
+      return getMyRecentQuestions(user.id, args);
     },
 
     analyticsSummary: (_: unknown, __: unknown, ctx: GraphQLContext) => {
