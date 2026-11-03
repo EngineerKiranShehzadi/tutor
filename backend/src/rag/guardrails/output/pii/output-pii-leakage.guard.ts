@@ -23,8 +23,8 @@ export interface OutputPiiGuardResult {
 // sensitive-looking content. Prefers sanitizing over rejecting: an
 // otherwise valid, grounded answer keeps its value with the sensitive
 // span replaced by a placeholder rather than being discarded.
-export function detectOutputPiiLeakage(answer: string): OutputPiiGuardResult {
-  const scan = scanForPii(answer);
+export function detectOutputPiiLeakage(answer: string, evidenceTexts: string[] = []): OutputPiiGuardResult {
+  const scan = scanForPii(answer, evidenceTexts);
   return {
     piiDetected: scan.detected,
     sanitizedAnswer: scan.sanitizedText,

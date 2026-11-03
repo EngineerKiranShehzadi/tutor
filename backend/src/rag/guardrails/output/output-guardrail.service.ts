@@ -117,7 +117,8 @@ async function applyFormatAndPiiGuards(
   effectiveQuery: string,
   groundedness: OutputGuardrailResult,
   draftAnswer: string,
-  notFoundMessage: string
+  notFoundMessage: string,
+  evidenceTexts: string[]
 ): Promise<OutputGuardrailResult> {
   // Format validation only ever applies to real generated content. When the
   // groundedness stage fell back to its deterministic conservative message
@@ -197,7 +198,7 @@ async function applyFormatAndPiiGuards(
   let piiDetected = false;
   let piiCategories: OutputGuardrailResult['piiCategories'] = [];
   if (env.OUTPUT_PII_GUARD.ENABLED) {
-    const piiScan = detectOutputPiiLeakage(finalAnswer);
+    const piiScan = detectOutputPiiLeakage(finalAnswer, evidenceTexts);
     piiDetected = piiScan.piiDetected;
     piiCategories = piiScan.detectedCategories;
     if (piiDetected) {
@@ -358,7 +359,7 @@ async function runGroundednessVerification(params: OutputGuardrailParams): Promi
 export async function runOutputGuardrail(params: OutputGuardrailParams): Promise<OutputGuardrailResult> {
   const run = async (): Promise<OutputGuardrailResult> => {
     const groundedness = await runGroundednessVerification(params);
-    return applyFormatAndPiiGuards(params.effectiveQuery, groundedness, params.draftAnswer, params.notFoundMessage);
+    return applyFormatAndPiiGuards(params.effectiveQuery, groundedness, params.draftAnswer, params.notFoundMessage, params.evidenceTexts);
   };
 
   const trace = getActiveTrace();

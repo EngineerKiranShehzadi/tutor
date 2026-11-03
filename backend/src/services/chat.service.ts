@@ -964,7 +964,9 @@ export const askLectureAgent = async (
     // The streamed draft is PII-redacted piece by piece before it is sent
     // (text already on screen can't be taken back). Groundedness/format are
     // still settled by the final answer, which replaces the draft.
-    const piiSafeStream = params.stream && env.OUTPUT_PII_GUARD.ENABLED ? createPiiSafeStream(params.stream) : undefined;
+    const piiSafeStream = params.stream && env.OUTPUT_PII_GUARD.ENABLED
+      ? createPiiSafeStream(params.stream, contextChunks.map(c => c.chunk_text))
+      : undefined;
     const draftStream = piiSafeStream ?? params.stream;
     const draftAnswer = await trace.span(
       'generate-grounded-answer',

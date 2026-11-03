@@ -116,20 +116,36 @@ interface Redaction {
 // Luhn for cards, phone and address shape for the others — so an unrelated
 // long numeric id/hash/quantity (in a lecture question, or in a generated
 // answer) doesn't get flagged as real PII.
-function findRedactions(text: string): Redaction[] {
+// trustedTexts: source material the answer is allowed to quote verbatim (the
+// retrieved lecture chunks it was generated from). A candidate match is only
+// ever a redaction risk when the model could have introduced it itself —
+// if the exact matched substring already appears in trustedTexts, it was
+// copied from the admin-curated corpus (same trust boundary as the rest of
+// the Evidence, not a value the model invented or leaked), so it is left
+// alone. Only used on the output side; the input guard (protecting the
+// pipeline from what a student typed) never passes trustedTexts, so its
+// behaviour is unchanged.
+function isSourced(candidate: string, trustedTexts: string[]): boolean {
+  return trustedTexts.some(t => t.includes(candidate));
+}
+
+function findRedactions(text: string, trustedTexts: string[] = []): Redaction[] {
   const redactions: Redaction[] = [];
 
   for (const match of text.matchAll(EMAIL_PATTERN)) {
+    if (isSourced(match[0], trustedTexts)) continue;
     redactions.push({ start: match.index!, end: match.index! + match[0].length, placeholder: '[EMAIL]', category: 'EMAIL' });
   }
 
   for (const match of text.matchAll(IPV4_PATTERN)) {
     if (!looksLikePersonalIpv4(match[0], text.slice(Math.max(0, match.index! - SECTION_CUE_WINDOW), match.index!))) continue;
+    if (isSourced(match[0], trustedTexts)) continue;
     redactions.push({ start: match.index!, end: match.index! + match[0].length, placeholder: '[IP_ADDRESS]', category: 'IP_ADDRESS' });
   }
 
   for (const pattern of IDENTIFIER_PATTERNS) {
     for (const match of text.matchAll(pattern)) {
+      if (isSourced(match[0], trustedTexts)) continue;
       redactions.push({ start: match.index!, end: match.index! + match[0].length, placeholder: '[IDENTIFIER]', category: 'IDENTIFIER' });
     }
   }
@@ -139,12 +155,14 @@ function findRedactions(text: string): Redaction[] {
   for (const match of text.matchAll(CREDIT_CARD_CANDIDATE_PATTERN)) {
     const digits = match[0].replace(/[ -]/g, '');
     if (digits.length >= 13 && digits.length <= 19 && !digits.startsWith('0') && luhnValid(digits)) {
+      if (isSourced(match[0], trustedTexts)) continue;
       redactions.push({ start: match.index!, end: match.index! + match[0].length, placeholder: '[CREDIT_CARD]', category: 'CREDIT_CARD' });
     }
   }
 
   for (const match of text.matchAll(PHONE_CANDIDATE_PATTERN)) {
     if (looksLikePhone(match[0])) {
+      if (isSourced(match[0], trustedTexts)) continue;
       redactions.push({ start: match.index!, end: match.index! + match[0].length, placeholder: '[PHONE]', category: 'PHONE' });
     }
   }
@@ -184,8 +202,8 @@ function resolveOverlaps(redactions: Redaction[]): Redaction[] {
 // placeholder. The original values are never returned anywhere — only
 // category labels reach the result, which is the only part of a scan that's
 // safe to put in logs/traces/metadata.
-export function scanForPii(text: string): PiiScanResult {
-  const redactions = resolveOverlaps(findRedactions(text));
+export function scanForPii(text: string, trustedTexts: string[] = []): PiiScanResult {
+  const redactions = resolveOverlaps(findRedactions(text, trustedTexts));
   if (redactions.length === 0) {
     return { detected: false, sanitizedText: text, detectedCategories: [] };
   }

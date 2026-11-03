@@ -43,7 +43,7 @@ export interface PiiSafeStream extends AnswerStreamHandlers {
   flush(): void;
 }
 
-export function createPiiSafeStream(target: AnswerStreamHandlers): PiiSafeStream {
+export function createPiiSafeStream(target: AnswerStreamHandlers, evidenceTexts: string[] = []): PiiSafeStream {
   let raw = '';
   // The redacted text already sent — the text itself, not its length. A longer
   // prefix almost always redacts to an extension of it, and then only the new
@@ -55,7 +55,7 @@ export function createPiiSafeStream(target: AnswerStreamHandlers): PiiSafeStream
   let shown = '';
 
   const emitUpTo = (end: number): void => {
-    const redacted = scanForPii(raw.slice(0, end)).sanitizedText;
+    const redacted = scanForPii(raw.slice(0, end), evidenceTexts).sanitizedText;
     if (redacted.startsWith(shown)) {
       if (redacted.length > shown.length) target.onDelta(redacted.slice(shown.length));
     } else if (target.onReset) {
