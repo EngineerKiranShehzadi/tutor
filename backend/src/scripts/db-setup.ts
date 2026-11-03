@@ -36,6 +36,22 @@ const LEDGER_SQL = `
 
 const sha = (s: string): string => createHash('sha256').update(s).digest('hex');
 
+// Canonical checksum going forward: LF-normalized, so the same migration
+// hashes the same whether it's checked out with LF or CRLF line endings.
+// The SQL actually executed below is still the file's exact on-disk content,
+// untouched — only the ledger comparison is normalized.
+const canonicalChecksum = (s: string): string => sha(s.replace(/\r\n/g, '\n'));
+
+// Every ledger row recorded before this fix existed (e.g. migrations 002-019,
+// recorded from a Windows checkout) was hashed from whatever line endings
+// were actually on disk at apply time — CRLF, unnormalized. Converting this
+// machine's LF content back to CRLF reproduces that legacy hash, so a row
+// matching it is "no change", not "reapply" — without this, a one-line
+// normalization fix would have made EVERY pre-existing CRLF-recorded row
+// look changed on every machine, which is worse than the bug it fixes
+// (2026-11-04, owner caught this testing the first version of this patch).
+const legacyCrlfChecksum = (s: string): string => sha(s.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n'));
+
 export interface MigrationReport { applied: string[]; reapplied: string[]; skipped: string[] }
 
 export async function applyMigrations(migrationsDir = join(__dirname, '../db/migrations')): Promise<MigrationReport> {
@@ -46,9 +62,18 @@ export async function applyMigrations(migrationsDir = join(__dirname, '../db/mig
 
   for (const file of readdirSync(migrationsDir).filter(f => /^\d+_.*\.sql$/.test(f)).sort()) {
     const sql = readFileSync(join(migrationsDir, file), 'utf8');
-    const checksum = sha(sql);
+    const checksum = canonicalChecksum(sql);
     const prev = done.get(file);
     if (prev === checksum) { report.skipped.push(file); continue; }
+    if (prev === legacyCrlfChecksum(sql)) {
+      // Unchanged content, just a pre-normalization legacy hash — no SQL to
+      // run, just quietly migrate the ledger row to the canonical checksum
+      // so this machine (and every machine after it) stops re-deriving the
+      // legacy hash on every run.
+      await pool.query('UPDATE schema_migrations SET checksum = $1 WHERE filename = $2', [checksum, file]);
+      report.skipped.push(file);
+      continue;
+    }
     if (prev !== undefined) console.warn(`⚠️  ${file} changed since it was applied — applying it again (migrations are idempotent).`);
     console.log(`Applying ${file}...`);
     const client = await pool.connect();
