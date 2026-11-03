@@ -10,11 +10,14 @@ interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 export const Button = forwardRef<HTMLButtonElement, Props>(
   ({ variant = 'primary', size = 'md', loading, className, children, disabled, ...props }, ref) => {
-    const base  = 'inline-flex items-center justify-center gap-2 font-semibold rounded-lg transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed';
-    const sizes = { sm: 'px-3.5 py-2 text-[13px]', md: 'px-5 py-2.5 text-[14px]', lg: 'px-7 py-3.5 text-[16px]' };
+    const base  = 'inline-flex items-center justify-center gap-2 font-semibold rounded-control transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed';
+    // Fixed heights so a button lines up with a field of the same size.
+    const sizes = { sm: 'h-9 px-4 text-caption', md: 'h-10 px-5 text-label', lg: 'h-11 px-6 text-label' };
     const variants = {
-      primary:   'bg-gradient-to-r from-[var(--red)] to-[var(--red2)] hover:opacity-90 text-white shadow-lg',
-      secondary: 'bg-[var(--surface)] border border-[var(--border)] hover:bg-white/10 text-[var(--text)]',
+      // Flat, no gradient, no drop shadow: it is the only strong colour on the
+      // page, so it does not need help being noticed.
+      primary:   'bg-[var(--accent)] hover:bg-[var(--accent-deep)] text-white',
+      secondary: 'bg-white border border-[var(--border)] hover:bg-[var(--surface)] text-[var(--text)]',
       ghost:     'bg-transparent hover:bg-[var(--surface)] text-[var(--muted)]',
       danger:    'bg-red-600 hover:bg-red-700 text-white',
     };

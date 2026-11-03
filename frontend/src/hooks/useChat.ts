@@ -62,7 +62,7 @@ export interface UseChatOptions {
    * itself (e.g. the 3D teacher avatar), so the built-in auto-speak is skipped
    * and two voices never play at once.
    */
-  onFinalAnswer?: (answer: string) => boolean | void;
+  onFinalAnswer?: (answer: string, info: { spokenQuestion: boolean }) => boolean | void;
   /** Called when no answer could be obtained (stream and GraphQL fallback both failed). */
   onAnswerError?: () => void;
 }
@@ -85,6 +85,11 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
   });
 
   const autoSpeakRef       = useRef(autoSpeak);
+  // True while the text in the box arrived from the microphone. A question
+  // asked out loud is answered out loud; a typed one is not, unless the
+  // student has turned auto-speak on. Set by the transcript handler, cleared
+  // the moment anything is typed, and consumed when a question is sent.
+  const cameFromVoiceRef   = useRef(false);
   const voiceSpeakRef      = useRef<(text: string) => void>(() => {});
   const streamTimerRef     = useRef<ReturnType<typeof setInterval> | null>(null);
   // Aborts an in-flight live stream when the user switches/creates a session
@@ -228,7 +233,7 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
 
   // Typewriter animation for answers that arrive whole (greetings, summaries,
   // cached answers, guardrail fallbacks, or the GraphQL fallback path).
-  const animateAnswer = useCallback((rawAnswer: string, sources: ChunkSource[], speakHandled = false) => {
+  const animateAnswer = useCallback((rawAnswer: string, sources: ChunkSource[], speakHandled = false, spokenQuestion = false) => {
     const citation = sources.length > 0 && sources[0].startTime
       ? `Lecture content · ${sources[0].startTime}`
       : 'Lecture content';
@@ -243,7 +248,7 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
     }]);
     setTyping(false);
 
-    if (autoSpeakRef.current && !speakHandled) {
+    if (spokenQuestion && !speakHandled) {
       voiceSpeakRef.current(rawAnswer);
     }
 
@@ -281,6 +286,10 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
       // Identifies the lecture selection this request belongs to; a reply that
       // arrives after the student switched lecture is discarded below.
       const requestToken = sessionGuardRef.current.currentToken();
+      // Read once per request and cleared immediately, so a later typed
+      // question is never treated as spoken.
+      const spokenQuestion = cameFromVoiceRef.current;
+      cameFromVoiceRef.current = false;
 
       if (streamTimerRef.current) {
         clearInterval(streamTimerRef.current);
@@ -333,7 +342,7 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
 
         const sources = result.sources;
         // Final, guardrail-checked answer: offer it to the avatar (if any).
-        const speakHandled = optionsRef.current?.onFinalAnswer?.(result.answer) === true;
+        const speakHandled = optionsRef.current?.onFinalAnswer?.(result.answer, { spokenQuestion }) === true;
         if (liveMsgId) {
           // Server's final answer is authoritative — it may differ from the
           // streamed draft if the output guardrail revised or replaced it.
@@ -345,12 +354,12 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
               : 'Lecture content',
             isStreaming: false,
           });
-          if (autoSpeakRef.current && !speakHandled) voiceSpeakRef.current(result.answer);
+          if (spokenQuestion && !speakHandled) voiceSpeakRef.current(result.answer);
           setSessionsRefreshKey(k => k + 1);
           console.log(`[CHAT] ✅ Live stream complete (${result.answer.length} chars)`);
         } else {
           // Nothing streamed (greeting, summary, cached answer, not-found…)
-          animateAnswer(result.answer, sources, speakHandled);
+          animateAnswer(result.answer, sources, speakHandled, spokenQuestion);
         }
         return;
       } catch (err) {
@@ -370,7 +379,7 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
             if (!sessionGuardRef.current.isCurrent(requestToken)) return;
             const response = data?.askLectureAgent;
             if (response?.answer) {
-              const handled = optionsRef.current?.onFinalAnswer?.(response.answer) === true;
+              const handled = optionsRef.current?.onFinalAnswer?.(response.answer, { spokenQuestion }) === true;
               animateAnswer(response.answer, response.sources ?? [], handled);
             } else {
               optionsRef.current?.onAnswerError?.();
@@ -403,7 +412,10 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
   );
 
   // ── Voice ────────────────────────────────────────────────
-  const voice = useVoice({ onTranscriptReady: setInputText, enabled: true });
+  const voice = useVoice({
+    onTranscriptReady: (text: string) => { cameFromVoiceRef.current = true; setInputText(text); },
+    enabled: true,
+  });
 
   autoSpeakRef.current  = autoSpeak;
   voiceSpeakRef.current = voice.speak;
@@ -426,6 +438,13 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
 
   const messages: ChatMessage[] = [welcomeMsg, ...sessionMessages, ...localMessages];
 
+  // The setter the text box uses. Typing (or clearing after a send) means the
+  // next question is not a spoken one.
+  const setInputTextTyped = useCallback((val: string) => {
+    cameFromVoiceRef.current = false;
+    setInputText(val);
+  }, []);
+
   return {
     messages,
     isTyping,
@@ -434,7 +453,7 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
     currentSessionId,
     sessionsRefreshKey,
     inputText,
-    setInputText,
+    setInputText: setInputTextTyped,
     sendMessage,
     selectSession,
     createNewSession,

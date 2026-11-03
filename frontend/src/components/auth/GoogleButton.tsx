@@ -5,7 +5,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:5000/api/v1
 export const GoogleButton = () => (
   <a
     href={`${API_URL}/auth/google`}
-    className="w-full py-3 px-4 bg-white border-[1.5px] border-slate-200 rounded-lg text-[15px] font-semibold text-slate-700 flex items-center justify-center gap-2.5 hover:bg-slate-50 transition-colors"
+    className="w-full h-11 px-4 bg-white border border-[var(--border)] rounded-control text-label font-medium text-[var(--text)] flex items-center justify-center gap-2.5 hover:bg-[var(--surface)] transition-colors"
   >
     <svg width="20" height="20" viewBox="0 0 48 48" aria-hidden="true">
       <path fill="#EA4335" d="M24 9.5c3.1 0 5.9 1.1 8.1 2.9l6-6C34.5 3.1 29.5 1 24 1 14.6 1 6.7 6.6 3.1 14.5l7 5.4C11.9 13.9 17.4 9.5 24 9.5z"/>

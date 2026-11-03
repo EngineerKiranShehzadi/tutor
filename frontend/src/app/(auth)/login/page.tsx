@@ -162,7 +162,7 @@ function LoginPageInner() {
         <button
           type="button"
           onClick={() => { setMode('login'); setDigits(['', '', '', '', '', '']); }}
-          className="flex items-center gap-1.5 text-[13px] text-slate-500 hover:text-slate-800 transition-colors mb-6"
+          className="flex items-center gap-1.5 text-[13px] text-[var(--muted)] hover:text-[var(--text)] transition-colors mb-6"
         >
           <i className="fas fa-arrow-left text-[11px]" /> Back to Sign In
         </button>
@@ -187,28 +187,23 @@ function LoginPageInner() {
 
   return (
     <AuthCard>
-      {/* Mobile logo (hidden on md — left panel covers it) */}
-      <div className="mb-8 md:hidden">
-        <Logo variant="light" className="h-10 w-auto" />
-      </div>
-
       {/* Heading */}
-      <h1 className="text-[30px] font-bold text-slate-900 mb-2">Welcome back</h1>
-      <p className="text-[15px] text-slate-500 mb-7 leading-relaxed">
+      <h1 className="text-h1 font-semibold text-[var(--text)] mb-2">Welcome back</h1>
+      <p className="text-body text-[var(--muted)] mb-8">
         Please enter your credentials to access your dashboard.
       </p>
 
-      <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-6">
+      <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-5">
 
         {/* Email */}
         <div className="flex flex-col gap-1.5">
-          <label className="text-[15px] font-semibold text-slate-700">Email</label>
+          <label className="text-label font-medium text-[var(--muted)]">Email</label>
           <Input
             iconInField="fas fa-envelope"
             type="email"
             placeholder="you@example.com"
             error={errors.email?.message}
-            className="bg-white border-slate-200 focus:border-[#065fd4] py-3"
+            
             {...register('email')}
           />
         </div>
@@ -216,11 +211,11 @@ function LoginPageInner() {
         {/* Password */}
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center justify-between">
-            <label className="text-[15px] font-semibold text-slate-700">Password</label>
+            <label className="text-label font-medium text-[var(--muted)]">Password</label>
             <button
               type="button"
               onClick={() => setMode('forgot')}
-              className="text-[13px] text-[#065fd4] hover:underline font-medium"
+              className="text-caption text-[var(--accent)] hover:underline font-medium"
             >
               Forgot password?
             </button>
@@ -231,7 +226,7 @@ function LoginPageInner() {
             showPasswordToggle
             placeholder="••••••••"
             error={errors.password?.message}
-            className="bg-white border-slate-200 focus:border-[#065fd4] py-3"
+            
             {...register('password')}
           />
         </div>
@@ -246,24 +241,24 @@ function LoginPageInner() {
           type="submit"
           size="lg"
           loading={isSubmitting}
-          className="mt-1 w-full rounded-lg py-3.5 text-[16px] font-semibold"
+          className="mt-1 w-full"
         >
           Sign In
         </Button>
 
         <div className="relative flex items-center gap-3">
-          <div className="flex-1 h-px bg-slate-200" />
-          <span className="text-[12px] text-slate-400">or</span>
-          <div className="flex-1 h-px bg-slate-200" />
+          <div className="flex-1 h-px bg-[var(--border)]" />
+          <span className="text-caption text-[var(--muted2)]">or</span>
+          <div className="flex-1 h-px bg-[var(--border)]" />
         </div>
 
         <GoogleButton />
       </form>
 
       {/* Footer */}
-      <p className="text-center text-[15px] text-slate-500 mt-7">
+      <p className="text-center text-label text-[var(--muted)] mt-8">
         New to AskAITutor?{' '}
-        <Link href="/signup" className="text-[#065fd4] font-semibold hover:underline">
+        <Link href="/signup" className="text-[var(--accent)] font-semibold hover:underline">
           Sign Up
         </Link>
       </p>

@@ -1,21 +1,70 @@
 'use client';
 import Image from 'next/image';
+import { useState } from 'react';
 
 import { ChatMessage } from '@/types';
-import { useAuth } from '@/hooks/useAuth';
 import { renderAnswer } from '@/lib/format-answer';
+import { cn } from '@/lib/cn';
 
 interface Props {
   message:  ChatMessage;
   onSpeak?: (text: string) => void;
   isSpeaking?: boolean;
+  /** Re-asks this question. Given to a student's own message, so any question
+   *  in the conversation can be asked again, not only the last one. The fresh
+   *  answer arrives as a new exchange at the bottom — the earlier one is left
+   *  where it is, so the history stays a true record of what was asked when. */
+  onAskAgain?: () => void;
 }
 
-export const MessageBubble = ({ message, onSpeak, isSpeaking }: Props) => {
-  const { user } = useAuth();
+/**
+ * One action under an answer. Icon only, 28px square, no border — three
+ * labelled buttons in a row would weigh more than the answer itself. Each
+ * carries a title and an aria-label, so the meaning is available on hover and
+ * to a screen reader.
+ */
+function Action({ icon, label, onClick, active = false }: {
+  icon: string; label: string; onClick: () => void; active?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      className={cn(
+        'w-6 h-6 rounded-control inline-flex items-center justify-center transition-colors',
+        active
+          ? 'text-[var(--accent)] bg-[var(--accent-soft)]'
+          : 'text-[var(--muted2)] hover:text-[var(--accent)] hover:bg-[var(--accent-soft)]'
+      )}
+    >
+      <i className={cn(icon, 'text-[12px]')} />
+    </button>
+  );
+}
+
+export const MessageBubble = ({ message, onSpeak, isSpeaking, onAskAgain }: Props) => {
   const isUser   = message.role === 'user';
-  const initials = user?.name?.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase() ?? 'U';
   const time     = message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  // Hovering the time shows the day and date, with no time in it: the time is
+  // already printed below every question and answer, so repeating it there
+  // would say nothing new.
+  const dayAndDate = message.timestamp.toLocaleDateString([], {
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+  });
+  const [copied, setCopied] = useState(false);
+
+  const copyAnswer = async () => {
+    try {
+      await navigator.clipboard.writeText(message.content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    } catch {
+      // Clipboard access can be refused; silently leave the icon unchanged
+      // rather than showing a tick for something that did not happen.
+    }
+  };
 
   // Unique timestamps only — shown as separate UI, never read aloud
   const timestampedSources = Array.from(
@@ -28,28 +77,21 @@ export const MessageBubble = ({ message, onSpeak, isSpeaking }: Props) => {
 
   return (
     <div className={`flex gap-3 items-end ${isUser ? 'flex-row-reverse' : ''}`}>
-      {/* Avatar */}
-      <div className="w-10 h-10 rounded-xl shrink-0 overflow-hidden">
-        {isUser ? (
-          user?.avatar_url ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={user.avatar_url} alt={user.name} className="w-full h-full object-cover" />
-          ) : (
-            <div className="w-full h-full bg-indigo-600 flex items-center justify-center">
-              <span className="text-white text-[13px] font-bold">{initials}</span>
-            </div>
-          )
-        ) : (
+      {/* Only the tutor gets a face. A student's own messages are already
+          identified by being green and on the right — their initials beside
+          every question added nothing and made each one look top-heavy. */}
+      {!isUser && (
+        <div className="w-10 h-10 rounded-card shrink-0 overflow-hidden">
           <Image src="/agent-avatar.png" alt="AI Tutor" width={40} height={40} className="object-cover w-full h-full" />
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Content */}
-      <div className={`max-w-[78%] flex flex-col gap-1.5 ${isUser ? 'items-end' : ''}`}>
+      <div className={`max-w-[78%] flex flex-col gap-1 ${isUser ? 'items-end' : ''}`}>
         <div
-          className={`px-4 py-3 rounded-2xl text-[16px] leading-relaxed ${
+          className={`px-4 py-3 rounded-card text-[16px] leading-relaxed ${
             isUser
-              ? 'bg-indigo-600 text-white rounded-br-sm'
+              ? 'bg-[var(--accent)] text-white rounded-br-sm'
               : 'bg-white text-[var(--text)] rounded-bl-sm border border-[var(--border)] shadow-sm'
           }`}
         >
@@ -57,7 +99,7 @@ export const MessageBubble = ({ message, onSpeak, isSpeaking }: Props) => {
             <>
               <span className="whitespace-pre-wrap break-words">{message.content}</span>
               <span
-                className="inline-block w-[2px] h-[14px] bg-indigo-500 ml-[3px] align-middle rounded-sm animate-pulse"
+                className="inline-block w-[2px] h-[14px] bg-[var(--accent)] ml-[3px] align-middle rounded-sm animate-pulse"
               />
             </>
           ) : isUser ? (
@@ -77,7 +119,7 @@ export const MessageBubble = ({ message, onSpeak, isSpeaking }: Props) => {
             {timestampedSources.map((src, i) => (
               <span
                 key={i}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-50 border border-amber-200 text-amber-700 text-[12px] font-semibold"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-control bg-[var(--gold-soft)] border border-[#e6dcc0] text-[var(--gold)] text-[12px] font-semibold"
                 title={src.topic ?? 'Lecture segment'}
               >
                 <i className="fas fa-film text-[10px]" />
@@ -87,23 +129,31 @@ export const MessageBubble = ({ message, onSpeak, isSpeaking }: Props) => {
           </div>
         )}
 
-        {/* AI message actions */}
+        {/* Answer actions */}
         {!isUser && !message.isStreaming && (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-0 ml-0.5">
             {onSpeak && (
-              <button
+              <Action
+                icon={isSpeaking ? 'fas fa-volume-high' : 'fas fa-volume-low'}
+                label={isSpeaking ? 'Stop reading' : 'Read aloud'}
+                active={isSpeaking}
                 onClick={() => onSpeak(message.content)}
-                title="Read aloud"
-                className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-[13px] font-semibold border transition-colors ${
-                  isSpeaking
-                    ? 'bg-indigo-100 border-indigo-300 text-indigo-600 animate-pulse'
-                    : 'bg-white border-[var(--border)] text-[var(--muted)] hover:border-indigo-400 hover:text-indigo-600 hover:bg-indigo-50'
-                }`}
-              >
-                <i className={`fas ${isSpeaking ? 'fa-volume-high' : 'fa-volume-low'} text-[11px]`} />
-                {isSpeaking ? 'Speaking...' : 'Speak'}
-              </button>
+              />
             )}
+            <Action
+              icon={copied ? 'fas fa-check' : 'fas fa-copy'}
+              label={copied ? 'Copied' : 'Copy answer'}
+              active={copied}
+              onClick={copyAnswer}
+            />
+          </div>
+        )}
+
+        {/* The student's own question: one action, to ask it again. Nothing
+            else — this is a record of what was asked, not a draft. */}
+        {isUser && onAskAgain && (
+          <div className="flex items-center gap-0 mr-0.5">
+            <Action icon="fas fa-rotate-right" label="Ask this again" onClick={onAskAgain} />
           </div>
         )}
 
@@ -112,7 +162,12 @@ export const MessageBubble = ({ message, onSpeak, isSpeaking }: Props) => {
             chat_history, so it cannot carry the time the conversation began.
             Stamping it with "now" would put a later time above older messages. */}
         {message.id !== 'welcome' && (
-          <span className="text-[12px] text-[var(--muted2)] px-0.5">{time}</span>
+          <span
+            className={`w-fit text-[12px] text-[var(--muted2)] px-0.5 cursor-default ${isUser ? 'self-end' : 'self-start'}`}
+            title={dayAndDate}
+          >
+            {time}
+          </span>
         )}
       </div>
     </div>

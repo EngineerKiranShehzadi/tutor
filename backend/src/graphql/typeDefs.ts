@@ -283,6 +283,42 @@ export const typeDefs = `#graphql
     createdAt:    String!
   }
 
+  # One of the signed-in student's own questions. No student name or email:
+  # a student only ever reads their own rows through this type.
+  type MyQuestion {
+    id:           Int!
+    question:     String!
+    lectureId:    Int!
+    lectureTitle: String!
+    createdAt:    String!
+  }
+
+  type MyQuestionPage {
+    items:   [MyQuestion!]!
+    total:   Int!
+    hasMore: Boolean!
+  }
+
+  # A stored notification for one student. type is 'LECTURE_ADDED' or
+  # 'TUTOR_READY'; it is text rather than an enum so a new kind needs no
+  # migration, and the UI falls back to a neutral icon for anything unknown.
+  type Notification {
+    id:        Int!
+    type:      String!
+    title:     String!
+    body:      String!
+    lectureId: Int
+    read:      Boolean!
+    createdAt: String!
+  }
+
+  type NotificationPage {
+    items:   [Notification!]!
+    total:   Int!
+    unread:  Int!
+    hasMore: Boolean!
+  }
+
   type StudentStats {
     totalQuestions:         Int!
     totalSessions:          Int!
@@ -303,6 +339,12 @@ export const typeDefs = `#graphql
   # ── Queries ───────────────────────────────────────────
   type Query {
     myStats: StudentStats!
+    # The signed-in user's own notifications, newest first.
+    # limit defaults to 10 and is capped at 50.
+    myNotifications(limit: Int, offset: Int): NotificationPage!
+    # The signed-in student's own questions, newest first.
+    # limit defaults to 10 and is capped at 50.
+    myRecentQuestions(limit: Int, offset: Int): MyQuestionPage!
     lectures:                        [Lecture!]!
     lecture(id: String!):            Lecture!
     chatSessions(lectureId: Int!):                                            [ChatSession!]!
@@ -348,5 +390,8 @@ export const typeDefs = `#graphql
     deleteUser(id: String!):                                      Boolean!
     updateUserRole(id: String!, role: String!):                   UserManagementEntry!
     updateAdminProfile(name: String, currentPassword: String, newPassword: String): AuthUserPayload!
-  }
+      # Marks the caller's notifications read. With no ids, marks all of them.
+    # Returns the refreshed first page so the bell needs no second request.
+    markNotificationsRead(ids: [Int!]): NotificationPage!
+}
 `;

@@ -13,14 +13,14 @@ import type { AvatarLoadStatus } from './AvatarCanvas';
 const PortraitAvatar = dynamic(() => import('./PortraitAvatar'), { ssr: false });
 const AvatarCanvas = dynamic(() => import('./AvatarCanvas'), {
   ssr: false,
-  loading: () => <div className="w-full h-full flex items-center justify-center text-[12px] text-slate-400">Loading 3D engine…</div>,
+  loading: () => <div className="w-full h-full flex items-center justify-center text-[12px] text-[var(--muted2)]">Loading 3D engine…</div>,
 });
 
 const STATUS_LABEL: Record<AvatarState, { text: string; cls: string }> = {
-  IDLE:      { text: 'Ready',      cls: 'bg-slate-100 text-slate-600' },
+  IDLE:      { text: 'Ready',      cls: 'bg-[var(--surface)] text-[var(--muted)]' },
   LISTENING: { text: 'Listening',  cls: 'bg-emerald-50 text-emerald-700' },
-  THINKING:  { text: 'Thinking…',  cls: 'bg-amber-50 text-amber-700' },
-  SPEAKING:  { text: 'Speaking',   cls: 'bg-indigo-50 text-indigo-700' },
+  THINKING:  { text: 'Thinking…',  cls: 'bg-[var(--gold-soft)] text-[var(--gold)]' },
+  SPEAKING:  { text: 'Speaking',   cls: 'bg-[var(--accent-soft)] text-[var(--accent-deep)]' },
   ERROR:     { text: 'Problem',    cls: 'bg-red-50 text-red-700' },
 };
 
@@ -50,8 +50,8 @@ export interface TeacherAvatarPanelProps {
 const Btn = ({ title, onClick, disabled, children, active }: { title: string; onClick: () => void; disabled?: boolean; children: React.ReactNode; active?: boolean }) => (
   <button
     type="button" title={title} aria-label={title} onClick={onClick} disabled={disabled}
-    className={`w-9 h-9 rounded-xl flex items-center justify-center text-[13px] transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-      active ? 'bg-indigo-600 text-white' : 'bg-[var(--surface)] text-slate-600 hover:bg-indigo-50 hover:text-indigo-600'}`}
+    className={`w-9 h-9 rounded-card flex items-center justify-center text-[13px] transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+      active ? 'bg-[var(--accent)] text-white' : 'bg-[var(--surface)] text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]'}`}
   >{children}</button>
 );
 
@@ -70,13 +70,13 @@ export function TeacherAvatarPanel(p: TeacherAvatarPanelProps) {
 
   if (p.compact) {
     const dot: Record<AvatarState, string> = {
-      IDLE: 'bg-slate-400', LISTENING: 'bg-emerald-500', THINKING: 'bg-amber-500', SPEAKING: 'bg-indigo-500', ERROR: 'bg-red-500',
+      IDLE: 'bg-slate-400', LISTENING: 'bg-emerald-500', THINKING: 'bg-[var(--gold)]', SPEAKING: 'bg-[var(--accent)]', ERROR: 'bg-red-500',
     };
     const CBtn = ({ title, onClick, disabled, active, children }: { title: string; onClick: () => void; disabled?: boolean; active?: boolean; children: React.ReactNode }) => (
       <button
         type="button" title={title} aria-label={title} onClick={onClick} disabled={disabled}
         className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors disabled:opacity-35 disabled:cursor-not-allowed ${
-          active ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'text-slate-600 hover:bg-indigo-50 hover:text-indigo-600'}`}
+          active ? 'bg-[var(--accent)] text-white hover:bg-[var(--accent-deep)]' : 'text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]'}`}
       >{children}</button>
     );
     return (
@@ -85,17 +85,17 @@ export function TeacherAvatarPanel(p: TeacherAvatarPanelProps) {
         data-avatar-mode={portrait ? 'portrait' : 'vrm'}
         data-avatar-status={portrait ? (showPortrait ? load.status : 'fallback') : webgl === null ? 'pending' : use3d ? load.status : 'fallback'}
         data-avatar-state={p.state}
-        className="relative shrink-0 border-b border-[var(--border)] bg-gradient-to-b from-indigo-50 via-white to-white"
+        className="relative shrink-0 border-b border-[var(--border)] bg-gradient-to-b from-[var(--accent-soft)] via-white to-white"
       >
         <button type="button" onClick={p.onHide} title="Hide avatar" aria-label="Hide avatar"
-          className="absolute top-2 right-3 z-10 w-7 h-7 rounded-full flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:bg-indigo-50">
+          className="absolute top-2 right-3 z-10 w-7 h-7 rounded-full flex items-center justify-center text-[var(--muted2)] hover:text-[var(--accent)] hover:bg-[var(--accent-soft)]">
           <i className="fas fa-chevron-up text-[11px]" />
         </button>
 
         <div className="flex flex-col items-center pt-3">
           {/* Stage: spotlight halo behind the bust, centred */}
           <div className="relative w-[168px] h-[156px]">
-            <div className={`absolute left-1/2 -translate-x-1/2 top-2 w-[116px] h-[116px] rounded-full bg-gradient-to-b from-indigo-100 to-purple-100 transition-shadow duration-300 ${
+            <div className={`absolute left-1/2 -translate-x-1/2 top-2 w-[116px] h-[116px] rounded-full bg-gradient-to-b from-[var(--accent-soft)] to-[var(--accent-soft)] transition-shadow duration-300 ${
               speakingNow ? 'shadow-[0_0_0_6px_rgba(99,102,241,0.25),0_0_28px_6px_rgba(99,102,241,0.25)]' : 'shadow-[0_0_0_4px_rgba(99,102,241,0.08)]'}`} />
             <div className="absolute inset-0">
               {showPortrait ? (
@@ -111,17 +111,17 @@ export function TeacherAvatarPanel(p: TeacherAvatarPanelProps) {
                   onStatus={(status, detail) => setLoad({ status, detail })} onProgress={setProgress} />
               ) : (
                 <div className="w-full h-full flex flex-col items-center justify-center gap-2 px-3 text-center">
-                  <div className={`w-20 h-20 rounded-full overflow-hidden ring-4 ${speakingNow ? 'ring-indigo-400 animate-pulse' : 'ring-slate-200'}`}>
+                  <div className={`w-20 h-20 rounded-full overflow-hidden ring-4 ${speakingNow ? 'ring-[var(--accent)] animate-pulse' : 'ring-slate-200'}`}>
                     <Image src="/agent-avatar.png" alt={p.agentName} width={80} height={80} className="object-cover w-full h-full" />
                   </div>
-                  <p className="text-[11px] text-slate-500 leading-snug">
+                  <p className="text-[11px] text-[var(--muted)] leading-snug">
                     {webgl === false ? '3D view is not available in this browser.' : load.status === 'error' ? `3D avatar could not load. ${load.detail ?? ''}` : 'Preparing…'}
                   </p>
                 </div>
               )}
               {(use3d || showPortrait) && load.status === 'loading' && (
                 <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                  <div className="w-6 h-6 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
                 </div>
               )}
             </div>
@@ -130,7 +130,7 @@ export function TeacherAvatarPanel(p: TeacherAvatarPanelProps) {
           {/* Name + status + controls: one floating pill that overlaps the bust's cut-off edge */}
           <div className="relative -mt-5 mb-3 flex items-center gap-1 bg-white rounded-full shadow-md border border-[var(--border)] pl-3.5 pr-1.5 py-1">
             <span className="text-[14px] font-bold text-[var(--text)]">AI teacher</span>
-            <span role="status" className="ml-1.5 inline-flex items-center gap-1.5 text-[12px] font-semibold text-slate-600">
+            <span role="status" className="ml-1.5 inline-flex items-center gap-1.5 text-[12px] font-semibold text-[var(--muted)]">
               <span className={`w-2 h-2 rounded-full ${dot[p.state]} ${p.state === 'SPEAKING' || p.state === 'THINKING' ? 'animate-pulse' : ''}`} />
               {p.isPaused ? 'Paused' : label.text}
             </span>
@@ -150,7 +150,7 @@ export function TeacherAvatarPanel(p: TeacherAvatarPanelProps) {
             </CBtn>
           </div>
           {!p.speechSupported && (
-            <p className="-mt-1 mb-2 text-[12px] text-amber-700">Speech is not supported in this browser — answers stay available as text.</p>
+            <p className="-mt-1 mb-2 text-[12px] text-[var(--gold)]">Speech is not supported in this browser — answers stay available as text.</p>
           )}
           {p.errorMessage && (
             <p role="alert" className="-mt-1 mb-2 text-[12px] text-red-600">{p.errorMessage}</p>
@@ -166,10 +166,10 @@ export function TeacherAvatarPanel(p: TeacherAvatarPanelProps) {
       data-avatar-mode={portrait ? 'portrait' : 'vrm'}
       data-avatar-status={portrait ? (showPortrait ? load.status : 'fallback') : webgl === null ? 'pending' : use3d ? load.status : 'fallback'}
       data-avatar-state={p.state}
-      className={`bg-white overflow-hidden flex ${p.compact ? 'border-b border-[var(--border)] shrink-0' : 'mb-4 rounded-xl border border-[var(--border)] shadow-sm'}`}
+      className={`bg-white overflow-hidden flex ${p.compact ? 'border-b border-[var(--border)] shrink-0' : 'mb-4 rounded-card border border-[var(--border)] shadow-sm'}`}
     >
       {/* Stage */}
-      <div className={`relative shrink-0 bg-gradient-to-b from-indigo-50 via-white to-purple-50 ${p.compact ? (portrait ? 'w-[118px] h-[136px]' : 'w-[110px] h-[136px]') : (portrait ? 'w-[230px] h-[290px]' : 'w-[210px] h-[250px]')}`}>
+      <div className={`relative shrink-0 bg-gradient-to-b from-[var(--accent-soft)] via-white to-[var(--accent-soft)] ${p.compact ? (portrait ? 'w-[118px] h-[136px]' : 'w-[110px] h-[136px]') : (portrait ? 'w-[230px] h-[290px]' : 'w-[210px] h-[250px]')}`}>
         {showPortrait ? (
           <PortraitAvatar
             state={p.state}
@@ -187,18 +187,18 @@ export function TeacherAvatarPanel(p: TeacherAvatarPanelProps) {
           />
         ) : (
           <div className="w-full h-full flex flex-col items-center justify-center gap-2 px-3 text-center">
-            <div className={`w-24 h-24 rounded-full overflow-hidden ring-4 ${speakingNow ? 'ring-indigo-400 animate-pulse' : 'ring-slate-200'}`}>
+            <div className={`w-24 h-24 rounded-full overflow-hidden ring-4 ${speakingNow ? 'ring-[var(--accent)] animate-pulse' : 'ring-slate-200'}`}>
               <Image src="/agent-avatar.png" alt={p.agentName} width={96} height={96} className="object-cover w-full h-full" />
             </div>
-            <p className="text-[11px] text-slate-500 leading-snug">
+            <p className="text-[11px] text-[var(--muted)] leading-snug">
               {webgl === false ? '3D view is not available in this browser.' : load.status === 'error' ? `3D avatar could not load. ${load.detail ?? ''}` : 'Preparing…'}
             </p>
           </div>
         )}
         {(use3d || showPortrait) && load.status === 'loading' && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-white/70">
-            <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
-            <span className="text-[11px] text-slate-500">Loading teacher… {!portrait && progress > 0 ? `${Math.round(progress * 100)}%` : ''}</span>
+            <div className="w-6 h-6 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+            <span className="text-[11px] text-[var(--muted)]">Loading teacher… {!portrait && progress > 0 ? `${Math.round(progress * 100)}%` : ''}</span>
           </div>
         )}
       </div>
@@ -211,7 +211,7 @@ export function TeacherAvatarPanel(p: TeacherAvatarPanelProps) {
             <p className="text-[12px] text-[var(--muted)] truncate">AI teacher · {p.lectureTitle}</p>
           </div>
           <button type="button" onClick={p.onHide} title="Hide avatar" aria-label="Hide avatar"
-            className="text-[11px] font-semibold text-slate-500 hover:text-indigo-600 px-2 py-1 rounded-lg hover:bg-indigo-50">
+            className="text-[11px] font-semibold text-[var(--muted)] hover:text-[var(--accent)] px-2 py-1 rounded-control hover:bg-[var(--accent-soft)]">
             Hide
           </button>
         </div>
@@ -221,7 +221,7 @@ export function TeacherAvatarPanel(p: TeacherAvatarPanelProps) {
             <span className={`w-1.5 h-1.5 rounded-full bg-current ${p.state === 'SPEAKING' || p.state === 'THINKING' ? 'animate-pulse' : ''}`} />
             {p.isPaused ? 'Paused' : label.text}
           </span>
-          {p.muted && <span className="text-[11px] text-slate-400">muted</span>}
+          {p.muted && <span className="text-[11px] text-[var(--muted2)]">muted</span>}
         </div>
 
         <div className={`${p.compact ? 'mt-2' : 'mt-3'} flex items-center gap-2`}>
@@ -242,13 +242,13 @@ export function TeacherAvatarPanel(p: TeacherAvatarPanelProps) {
         </div>
 
         {!p.speechSupported && (
-          <p className="mt-2 text-[12px] text-amber-700">Speech is not supported in this browser — answers stay available as text.</p>
+          <p className="mt-2 text-[12px] text-[var(--gold)]">Speech is not supported in this browser — answers stay available as text.</p>
         )}
         {p.errorMessage && (
           <p role="alert" className="mt-2 text-[12px] text-red-600">{p.errorMessage}</p>
         )}
         <p
-          className={`mt-auto text-slate-400 ${p.compact ? 'pt-1 text-[10px] leading-tight truncate' : 'pt-2 text-[10.5px] leading-snug'}`}
+          className={`mt-auto text-[var(--muted2)] ${p.compact ? 'pt-1 text-[10px] leading-tight truncate' : 'pt-2 text-[10.5px] leading-snug'}`}
           title="Speaks the final answer with your browser's voice. Lip movement is approximate (derived from the text), not phoneme-exact."
         >
           {p.compact ? 'Browser voice · approximate lip movement' : 'Speaks the final answer with your browser\'s voice. Lip movement is approximate (derived from the text), not phoneme-exact.'}

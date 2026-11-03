@@ -21,15 +21,37 @@ interface Session {
 
 interface MenuState { id: number; top: number; right: number }
 
+/**
+ * Whole calendar days between a date and today, in the reader's own timezone.
+ * 0 = today, 1 = yesterday, and so on.
+ *
+ * Elapsed hours are not the same thing as days. A chat from 23:00 last night,
+ * opened at 08:00, is 9 hours old but happened yesterday; one from 40 hours ago
+ * is not "yesterday" either. Both were mislabelled and sorted into the wrong
+ * group while this was measured in seconds.
+ */
+const COLLAPSED_KEY = 'askaitutor:chat-groups:collapsed';
+
+function daysSince(dateStr: string): number {
+  const then = new Date(dateStr);
+  if (Number.isNaN(then.getTime())) return Number.MAX_SAFE_INTEGER;
+  const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  return Math.round((startOfDay(new Date()) - startOfDay(then)) / 86400000);
+}
+
 function timeAgo(dateStr: string): string {
   const d    = new Date(dateStr);
   const now  = new Date();
   const diff = Math.floor((now.getTime() - d.getTime()) / 1000);
-  if (diff < 60)    return 'Just now';
-  if (diff < 3600)  return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  if (diff < 172800) return 'Yesterday';
-  if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
+  const days = daysSince(dateStr);
+  // Minutes and hours only while it is still the same calendar day.
+  if (days === 0) {
+    if (diff < 60)   return 'Just now';
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    return `${Math.floor(diff / 3600)}h ago`;
+  }
+  if (days === 1) return 'Yesterday';
+  if (days < 7)   return `${days}d ago`;
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
@@ -99,9 +121,16 @@ export const ChatSidebar = ({
   }, [menu]);
 
   const handleOpenMenu = useCallback((e: React.MouseEvent<HTMLButtonElement>, id: number) => {
+    // stopPropagation keeps the outside-click listener from firing for this
+    // same click, which is why pressing the button twice used to leave the
+    // menu open: the second press simply re-opened it. Toggling here closes it.
     e.stopPropagation();
     const rect = e.currentTarget.getBoundingClientRect();
-    setMenu({ id, top: rect.bottom + 6, right: window.innerWidth - rect.right });
+    setMenu(prev =>
+      prev?.id === id
+        ? null
+        : { id, top: rect.bottom + 6, right: window.innerWidth - rect.right }
+    );
   }, []);
 
   const startRename = (id: number) => {
@@ -167,15 +196,48 @@ export const ChatSidebar = ({
   const pinned   = filtered.filter(s => pinnedIds.has(s.id));
   const unpinned = filtered.filter(s => !pinnedIds.has(s.id));
 
-  const today     = unpinned.filter(s => timeAgo(s.updatedAt) === 'Just now' || timeAgo(s.updatedAt).endsWith('m ago') || timeAgo(s.updatedAt).endsWith('h ago'));
-  const yesterday = unpinned.filter(s => timeAgo(s.updatedAt) === 'Yesterday');
-  const older     = unpinned.filter(s => !today.includes(s) && !yesterday.includes(s));
+  // Which date groups the student has folded away. Per browser only: there is
+  // no per-user UI state in the database, and this is a convenience, not
+  // something that must survive a new device.
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(COLLAPSED_KEY);
+      if (raw) setCollapsed(new Set(JSON.parse(raw) as string[]));
+    } catch { /* storage unavailable, or stored value is not usable */ }
+  }, []);
+
+  const toggleGroup = (label: string) => {
+    setCollapsed(prev => {
+      const next = new Set(prev);
+      if (next.has(label)) next.delete(label); else next.add(label);
+      try { window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next])); } catch { /* ignore */ }
+      return next;
+    });
+  };
+
+  // Grouped on the calendar day the chat was last used, never on how many hours
+  // have passed. The previous version read the display string back out of
+  // timeAgo() and matched on its wording, so "9h ago" at 8 in the morning was
+  // filed under Today even though the chat happened the night before.
+  //
+  // "Older" is kept as the last bucket and is correct for anything past a
+  // month, but it is no longer where everything from three days ago lands:
+  // three days and three years used to share one heading.
+  const inRange = (lo: number, hi: number) =>
+    unpinned.filter(s => { const d = daysSince(s.updatedAt); return d >= lo && d <= hi; });
 
   const groups: { label: string; items: Session[] }[] = [
-    { label: 'Pinned',    items: pinned },
-    { label: 'Today',     items: today },
-    { label: 'Yesterday', items: yesterday },
-    { label: 'Older',     items: older },
+    { label: 'Pinned',           items: pinned },
+    // Lower bound is open: if a row's time is slightly ahead of the browser
+    // clock the chat still shows under Today rather than falling out of every
+    // bucket and disappearing from the list.
+    { label: 'Today',            items: inRange(Number.MIN_SAFE_INTEGER, 0) },
+    { label: 'Yesterday',        items: inRange(1, 1) },
+    { label: 'Previous 7 days',  items: inRange(2, 6) },
+    { label: 'Previous 30 days', items: inRange(7, 29) },
+    { label: 'Older',            items: inRange(30, Number.MAX_SAFE_INTEGER) },
   ].filter(g => g.items.length > 0);
 
   const renderSession = (s: Session) => {
@@ -186,7 +248,7 @@ export const ChatSidebar = ({
 
     if (isRenaming) {
       return (
-        <div key={s.id} className="rounded-xl border border-[var(--accent)] bg-purple-50 px-3 py-2.5">
+        <div key={s.id} className="rounded-card border border-[var(--accent)] bg-[var(--accent-soft)] px-3 py-2.5">
           <input
             ref={renameInputRef}
             value={renameValue}
@@ -201,13 +263,13 @@ export const ChatSidebar = ({
           <div className="flex gap-2 mt-2">
             <button
               onClick={() => handleRenameCommit(s.id)}
-              className="flex-1 py-1 rounded-lg bg-[var(--accent)] text-white text-[11px] font-semibold hover:bg-indigo-700 transition-colors"
+              className="flex-1 py-1 rounded-control bg-[var(--accent)] text-white text-[11px] font-semibold hover:bg-[var(--accent-deep)] transition-colors"
             >
               Save
             </button>
             <button
               onClick={() => setRenamingId(null)}
-              className="flex-1 py-1 rounded-lg bg-[var(--surface)] text-[var(--muted)] text-[11px] font-semibold hover:bg-gray-200 transition-colors"
+              className="flex-1 py-1 rounded-control bg-[var(--surface)] text-[var(--muted)] text-[11px] font-semibold hover:bg-gray-200 transition-colors"
             >
               Cancel
             </button>
@@ -221,27 +283,30 @@ export const ChatSidebar = ({
         key={s.id}
         onClick={() => onSelectSession(s.id)}
         className={cn(
-          'group rounded-xl border px-3 py-2.5 cursor-pointer transition-colors',
+          'group rounded-card border px-3 py-2.5 cursor-pointer transition-colors',
           isActive
-            ? 'bg-purple-50 border-purple-200'
+            ? 'bg-[var(--accent-soft)] border-[var(--border)]'
             : isPinned
-              ? 'border-purple-200 bg-purple-50/40 hover:bg-purple-50'
+              ? 'border-[var(--border)] bg-[var(--accent-soft)] hover:bg-[var(--accent-soft)]'
               : 'border-[var(--border)] hover:bg-[var(--surface)]'
         )}
       >
+        {/* No status dot. The open chat is already shown by its tinted row and
+            its green title; a third marker for the same fact read as
+            decoration. */}
         <div className="flex items-start gap-2">
-          {isActive && (
-            <div className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] shrink-0 mt-1.5" />
-          )}
           <div className="flex-1 min-w-0">
             <div className="flex items-start gap-1">
               {isPinned && (
                 <i className="fas fa-thumbtack text-[var(--accent)] text-[9px] mt-1 shrink-0" />
               )}
-              <p className={cn(
-                'text-[13px] font-medium line-clamp-2 leading-snug',
-                isActive ? 'text-[var(--accent)]' : 'text-[var(--text)]'
-              )}>
+              <p
+                title={label}
+                className={cn(
+                  'text-[13px] font-medium line-clamp-2 leading-snug',
+                  isActive ? 'text-[var(--accent)]' : 'text-[var(--text)]'
+                )}
+              >
                 {label}
               </p>
             </div>
@@ -255,9 +320,12 @@ export const ChatSidebar = ({
               )}
             </div>
           </div>
+          {/* Always visible. Hidden until hover, nothing showed a student that
+              a chat can be pinned, renamed or deleted at all — and on a touch
+              screen there is no hover to reveal it with. */}
           <button
             onClick={e => handleOpenMenu(e, s.id)}
-            className="w-6 h-6 rounded-md flex items-center justify-center text-[var(--muted)] opacity-0 group-hover:opacity-100 hover:bg-gray-100 hover:text-[var(--text)] transition-all shrink-0 mt-0.5"
+            className="w-6 h-6 rounded-md flex items-center justify-center text-[var(--muted2)] hover:bg-[var(--surface)] hover:text-[var(--text)] transition-colors shrink-0 mt-0.5"
             aria-label="More options"
           >
             <i className="fas fa-ellipsis text-[11px]" />
@@ -276,7 +344,7 @@ export const ChatSidebar = ({
           <button
             onClick={onClose}
             title="Close sidebar"
-            className="w-6 h-6 rounded-lg flex items-center justify-center text-[var(--muted)] hover:bg-gray-100 hover:text-[var(--accent)] transition-colors"
+            className="w-6 h-6 rounded-control flex items-center justify-center text-[var(--muted)] hover:bg-gray-100 hover:text-[var(--accent)] transition-colors"
           >
             <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
               <rect x="1.5" y="1.5" width="13" height="13" rx="2" stroke="currentColor" strokeWidth="1.4"/>
@@ -289,9 +357,9 @@ export const ChatSidebar = ({
         <div className="px-3 pt-2.5 pb-2 flex flex-col gap-2 shrink-0">
           <button
             onClick={onNewChat}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-xl border bg-[var(--surface)] text-[var(--text)] border-[var(--border)] hover:bg-purple-50 hover:border-purple-200 hover:text-[var(--accent)] text-[13px] font-semibold transition-colors"
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-card border bg-[var(--surface)] text-[var(--text)] border-[var(--border)] hover:bg-[var(--accent-soft)] hover:border-[var(--border)] hover:text-[var(--accent)] text-[13px] font-semibold transition-colors"
           >
-            <div className="w-5 h-5 rounded-lg bg-[var(--accent)] flex items-center justify-center shrink-0">
+            <div className="w-5 h-5 rounded-control bg-[var(--accent)] flex items-center justify-center shrink-0">
               <i className="fas fa-plus text-white text-[9px]" />
             </div>
             <span className="flex-1 text-left">New Chat</span>
@@ -299,7 +367,7 @@ export const ChatSidebar = ({
 
           <button
             onClick={() => setShowSearch(true)}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] text-[13px] font-medium text-[var(--muted)] hover:bg-gray-100 hover:text-[var(--text)] transition-colors"
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-card border border-[var(--border)] bg-[var(--surface)] text-[13px] font-medium text-[var(--muted)] hover:bg-gray-100 hover:text-[var(--text)] transition-colors"
           >
             <i className="fas fa-magnifying-glass text-[10px]" />
             <span>Search chats</span>
@@ -314,24 +382,44 @@ export const ChatSidebar = ({
             </div>
           ) : sessions.length === 0 ? (
             <div className="flex flex-col items-center justify-center flex-1 gap-3 py-10 text-[var(--muted)]">
-              <div className="w-10 h-10 rounded-2xl bg-purple-50 flex items-center justify-center">
-                <i className="fas fa-comments text-purple-300 text-lg" />
+              <div className="w-10 h-10 rounded-card bg-[var(--accent-soft)] flex items-center justify-center">
+                <i className="fas fa-comments text-[var(--muted2)] text-lg" />
               </div>
               <p className="text-[12px] text-center px-2 leading-relaxed">
                 No conversations yet.<br />Ask something to get started!
               </p>
             </div>
           ) : (
-            groups.map(group => (
-              <div key={group.label}>
-                <p className="text-[10px] font-bold text-[var(--muted)] uppercase tracking-wider px-1 py-1.5 select-none">
-                  {group.label}
-                </p>
-                <div className="flex flex-col gap-1">
-                  {group.items.map(renderSession)}
+            groups.map(group => {
+              const isOpen = !collapsed.has(group.label);
+              return (
+                <div key={group.label}>
+                  <button
+                    type="button"
+                    onClick={() => toggleGroup(group.label)}
+                    aria-expanded={isOpen}
+                    title={isOpen ? `Hide ${group.label.toLowerCase()}` : `Show ${group.label.toLowerCase()}`}
+                    className="w-full flex items-center gap-1.5 px-1 py-1.5 rounded-control text-[10px] font-bold text-[var(--muted)] uppercase tracking-wider select-none transition-colors hover:bg-[var(--surface)] hover:text-[var(--text)]"
+                  >
+                    <i
+                      className={cn(
+                        'fas fa-chevron-down text-[8px] transition-transform',
+                        !isOpen && '-rotate-90'
+                      )}
+                    />
+                    <span>{group.label}</span>
+                    <span className="ml-auto font-semibold normal-case tracking-normal text-[var(--muted2)]">
+                      {group.items.length}
+                    </span>
+                  </button>
+                  {isOpen && (
+                    <div className="flex flex-col gap-1">
+                      {group.items.map(renderSession)}
+                    </div>
+                  )}
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
 
@@ -342,13 +430,13 @@ export const ChatSidebar = ({
               {/* Back to history */}
               <button
                 onClick={() => { setShowSearch(false); setSearchQuery(''); }}
-                className="flex items-center gap-1.5 text-[12px] font-semibold text-[var(--accent)] hover:text-indigo-700 transition-colors w-fit"
+                className="flex items-center gap-1.5 text-[12px] font-semibold text-[var(--accent)] hover:text-[var(--accent-deep)] transition-colors w-fit"
               >
                 <i className="fas fa-arrow-left text-[10px]" />
                 Back to History
               </button>
               {/* Search input */}
-              <div className="flex items-center gap-2 bg-[var(--surface)] border border-[var(--border)] rounded-xl px-3 py-2">
+              <div className="flex items-center gap-2 bg-[var(--surface)] border border-[var(--border)] rounded-card px-3 py-2">
                 <i className="fas fa-magnifying-glass text-[var(--muted)] text-[11px]" />
                 <input
                   autoFocus
@@ -369,7 +457,7 @@ export const ChatSidebar = ({
             <div className="chat-sidebar-scroll flex-1 overflow-y-auto px-3 py-2 flex flex-col gap-1">
               {filtered.length === 0 && searchQuery.trim() ? (
                 <div className="flex flex-col items-center justify-center flex-1 gap-3 py-10 text-[var(--muted)]">
-                  <i className="fas fa-face-sad-tear text-2xl text-purple-200" />
+                  <i className="fas fa-face-sad-tear text-2xl text-[var(--muted2)]" />
                   <p className="text-[12px] text-center px-2">
                     No results for <strong className="text-[var(--text)]">&ldquo;{searchQuery}&rdquo;</strong>
                   </p>
@@ -390,9 +478,9 @@ export const ChatSidebar = ({
                         setSearchQuery('');
                       }}
                       className={cn(
-                        'rounded-xl border px-3 py-2.5 cursor-pointer transition-colors',
+                        'rounded-card border px-3 py-2.5 cursor-pointer transition-colors',
                         s.id === activeSessionId
-                          ? 'bg-purple-50 border-purple-200'
+                          ? 'bg-[var(--accent-soft)] border-[var(--border)]'
                           : 'border-[var(--border)] hover:bg-[var(--surface)]'
                       )}
                     >
@@ -412,7 +500,7 @@ export const ChatSidebar = ({
       {/* Context menu — fixed so it isn't clipped by overflow:hidden */}
       {menu && (
         <div
-          className="fixed z-[200] bg-white border border-[var(--border)] rounded-xl shadow-xl py-1 w-44"
+          className="fixed z-[200] bg-white border border-[var(--border)] rounded-card shadow-xl py-1 w-44"
           style={{ top: menu.top, right: menu.right }}
           onClick={e => e.stopPropagation()}
         >

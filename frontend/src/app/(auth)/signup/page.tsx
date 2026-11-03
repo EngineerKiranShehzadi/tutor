@@ -155,13 +155,13 @@ export default function SignupPage() {
         <button
           type="button"
           onClick={() => setStep('form')}
-          className="flex items-center gap-1.5 text-[13px] text-slate-500 hover:text-slate-800 transition-colors mb-6"
+          className="flex items-center gap-1.5 text-[13px] text-[var(--muted)] hover:text-[var(--text)] transition-colors mb-6"
         >
           <i className="fas fa-arrow-left text-[11px]" /> Back
         </button>
-        <h1 className="text-[26px] font-bold text-slate-900 mb-1">Verify your email</h1>
-        <p className="text-[14px] text-slate-500 mb-8">
-          {signupMessage} <strong className="text-slate-700">{pendingEmail}</strong>
+        <h1 className="text-h1 font-semibold text-[var(--text)] mb-2">Verify your email</h1>
+        <p className="text-body text-[var(--muted)] mb-8">
+          {signupMessage} <strong className="text-[var(--text)]">{pendingEmail}</strong>
         </p>
 
         <form onSubmit={handleOtpSubmit} className="flex flex-col gap-5">
@@ -176,7 +176,7 @@ export default function SignupPage() {
                 value={digit}
                 onChange={e => handleDigitChange(i, e.target.value)}
                 onKeyDown={e => handleDigitKeyDown(i, e)}
-                className="w-12 h-14 text-center text-xl font-bold border-[1.5px] border-slate-200 rounded-xl outline-none transition-all bg-white text-slate-900 focus:border-[#065fd4] focus:ring-2 focus:ring-blue-100"
+                className="w-12 h-14 text-center text-xl font-bold border border-[var(--border)] rounded-control outline-none transition-all bg-white text-[var(--text)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-soft)]"
               />
             ))}
           </div>
@@ -187,14 +187,14 @@ export default function SignupPage() {
             </div>
           )}
 
-          <div className="text-center text-[13px] text-slate-500">
+          <div className="text-center text-[13px] text-[var(--muted)]">
             {canResend ? (
               <button type="button" onClick={handleResend} disabled={resendLoading}
-                className="text-[#065fd4] font-semibold hover:underline disabled:opacity-50">
+                className="text-[var(--accent)] font-semibold hover:underline disabled:opacity-50">
                 {resendLoading ? 'Sending…' : 'Resend code'}
               </button>
             ) : (
-              <span>Resend in <strong className="text-slate-800">{countdown}s</strong></span>
+              <span>Resend in <strong className="text-[var(--text)]">{countdown}s</strong></span>
             )}
           </div>
 
@@ -205,7 +205,7 @@ export default function SignupPage() {
           )}
 
           <Button type="submit" size="lg" loading={verifyLoading}
-            className="w-full rounded-lg py-3 text-[14px] font-semibold">
+            className="w-full">
             <i className="fas fa-check text-[12px]" /> Verify & Continue
           </Button>
         </form>
@@ -216,69 +216,64 @@ export default function SignupPage() {
   // Signup form
   return (
     <AuthCard>
-      {/* Mobile logo */}
-      <div className="mb-8 md:hidden">
-        <Logo variant="light" className="h-10 w-auto" />
-      </div>
-
       {/* Heading */}
-      <h1 className="text-[24px] font-bold text-slate-900 mb-1">Create your account</h1>
-      <p className="text-[13px] text-slate-500 mb-5 leading-relaxed">
-        Join thousands of students learning smarter with AI.
+      <h1 className="text-h1 font-semibold text-[var(--text)] mb-2">Create your account</h1>
+      <p className="text-body text-[var(--muted)] mb-8">
+        One account, then pick a lecture and start asking.
       </p>
 
       <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
 
         {/* Full Name */}
         <div className="flex flex-col gap-1.5">
-          <label className="text-[13px] font-semibold text-slate-700">Full Name</label>
+          <label className="text-label font-medium text-[var(--muted)]">Full Name</label>
           <Input
             iconInField="fas fa-user"
             type="text"
             placeholder="Sara Ahmed"
             error={errors.name?.message}
-            className="bg-white border-slate-200 focus:border-[#065fd4] py-3"
+            
             {...register('name')}
           />
         </div>
 
         {/* Email */}
         <div className="flex flex-col gap-1.5">
-          <label className="text-[13px] font-semibold text-slate-700">Email</label>
+          <label className="text-label font-medium text-[var(--muted)]">Email</label>
           <Input
             iconInField="fas fa-envelope"
             type="email"
             placeholder="you@example.com"
             error={errors.email?.message}
-            className="bg-white border-slate-200 focus:border-[#065fd4] py-3"
+            
             {...register('email')}
           />
         </div>
 
         {/* Password */}
         <div className="flex flex-col gap-1.5">
-          <label className="text-[13px] font-semibold text-slate-700">Password</label>
+          <label className="text-label font-medium text-[var(--muted)]">Password</label>
           <Input
             iconInField="fas fa-lock"
             type="password"
             showPasswordToggle
             placeholder="Min 8 chars, 1 uppercase, 1 number"
             error={errors.password?.message}
-            className="bg-white border-slate-200 focus:border-[#065fd4] py-3"
+            
             {...register('password')}
           />
         </div>
 
         {/* Confirm Password */}
         <div className="flex flex-col gap-1.5">
-          <label className="text-[13px] font-semibold text-slate-700">Confirm Password</label>
+          <label className="text-label font-medium text-[var(--muted)]">Confirm Password</label>
           <Input
             iconInField="fas fa-lock"
             type="password"
             showPasswordToggle
             placeholder="Repeat your password"
             error={errors.confirmPassword?.message}
-            className="bg-white border-slate-200 focus:border-[#065fd4] py-3"
+            
             {...register('confirmPassword')}
           />
         </div>
@@ -293,24 +288,24 @@ export default function SignupPage() {
           type="submit"
           size="lg"
           loading={signupLoading}
-          className="mt-1 w-full rounded-lg py-3 text-[14px] font-semibold"
+          className="mt-1 w-full"
         >
-          Create Account <i className="fas fa-arrow-right text-[12px] ml-1" />
+          Create Account
         </Button>
 
         <div className="relative flex items-center gap-3">
-          <div className="flex-1 h-px bg-slate-200" />
-          <span className="text-[12px] text-slate-400">or</span>
-          <div className="flex-1 h-px bg-slate-200" />
+          <div className="flex-1 h-px bg-[var(--border)]" />
+          <span className="text-caption text-[var(--muted2)]">or</span>
+          <div className="flex-1 h-px bg-[var(--border)]" />
         </div>
 
         <GoogleButton />
       </form>
 
       {/* Footer */}
-      <p className="text-center text-[13px] text-slate-500 mt-7">
+      <p className="text-center text-label text-[var(--muted)] mt-8">
         Already have an account?{' '}
-        <Link href="/login" className="text-[#065fd4] font-semibold hover:underline">
+        <Link href="/login" className="text-[var(--accent)] font-semibold hover:underline">
           Sign In
         </Link>
       </p>

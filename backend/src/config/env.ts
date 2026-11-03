@@ -117,6 +117,11 @@ const RAG_FALLBACK_MODEL = nonBlank('RAG_ANSWER_FALLBACK_MODEL', '') || RAG_MODE
 export const env = {
   NODE_ENV:      optional('NODE_ENV', 'development'),
   PORT:          positiveInt('PORT', 5000),
+  // Timezone used whenever activity is grouped into days (My activity page,
+  // learning streak, peak hour). Postgres stores every timestamp in UTC, so
+  // without this a question asked at 02:00 in Pakistan (UTC+5) is counted on
+  // the previous day. Any IANA zone name is accepted.
+  REPORTING_TIMEZONE: optional('REPORTING_TIMEZONE', 'Asia/Karachi'),
   // Express 'trust proxy'. Behind a load balancer / reverse proxy req.ip is the
   // proxy's address unless this is set, so every IP-based limit would put all
   // users in one bucket. Number = proxy hops to trust; 'false' = none; any
