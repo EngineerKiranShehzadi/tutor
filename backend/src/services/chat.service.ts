@@ -1079,7 +1079,18 @@ export const askLectureAgent = async (
     // response already returned below. An answer that says a part "couldn't
     // be retrieved right now" is transient by definition, so it is never cached.
     // Nor is the answer to a question that had PII masked (see piiMasked).
-    if (route === 'FACT_QUESTION' && !piiMasked && guardrailOutcome.verified && unavailableAspects.length === 0) {
+    //
+    // guardrailOutcome.verified alone is NOT enough: the generator can
+    // itself draft the exact LECTURE_NOT_FOUND_MESSAGE (SYSTEM_PROMPT rule 2,
+    // when it decides the context doesn't cover the question), and the
+    // groundedness verifier correctly marks that VERIFIED — a refusal makes
+    // no unsupported claims, so there's nothing to flag. Without this check,
+    // that self-reported "not found" gets cached as if it were a real
+    // answer, and a later retrieval fix (e.g. hybrid search) that would have
+    // found the real answer never gets the chance — the cached refusal keeps
+    // being served instead (2026-11-03 RAG test, Finding 2 follow-up).
+    const isNotFoundAnswer = answer.trim() === LECTURE_NOT_FOUND_MESSAGE.trim();
+    if (route === 'FACT_QUESTION' && !piiMasked && guardrailOutcome.verified && !isNotFoundAnswer && unavailableAspects.length === 0) {
       currentStage = 'write-answer-memory';
       try {
         const memoryService = await import('./rag-answer-memory.service');

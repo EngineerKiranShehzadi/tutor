@@ -943,7 +943,7 @@ cases.push({
 
 // ── S12: the history block is bounded and treated as data ───────────────
 cases.push({
-  label: 'S12. 10 turns with 5,000-char answers → history block ≤ 4,000 chars, newest turn kept, chronological, each answer cut; rule 9 covers history; prompt v3',
+  label: 'S12. 10 turns with 5,000-char answers → history block ≤ 4,000 chars, newest turn kept, chronological, each answer cut; rule 9 covers history; prompt v4',
   run: async () => {
     const turns = Array.from({ length: 10 }, (_, i) => ({ question: `Question number ${i}?`, answer: `ANSWER-${i} ${'z'.repeat(5000)}` }));
     const block = buildHistoryBlock(turns);
