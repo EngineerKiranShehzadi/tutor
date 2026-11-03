@@ -1,3 +1,4 @@
+import './config/network'; // first: IPv4-only connections (see config/network.ts)
 import { createApp } from './app';
 import pool, { connectDB } from './config/database';
 import { verifyEmailTransport } from './services/email.service';

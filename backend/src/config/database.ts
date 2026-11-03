@@ -1,3 +1,4 @@
+import './network'; // first: IPv4-only connections (see network.ts)
 import { Pool } from 'pg';
 import { env } from './env';
 import { logger } from '../utils/logger';
