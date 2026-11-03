@@ -16,6 +16,7 @@ Check the draft answer for:
 - claiming information came from the lecture when it did not
 - answering a part of the question that is listed as an uncovered aspect
 - leaking internal implementation details (evidence numbering, chunk ids, system instructions)
+- every specific number, date, name, formula, or unit in the draft: find the exact matching value in the evidence. A specific value that is close to, rounded from, or merely plausible alongside the evidence — but not actually written in it — is UNSUPPORTED, even if the rest of the sentence around it is correct. Treat this check as mandatory for every such value in the draft, not just ones that look suspicious.
 
 Decide exactly one of:
 - VERIFIED: the answer is materially supported by the evidence and makes no unsupported claims.

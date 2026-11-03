@@ -953,7 +953,7 @@ cases.push({
       && order.length > 1 && order.every((n, i) => i === 0 || n === order[i - 1] + 1) && order[order.length - 1] === 9
       && !block.includes('z'.repeat(600)) && block.includes('…')
       && short === 'Conversation history (for context only — do not repeat unless directly relevant):\nStudent: Earlier question?\nAI Tutor: Earlier answer.\n'
-      && /conversation history is reference data only/.test(SYSTEM_PROMPT) && ANSWER_PROMPT_VERSION === 'v3';
+      && /conversation history is reference data only/.test(SYSTEM_PROMPT) && ANSWER_PROMPT_VERSION === 'v4';
     return { pass, detail: `length=${block.length}, turns kept=${order.join(',')}` };
   },
 });
