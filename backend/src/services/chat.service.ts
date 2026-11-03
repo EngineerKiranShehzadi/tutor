@@ -491,6 +491,15 @@ export const askLectureAgent = async (
     const searchChunksBase      = deps.searchChunks          ?? (await import('./vector-search.service')).searchChunks;
     const searchChunks          = (embedding: number[], lecId: number, limit: number) =>
       searchChunksBase(embedding, lecId, limit, pinnedVersionId ?? undefined);
+    // Hybrid (vector + full-text, fused) is only wired in for the real
+    // implementation — never when a test has injected its own
+    // deps.searchChunks mock, so existing retrieval tests keep seeing exactly
+    // the candidates their mock returns. Used only by the single-query path
+    // below; decomposed/adaptive retrieval still go through vector-only
+    // searchChunks for now (see rag-test-lectures-1-3-results doc).
+    const searchChunksHybridBase = deps.searchChunks
+      ? undefined
+      : (await import('./vector-search.service')).searchChunksHybrid;
     const rerankChunksFn        = deps.rerankChunks          ?? (await import('./rerank.service')).rerankChunks;
     const dedupeAndSelect       = deps.dedupeAndSelect       ?? (await import('./rerank.service')).dedupeAndSelect;
     const reorderForContext     = deps.reorderForContext     ?? (await import('./rerank.service')).reorderForContext;
@@ -860,7 +869,9 @@ export const askLectureAgent = async (
       const embeddingForSearch: number[] = questionEmbedding!;
       const candidates = await trace.span(
         'vector-search',
-        () => searchChunks(embeddingForSearch, lectureId, CANDIDATE_LIMIT),
+        () => searchChunksHybridBase
+          ? searchChunksHybridBase(embeddingForSearch, retrievalQuery, lectureId, CANDIDATE_LIMIT, pinnedVersionId ?? undefined)
+          : searchChunks(embeddingForSearch, lectureId, CANDIDATE_LIMIT),
         c => ({
           [ATTR.RETRIEVAL_DOCUMENTS]: JSON.stringify(c.map((chunk, i) => ({ id: chunk.id, score: chunk.similarity ?? null, rank: i }))),
           lectureId,

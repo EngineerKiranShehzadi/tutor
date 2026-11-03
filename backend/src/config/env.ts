@@ -470,6 +470,17 @@ export const env = {
     // differently, so a mismatch is refused at startup in production and warned
     // about elsewhere (config/retrieval-providers.ts).
     THRESHOLDS_TUNED_FOR: nonBlank('RETRIEVAL_THRESHOLDS_TUNED_FOR', 'local-http:local-http'),
+    // Runs Postgres full-text search (migration 021) alongside dense vector
+    // search on the single-query retrieval path and fuses both by Reciprocal
+    // Rank Fusion — see vector-search.service.ts searchChunksHybrid. Added
+    // 2026-11-03 for near-duplicate-phrasing questions (e.g. "slide 14" vs
+    // "slide 15") that dense embeddings alone under-recall (S-R1). Off falls
+    // back to the exact pre-existing vector-only behaviour.
+    HYBRID_SEARCH_ENABLED: optional('HYBRID_SEARCH_ENABLED', 'true') === 'true',
+    // Reciprocal Rank Fusion constant — standard default (Cormack et al.).
+    // Lower values weight a result's exact rank more heavily; higher values
+    // flatten the difference between e.g. rank 1 and rank 3.
+    RRF_K: positiveInt('RRF_K', 60),
   },
 
   CHAT: {
