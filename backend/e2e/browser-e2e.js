@@ -1,6 +1,6 @@
 /**
  * Browser end-to-end run for the versioned dataset pipeline (real Chromium, real frontend, real backend,
- * real embedding model; Gemini replaced by the deterministic stub in src/scripts/e2e-server.ts).
+ * real embedding model; the LLM replaced by the deterministic stub in src/scripts/e2e-server.ts).
  *
  *   ./e2e/up.sh && node e2e/browser-e2e.js && ./e2e/down.sh
  *

@@ -5,7 +5,8 @@
  *   3. one one-line LLM call for each distinct (provider, model) configured across the LLM tasks
  *      — prints model, token usage and the estimated cost from LLM_PRICING_JSON
  * The total estimated spend must stay under $0.01 (a call whose worst case would break that is
- * not made, and counts as a failure). Each provider gets its own PASS/FAIL line with a clear
+ * not made, and counts as a failure; so is a call to a model with no price, whose cost could
+ * not be bounded). Each provider gets its own PASS/FAIL line with a clear
  * message on a missing key; the exit code is non-zero if any step fails. Never touches the
  * database: nothing here reads or writes it.
  *
@@ -111,7 +112,12 @@ export async function runSmoke(cfg: SmokeConfig, deps: SmokeDeps): Promise<Smoke
   for (const target of cfg.targets) {
     const label = `llm ${target.provider}/${target.model}`;
     const price = Object.prototype.hasOwnProperty.call(cfg.pricing, target.model) ? cfg.pricing[target.model] : undefined;
-    if (price && spent + worstCaseCostUsd(price) > cfg.budgetUsd) {
+    // No price means the cost cannot be bounded, so the call is not made.
+    if (!price) {
+      fail(label, `skipped: no price for "${target.model}" in LLM_PRICING_JSON or the built-in prices, so its cost cannot be capped — add one and re-run`);
+      continue;
+    }
+    if (spent + worstCaseCostUsd(price) > cfg.budgetUsd) {
       fail(label, `skipped: worst case $${worstCaseCostUsd(price).toFixed(5)} would take the total past $${cfg.budgetUsd} (spent so far $${spent.toFixed(5)})`);
       continue;
     }
@@ -120,13 +126,15 @@ export async function runSmoke(cfg: SmokeConfig, deps: SmokeDeps): Promise<Smoke
       const r = await deps.llm(target, LLM_PROMPT);
       const inTok = r.usage?.inputTokens;
       const outTok = r.usage?.outputTokens;
-      let cost = 'cost n/a (no price for this model in LLM_PRICING_JSON)';
-      if (price && inTok !== undefined && outTok !== undefined) {
+      let cost: string;
+      if (inTok !== undefined && outTok !== undefined) {
         const c = costUsd(inTok, outTok, price);
         spent += c;
         cost = `est $${c.toFixed(6)}`;
-      } else if (price) {
-        cost = 'cost n/a (provider returned no token usage)';
+      } else {
+        // No usage to measure: count the worst case, so the cap still holds.
+        spent += worstCaseCostUsd(price);
+        cost = `no token usage returned — counted at the worst case $${worstCaseCostUsd(price).toFixed(6)}`;
       }
       const detail = `tokens in=${inTok ?? '?'} out=${outTok ?? '?'} ${cost} finish=${r.finishReason ?? '?'} reply="${r.raw.trim().slice(0, 30)}" ${Date.now() - t0}ms · tasks: ${target.tasks.join(', ')}`;
       if (r.raw.trim() === '') {

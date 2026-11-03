@@ -31,6 +31,7 @@ import { generateAccessToken } from '../utils/jwt';
 import { checkProviderHealth, overallStatus, requiredComponents, ComponentHealth, checkAnswerLlm, checkReadiness, resetHealthCache, UNHEALTHY_CACHE_TTL_MS } from '../observability/health.service';
 import { recordProviderFailure, recordProviderSuccess, resetProviderSignals, providerDownSignal, SIGNAL_WINDOW_MS } from '../observability/provider-signal';
 import { EmbeddingUnavailableError } from '../embedding/embedding-errors';
+import { LlmProviderError } from '../llm/llm-errors';
 import { mkdtempSync, writeFileSync, rmSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { parse, validate, specifiedRules } from 'graphql';
@@ -1428,7 +1429,7 @@ const run = async () => {
       // One question whose call is retried three times on 503 is ONE failure, not four.
       resetProviderSignals();
       let attempts = 0;
-      provider.generate = async () => { attempts++; throw new Error('503 Service Unavailable: high demand'); };
+      provider.generate = async () => { attempts++; throw new LlmProviderError('OpenAI service unavailable (503) after 2 retries: simulated', true); };
       (globalThis as { setTimeout: unknown }).setTimeout = ((fn: () => void) => realSetTimeout(fn, 0)) as unknown;
       await generateAnswer('What is a prompt?', [], 'Lecture', []).catch(() => undefined);
       const oneQuestion = (await checkReadiness()).components.answerLlm;

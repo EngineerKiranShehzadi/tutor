@@ -6,6 +6,7 @@ import { recordProviderSuccess, recordProviderFailure } from '../observability/p
 import { env } from '../config/env';
 import { resolveLlmProvider } from '../llm/llm-provider.resolver';
 import { withLlmDiagnostic, extractLlmUsage } from '../llm/llm-observability.service';
+import { isRetryableLlmError } from '../llm/llm-errors';
 
 export interface ConversationTurn {
   question: string;
@@ -209,11 +210,10 @@ ${question}${uncoveredBlock}${unavailableBlock}`;
     logger.info(`[LLM] ✅ ${provider.name}/${modelName} answered (${answer.length} chars, finish=${finishReason})`);
     return answer;
   } catch (err: unknown) {
-    const msg = String((err as Error).message ?? '');
-    const isRateLimit  = msg.includes('429') || msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('resource_exhausted');
-    const isOverloaded = msg.includes('503') || msg.toLowerCase().includes('service unavailable') || msg.toLowerCase().includes('high demand');
-
-    if ((isRateLimit || isOverloaded) && attempt <= 3) {
+    // Retry only what the adapter flags as retryable (a rate limit or an
+    // outage). A quota / billing 429 is not flagged: waiting 6 + 12 + 24 s
+    // would not clear it, so the student gets the error at once.
+    if (isRetryableLlmError(err) && attempt <= 3) {
       const wait = Math.pow(2, attempt) * 3000; // 6s, 12s, 24s
       const fallbackNote = attempt >= 2 ? ` (switching to ${env.LLM.RAG_ANSWER.FALLBACK_MODEL})` : '';
       logger.warn(`[LLM] Transient error on attempt ${attempt}/3${fallbackNote} — retrying in ${wait / 1000}s...`);

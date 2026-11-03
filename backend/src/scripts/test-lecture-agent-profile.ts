@@ -152,7 +152,7 @@ cases.push({
   run: async () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'services', 'lecture-agent-profile.service.ts'), 'utf8');
     const importLines = src.split('\n').filter(l => /^\s*import\b/.test(l)).join('\n');
-    const forbidden = [/gemini/i, /llm/i, /langgraph/i, /langchain/i, /crewai/i, /chat\.service/, /rerank/i, /vector-search/i, /rag\//];
+    const forbidden = [/answer-generation/, /llm/i, /langgraph/i, /langchain/i, /crewai/i, /chat\.service/, /rerank/i, /vector-search/i, /rag\//];
     const offenders = forbidden.filter(re => re.test(importLines)).map(String);
     const createsPool = /new\s+Pool\s*\(/.test(src);
     return { pass: offenders.length === 0 && !createsPool, detail: `imports ok=${offenders.length === 0}, new Pool=${createsPool}` };

@@ -100,10 +100,20 @@ cases.push({ label: 'empty LLM reply fails with the thinking-cap hint', run: asy
   const r = await runSmoke(cfg({ targets: [T1] }), d);
   return !r.ok && /EMPTY reply; thinking may be using the whole 512-token output cap/.test(text(d));
 } });
-cases.push({ label: 'no price for a model: the call is made and cost is reported as n/a (not guessed)', run: async () => {
-  const d = deps();
-  const r = await runSmoke(cfg({ pricing: {} }), d);
-  return r.ok && r.totalCostUsd === 0 && /cost n\/a \(no price for this model in LLM_PRICING_JSON\)/.test(text(d));
+cases.push({ label: 'no price for a model: the call is NOT made (its cost cannot be capped); the run fails and names the model', run: async () => {
+  let calls = 0;
+  const d = deps({ llm: async () => { calls++; return { raw: 'pong', provider: 'openai', model: 'm', usage: { inputTokens: 1, outputTokens: 1 } }; } });
+  const r = await runSmoke(cfg({ pricing: { 'm-lite': { inputPer1M: 0.1, outputPer1M: 0.4 } } }), d);
+  return !r.ok && calls === 1 && r.failures.join() === 'llm openai/m-main'
+    && /FAIL  llm openai\/m-main\s+skipped: no price for "m-main" .*cannot be capped/.test(text(d)) && /PASS  llm openai\/m-lite/.test(text(d));
+} });
+cases.push({ label: 'no token usage returned: the call counts at its worst case, so the cap still holds', run: async () => {
+  const price: LlmPrice = { inputPer1M: 0, outputPer1M: 12 };            // worst case 512 tokens ≈ $0.0061
+  let calls = 0;
+  const d = deps({ llm: async () => { calls++; return { raw: 'pong', provider: 'openai', model: 'm' }; } });
+  const r = await runSmoke(cfg({ pricing: { 'm-main': price, 'm-lite': price } }), d);
+  return calls === 1 && !r.ok && Math.abs(r.totalCostUsd - worstCaseCostUsd(price)) < 1e-12
+    && /counted at the worst case/.test(text(d)) && /FAIL  llm openai\/m-lite\s+skipped: worst case/.test(text(d));
 } });
 cases.push({ label: 'budget: a call whose worst case would pass $0.01 is NOT made; the run fails and total stays under the limit', run: async () => {
   let calls = 0;

@@ -13,6 +13,7 @@ import { env } from '../config/env';
 import { resolveLlmProvider } from '../llm/llm-provider.resolver';
 import type { LlmRequest, LlmResponse } from '../llm/llm.types';
 import type { LlmProvider } from '../llm/providers/llm-provider.interface';
+import { LlmProviderError } from '../llm/llm-errors';
 import { generateAnswer, SYSTEM_PROMPT, ANSWER_PROMPT_VERSION, buildHistoryBlock, HISTORY_MAX_CHARS } from '../services/answer-generation.service';
 import { runOutputGuardrail } from '../rag/guardrails/output/output-guardrail.service';
 import { buildGroundednessSystemPrompt, ANSWER_REVISION_SYSTEM_PROMPT } from '../rag/guardrails/output/answer-groundedness.prompt';
@@ -329,7 +330,7 @@ cases.push({
 cases.push({
   label: 'P2. Generator prompt: unavailable part gets the "could not be retrieved right now" note, not the "not in this lecture" note; kept on retry',
   run: async () => {
-    const { requests } = await withFakeLlm(env.LLM.RAG_ANSWER.PROVIDER, [new Error('503 service unavailable'), 'ok'], () =>
+    const { requests } = await withFakeLlm(env.LLM.RAG_ANSWER.PROVIDER, [new LlmProviderError('OpenAI service unavailable (503) after 2 retries: simulated', true), 'ok'], () =>
       generateAnswer('Q?', CHUNKS, 'Lecture', [], ['MISSING-PART'], 1, undefined, null, ['BROKEN-PART']));
     const p = requests[0].userPrompt;
     const notFoundNote = p.slice(p.indexOf('does not cover'), p.indexOf('could not be looked up'));

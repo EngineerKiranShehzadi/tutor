@@ -73,10 +73,10 @@ export interface LlmPrice { inputPer1M: number; outputPer1M: number }
 // Built-in price for the production model (USD per 1M tokens, standard tier),
 // so rag_request_log.est_cost_usd is never NULL for it even when
 // LLM_PRICING_JSON is unset. A model with no price here or in LLM_PRICING_JSON
-// makes the whole request's cost NULL and leaves smoke:providers' spend cap
-// unenforced. gpt-6-luna: $0.10 input, $0.01 cached input, $0.50 output. Input
-// is priced as uncached, so the estimate errs high. Entries in
-// LLM_PRICING_JSON override or add to this.
+// makes the whole request's cost NULL, and smoke:providers refuses to call it
+// (its spend cap cannot bound an unpriced call). gpt-6-luna: $0.10 input,
+// $0.01 cached input, $0.50 output. Input is priced as uncached, so the
+// estimate errs high. Entries in LLM_PRICING_JSON override or add to this.
 export const DEFAULT_LLM_PRICING: Record<string, LlmPrice> = {
   'gpt-6-luna': { inputPer1M: 0.10, outputPer1M: 0.50 },
 };

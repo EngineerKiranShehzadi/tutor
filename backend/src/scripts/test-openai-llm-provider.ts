@@ -1,6 +1,7 @@
 /**
  * Offline tests for the OpenAI LLM adapter (llm/providers/openai-llm.provider.ts), against a
- * local mock of the Chat Completions API, plus the startup key check (config/llm-providers.ts).
+ * local mock of the Chat Completions API, plus the startup key check (config/llm-providers.ts),
+ * the answer service's retry decision on top of it, and the eval judge's output cap.
  * No network, no key, no cost.
  *
  * Usage: npm run test:openai-llm
@@ -12,6 +13,10 @@ import { resolveLlmProvider } from '../llm/llm-provider.resolver';
 import { toJsonSchema } from '../llm/json-schema';
 import { assertLlmProvidersConfigured, selectedLlmProviders } from '../config/llm-providers';
 import { classifyErrorCode } from '../observability/tracer';
+import { isRetryableLlmError } from '../llm/llm-errors';
+import { env } from '../config/env';
+import { generateAnswer } from '../services/answer-generation.service';
+import { judgeLlm, JUDGE_MAX_OUTPUT_TOKENS } from './live-llm';
 import { DECOMPOSITION_RESPONSE_SCHEMA } from '../rag/query-processing/decomposition/subquery-decomposition.prompt';
 import { ADAPTIVE_RETRIEVAL_RESPONSE_SCHEMA } from '../rag/query-processing/adaptive-retrieval/adaptive-retrieval.prompt';
 import { GROUNDEDNESS_RESPONSE_SCHEMA } from '../rag/guardrails/output/answer-groundedness.prompt';
@@ -181,6 +186,42 @@ const rejects = async (p: Promise<unknown>): Promise<Error> => p.then(() => new 
         && n400 === 1 && /request rejected \(400 invalid_json_schema\)/.test(e400.message)
         && /not reachable/.test(eNet.message) && classifyErrorCode(eNet) === 'SERVICE_UNREACHABLE',
       `503="${e503.message.slice(0, 60)}" 400="${e400.message.slice(0, 60)}" net="${eNet.message.slice(0, 60)}"`);
+    const flags = { rate: isRetryableLlmError(eRate), s503: isRetryableLlmError(e503), quota: isRetryableLlmError(eQuota), k401: isRetryableLlmError(e401), k403: isRetryableLlmError(e403), r400: isRetryableLlmError(e400), net: isRetryableLlmError(eNet) };
+    check('7d. Errors carry a retryable flag for callers: rate limit and 5xx are retryable; quota, 401, 403, 400 and unreachable are not',
+      flags.rate && flags.s503 && !flags.quota && !flags.k401 && !flags.k403 && !flags.r400 && !flags.net,
+      JSON.stringify(flags));
+  }
+
+  // 7e. the student path: a quota 429 reaches the student at once — no 6 + 12 + 24 s
+  // service-level retry, no switch to the fallback model, no stream reset
+  {
+    const oa = env.LLM.OPENAI as { API_KEY: string; BASE_URL: string };
+    const saved = { key: oa.API_KEY, base: oa.BASE_URL };
+    const m = await startMock(() => apiError(429, 'You exceeded your current quota, please check your plan and billing details.', 'insufficient_quota', 'insufficient_quota'));
+    const realSetTimeout = globalThis.setTimeout as unknown as (fn: () => void, ms?: number, ...rest: unknown[]) => unknown;
+    const waits: number[] = [];
+    // The service's sleep() is a plain two-argument setTimeout(resolve, ms): those waits
+    // are recorded and skipped, so a regression shows here instead of taking 42 s. Every
+    // other timer (fetch's own, which pass extra arguments) runs untouched.
+    (globalThis as { setTimeout: unknown }).setTimeout = ((fn: () => void, ms?: number, ...rest: unknown[]) => {
+      if (rest.length === 0 && (ms ?? 0) >= 1000) { waits.push(ms ?? 0); return realSetTimeout(fn, 0); }
+      return realSetTimeout(fn, ms, ...rest);
+    }) as unknown;
+    let resets = 0;
+    let e: Error;
+    try {
+      oa.API_KEY = KEY; oa.BASE_URL = m.url;
+      const chunk = { id: 1, lecture_id: 1, question: 'What is a prompt?', answer: 'An instruction.', chunk_text: 'Q: What is a prompt?\nA: An instruction.' } as never;
+      e = await rejects(generateAnswer('What is a prompt?', [chunk], 'Lecture', [], [], 1, { onDelta: () => undefined, onReset: () => { resets++; } }));
+    } finally {
+      (globalThis as { setTimeout: unknown }).setTimeout = realSetTimeout;
+      oa.API_KEY = saved.key; oa.BASE_URL = saved.base;
+      m.close();
+    }
+    const models = m.seen.map(s => s.body.model as string);
+    check('7e. generateAnswer (streaming) on a quota 429: ONE request, no service-level wait, no fallback model, no stream reset, the student gets the error',
+      m.seen.length === 1 && waits.length === 0 && resets === 0 && /AI model failed to generate a response/.test(e.message),
+      `requests=${m.seen.length} models=${models.join(',')} waits=${JSON.stringify(waits)} resets=${resets} error="${e.message.slice(0, 70)}"`);
   }
 
   // 8. a timeout is the caller's whole deadline: not retried
@@ -280,6 +321,28 @@ const rejects = async (p: Promise<unknown>): Promise<Error> => p.then(() => new 
         && /OPENAI_API_KEY is not set .*used by RAG_ANSWER, QUERY_ROUTER, GREETING/.test(prod) && dev === 'no throw'
         && /Unknown LLM provider "opneai"/.test(typo) && withKey === 'no throw',
       `groups="${groups}" prod="${prod.slice(0, 90)}" typo="${typo.slice(0, 50)}"`);
+  }
+
+  // 12. the eval judge (scripts/live-llm.ts) caps its one-word reply
+  {
+    const oa = env.LLM.OPENAI as { API_KEY: string; BASE_URL: string };
+    const saved = { key: oa.API_KEY, base: oa.BASE_URL };
+    const m = await startMock((_r, n) => n === 1 ? completion('PASS') : completion('', 'length'));
+    let verdict = '';
+    let cut: Error;
+    try {
+      oa.API_KEY = KEY; oa.BASE_URL = m.url;
+      verdict = await judgeLlm('Respond with exactly one word: PASS or FAIL.');
+      cut = await rejects(judgeLlm('Respond with exactly one word: PASS or FAIL.'));
+    } finally {
+      oa.API_KEY = saved.key; oa.BASE_URL = saved.base;
+      m.close();
+    }
+    const b = m.seen[0]?.body ?? {};
+    check(`12. Eval judge: max_completion_tokens ${JUDGE_MAX_OUTPUT_TOKENS}, reasoning_effort none, temperature 0; an empty reply cut off at the cap stops the run instead of counting as FAIL`,
+      verdict === 'PASS' && b.max_completion_tokens === JUDGE_MAX_OUTPUT_TOKENS && b.reasoning_effort === 'none' && b.temperature === 0
+        && /returned no text within 8 output tokens/.test(cut.message),
+      `max_completion_tokens=${b.max_completion_tokens} effort=${b.reasoning_effort} verdict=${verdict} cut="${cut.message.slice(0, 80)}"`);
   }
 
   const failed = results.filter(r => !r.pass);

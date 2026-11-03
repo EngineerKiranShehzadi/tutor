@@ -3,6 +3,7 @@ import { env } from '../../config/env';
 import { logger } from '../../utils/logger';
 import { NetworkError, postJsonWithRetry, type RetryOptions } from '../../utils/http-retry';
 import { toJsonSchema } from '../json-schema';
+import { LlmProviderError } from '../llm-errors';
 import type { LlmProvider } from './llm-provider.interface';
 import type { LlmRequest, LlmResponse, LlmThinking } from '../llm.types';
 
@@ -111,16 +112,17 @@ export function createOpenAiLlmProvider(opts: OpenAiLlmOptions): LlmProvider {
     return body;
   };
 
-  const fail = (status: number, e: OpenAiError): Error => {
+  // Only a rate limit or an outage is flagged retryable; a quota 429 is not.
+  const fail = (status: number, e: OpenAiError): LlmProviderError => {
     const code = e.code ?? e.type;
-    if (status === 401) return new Error(`OpenAI rejected the API key (401) — check OPENAI_API_KEY: ${e.detail}`);
-    if (status === 403) return new Error(`OpenAI refused the request (403) — check OPENAI_API_KEY: the key, organization or project has no access: ${e.detail}`);
+    if (status === 401) return new LlmProviderError(`OpenAI rejected the API key (401) — check OPENAI_API_KEY: ${e.detail}`, false);
+    if (status === 403) return new LlmProviderError(`OpenAI refused the request (403) — check OPENAI_API_KEY: the key, organization or project has no access: ${e.detail}`, false);
     if (status === 429 && isQuotaError(e)) {
-      return new Error(`OpenAI quota or spend limit reached (429 ${code}) — retrying will not help; check billing and limits: ${e.detail}`);
+      return new LlmProviderError(`OpenAI quota or spend limit reached (429 ${code}) — retrying will not help; check billing and limits: ${e.detail}`, false);
     }
-    if (status === 429) return new Error(`OpenAI rate limit (429${code ? ` ${code}` : ''}) persisted after ${retry.maxRetries} retries: ${e.detail}`);
-    if (status >= 500) return new Error(`OpenAI service unavailable (${status}) after ${retry.maxRetries} retries: ${e.detail}`);
-    return new Error(`OpenAI request rejected (${status}${code ? ` ${code}` : ''}): ${e.detail}`);
+    if (status === 429) return new LlmProviderError(`OpenAI rate limit (429${code ? ` ${code}` : ''}) persisted after ${retry.maxRetries} retries: ${e.detail}`, true);
+    if (status >= 500) return new LlmProviderError(`OpenAI service unavailable (${status}) after ${retry.maxRetries} retries: ${e.detail}`, true);
+    return new LlmProviderError(`OpenAI request rejected (${status}${code ? ` ${code}` : ''}): ${e.detail}`, false);
   };
 
   // One request, with the parameter fallbacks above. Returns the OK response.

@@ -53,7 +53,7 @@ ALTER TABLE lectures ADD COLUMN IF NOT EXISTS dataset_original_filename TEXT;
 
 -- ─────────────────────────────────────────────
 -- 4. lecture_qna_chunks  (core RAG table)
---    embedding vector(768) = Gemini text-embedding-004
+--    local_embedding is the retrieval vector; embedding is a legacy, unused column
 -- ─────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS lecture_qna_chunks (
   id          SERIAL PRIMARY KEY,
@@ -65,14 +65,14 @@ CREATE TABLE IF NOT EXISTS lecture_qna_chunks (
   start_time  TEXT,
   end_time    TEXT,
   keywords    TEXT,
-  embedding   vector(3072),  -- gemini-embedding-001 returns 3072 dims
+  embedding   vector(3072),  -- legacy, unused (left by an earlier embedding model)
   llm_name    TEXT,
   created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ALTER TABLE lecture_qna_chunks ADD COLUMN IF NOT EXISTS llm_name TEXT;
 
--- local_embedding: retrieval-model vector, distinct from the unused
--- Gemini `embedding` column above.
+-- local_embedding: retrieval-model vector, distinct from the unused legacy
+-- `embedding` column above.
 --   BAAI/bge-large-en-v1.5 returns 1024 dims (previously all-MiniLM-L6-v2, 384 dims).
 ALTER TABLE lecture_qna_chunks ADD COLUMN IF NOT EXISTS local_embedding vector(1024);
 -- Switching retrieval models: old vectors are a different dimension/space and

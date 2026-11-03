@@ -14,8 +14,8 @@ Live facts (read-only query): PostgreSQL 17.11, pgvector 0.8.0, database size 27
 * Both are idempotent and run in one transaction each. Measured on the 2.8k-chunk copy: **0.35 s** for both.
 
 ## 1. Go / no-go gates (all must hold)
-1. Owner approval for the live migration. 2. Gemini quota restored (otherwise live chat cannot be smoke-tested end to end; the
-migration itself does not depend on it). 3. `preflight.sql` clean: no lecture in `DATASET_UPLOADED/PROCESSING/EMBEDDING`, zero READY lectures
+1. Owner approval for the live migration. 2. `npm run smoke:providers` passes — the OpenAI key works and has quota left (otherwise live
+chat cannot be smoke-tested end to end; the migration itself does not depend on it). 3. `preflight.sql` clean: no lecture in `DATASET_UPLOADED/PROCESSING/EMBEDDING`, zero READY lectures
 with un-embedded chunks, `pgvector` present. 4. Backup verified (section 2). 5. No admin uploads during the window.
 
 ## 2. Backup (before anything is touched)
@@ -38,7 +38,7 @@ Use the **direct** (non-pooler) Neon connection string for dump and migration.
 | 3 | `psql … -f ops/neon-migration/postcheck.sql` | every row `t` |
 | 4 | `psql … -At -F'\|' -f ops/neon-migration/snapshot.sql` and diff with the pre-migration `snapshot-source.txt` | identical |
 | 5 | Deploy the **backend** (new code). On boot it resumes any interrupted build (none expected) | log: `backend running`, no `[DATASET]` errors |
-| 6 | Smoke test: each lecture opens for a student; a previously cached question is answered (memory hit needs no Gemini); admin → lectures → each shows **Live: version 1 · initial** | all 7 lectures |
+| 6 | Smoke test: each lecture opens for a student; a previously cached question is answered (a memory hit makes no LLM call); admin → lectures → each shows **Live: version 1 · initial** | all 7 lectures |
 | 7 | Deploy the **frontend** (new admin dataset screen) | admin screen loads |
 | 8 | First real update on one low-traffic lecture: choose file → read the preview → apply | v2 Live; students unaffected meanwhile |
 
@@ -59,7 +59,8 @@ Between step 2 and step 5 the old backend keeps chatting normally; the only effe
 * Neon-specific behaviour (branch creation, pooler, PITR window) — owner/console actions; use the direct connection for DDL and dump.
 * The stand-in copy has no real `chat_history` rows; chat-source safety is covered by the pipeline tests and the browser run instead.
   `preflight.sql` on the live DB reports its real history counts before anything is changed.
-* Real Gemini answers (quota 429 here). Retrieval, versions, caching and rollback were verified with Gemini stubbed.
+* Real LLM answers (the provider used at rehearsal time had no quota left). Retrieval, versions, caching and rollback were verified
+  with the LLM stubbed; gate 2 and step 6 cover real answers.
 
 Repeat the full rehearsal any time (needs the two docker containers):
 `BASELINE_BACKEND=<backend dir of the previous commit> backend/ops/neon-migration/rehearse.sh`

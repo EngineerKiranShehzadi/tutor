@@ -12,8 +12,8 @@ export function classifyErrorCode(err: unknown): string {
   const msg = String((err as Error)?.message ?? '').toLowerCase();
   if (msg.includes('timeout') || msg.includes('aborted')) return 'TIMEOUT';
   if (msg.includes('not reachable') || msg.includes('econnrefused') || msg.includes('fetch failed')) return 'SERVICE_UNREACHABLE';
-  if (msg.includes('rate limit') || msg.includes('quota') || msg.includes('resource_exhausted') || msg.includes('429')) return 'RATE_LIMITED';
-  if (msg.includes('service unavailable') || msg.includes('503') || msg.includes('high demand')) return 'SERVICE_UNAVAILABLE';
+  if (msg.includes('rate limit') || msg.includes('quota') || msg.includes('429')) return 'RATE_LIMITED';
+  if (msg.includes('service unavailable') || msg.includes('503')) return 'SERVICE_UNAVAILABLE';
   if (msg.includes('invalid input syntax') || msg.includes('violates') || msg.includes('constraint')) return 'DB_CONSTRAINT_ERROR';
   if (msg.includes('econnrefused') || msg.includes('connection')) return 'CONNECTION_ERROR';
   return 'UNKNOWN_ERROR';

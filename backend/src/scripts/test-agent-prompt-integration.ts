@@ -22,6 +22,7 @@ import {
   AnswerStreamHandlers,
 } from '../services/answer-generation.service';
 import { openAiLlmProvider } from '../llm/providers/openai-llm.provider';
+import { LlmProviderError } from '../llm/llm-errors';
 import type { LlmRequest, LlmResponse } from '../llm/llm.types';
 import { INSTRUCTIONS_BY_VIDEO_ID } from './seed-agent-profiles';
 
@@ -245,7 +246,7 @@ cases.push({
 cases.push({
   label: '11. Retry after transient errors keeps the same agent profile (identical prompt on every attempt)',
   run: async () => {
-    const err429 = new Error('429 quota exceeded RESOURCE_EXHAUSTED');
+    const err429 = new LlmProviderError('OpenAI rate limit (429 rate_limit_exceeded) persisted after 2 retries: simulated', true);
     const { value, requests } = await withFakeProvider([err429, err429, 'final answer'], () =>
       generateAnswer(QUESTION, CHUNKS, TITLE, HISTORY, [], 1, undefined, CLARITY));
     const prompts = requests.map(r => r.userPrompt);
@@ -260,7 +261,7 @@ cases.push({
 cases.push({
   label: '12. Retry without a profile stays profile-free (no agent block appears on retry)',
   run: async () => {
-    const err503 = new Error('503 service unavailable');
+    const err503 = new LlmProviderError('OpenAI service unavailable (503) after 2 retries: simulated', true);
     const { value, requests } = await withFakeProvider([err503, 'ok after retry'], () =>
       generateAnswer(QUESTION, CHUNKS, TITLE, [], [], 1));
     const golden = legacyPrompt(QUESTION, CHUNKS, TITLE, [], []);

@@ -18,6 +18,7 @@ import { searchChunks } from '../services/vector-search.service';
 import { rerankChunks, reorderForContext } from '../services/rerank.service';
 import { generateAnswer } from '../services/answer-generation.service';
 import { judgeLlm, requireLiveLlm } from './live-llm';
+import { isRetryableLlmError } from '../llm/llm-errors';
 import { getLectureById } from '../services/lecture.service';
 import { QnaChunk } from '../types';
 import { logger } from '../utils/logger';
@@ -34,10 +35,9 @@ async function askJudge(prompt: string, attempt = 1): Promise<boolean> {
   try {
     return (await judgeLlm(prompt)).trim().toUpperCase().startsWith('PASS');
   } catch (err: unknown) {
-    const msg = String((err as Error).message ?? '');
-    const isRateLimit = msg.includes('429') || msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('resource_exhausted');
-    const isOverloaded = msg.includes('503') || msg.toLowerCase().includes('service unavailable') || msg.toLowerCase().includes('high demand');
-    if ((isRateLimit || isOverloaded) && attempt <= 5) {
+    // Wait only on what the adapter flags retryable (a rate limit or an outage).
+    // A quota 429 is not flagged, so the run stops at once instead of hanging.
+    if (isRetryableLlmError(err) && attempt <= 5) {
       const wait = Math.pow(2, attempt) * 4000;
       logger.warn(`[JUDGE] Rate limited on attempt ${attempt}/5 — retrying in ${wait / 1000}s...`);
       await sleep(wait);

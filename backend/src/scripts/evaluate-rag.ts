@@ -16,13 +16,18 @@ import { searchChunks } from '../services/vector-search.service';
 import { rerankChunks } from '../services/rerank.service';
 import { generateAnswer } from '../services/answer-generation.service';
 import { judgeLlm, requireLiveLlm } from './live-llm';
+import { isRetryableLlmError } from '../llm/llm-errors';
 import { getLectureById } from '../services/lecture.service';
 import { QnaChunk } from '../types';
 import { logger } from '../utils/logger';
 
 const NUM_EVAL_QUESTIONS = 20;
 const RERANK_TOP_N = 5;
-const CANDIDATE_POOL_SIZES = [5, 10, 15, 20, 30];
+// Three points across the range (narrowest, middle, widest): the run is
+// questions x pool sizes iterations, each one answer + two judge calls, so
+// fewer points is the cost lever. Answer length is not cut: the eval must see
+// the same answers production gives.
+const CANDIDATE_POOL_SIZES = [5, 15, 30];
 requireLiveLlm();
 
 const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
@@ -31,10 +36,9 @@ async function askJudge(prompt: string, attempt = 1): Promise<boolean> {
   try {
     return (await judgeLlm(prompt)).trim().toUpperCase().startsWith('PASS');
   } catch (err: unknown) {
-    const msg = String((err as Error).message ?? '');
-    const isRateLimit = msg.includes('429') || msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('resource_exhausted');
-    const isOverloaded = msg.includes('503') || msg.toLowerCase().includes('service unavailable') || msg.toLowerCase().includes('high demand');
-    if ((isRateLimit || isOverloaded) && attempt <= 5) {
+    // Wait only on what the adapter flags retryable (a rate limit or an outage).
+    // A quota 429 is not flagged, so the run stops at once instead of hanging.
+    if (isRetryableLlmError(err) && attempt <= 5) {
       const wait = Math.pow(2, attempt) * 4000;
       logger.warn(`[JUDGE] Rate limited on attempt ${attempt}/5 — retrying in ${wait / 1000}s...`);
       await sleep(wait);
