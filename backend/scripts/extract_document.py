@@ -126,7 +126,7 @@ def html_units(data, warnings):
     for element in root.find_all(["h1", "h2", "h3", "h4", "p", "li", "pre", "blockquote"]):
         element.insert_before(soup.new_string("\n"))
         element.insert_after(soup.new_string("\n"))
-    text = clean(root.get_text(" ", strip=True))
+    text = clean(root.get_text(" ", strip=False))
     return [{"locator": "Document", "text": text}] if text else []
 
 
@@ -158,13 +158,22 @@ def extract(data, extension):
 
 
 def main():
+    # Bound CPU and virtual memory on Unix/Linux hosts. Node also enforces a
+    # wall-clock timeout, so malformed inputs cannot block API workers forever.
+    try:
+        import resource
+        resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
+        resource.setrlimit(resource.RLIMIT_CPU, (20, 22))
+    except (ImportError, OSError, ValueError):
+        pass
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--extension", required=True)
     args = parser.parse_args()
     try:
         data = sys.stdin.buffer.read(MAX_BYTES + 1)
         print(json.dumps(extract(data, args.extension), ensure_ascii=False))
-    except (ValueError, UnicodeError, OSError, Exception) as exc:
+    except Exception as exc:
         # Return a controlled, bounded message; never echo file content or tracebacks.
         print(json.dumps({"error": str(exc)[:250]}, ensure_ascii=False))
         sys.exit(2)
