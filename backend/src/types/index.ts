@@ -70,6 +70,7 @@ export type LectureStatus =
 export interface Lecture {
   id: number;
   course_id: number;
+  agent_name?: string | null;
   title: string;
   description: string | null;
   youtube_url: string;
