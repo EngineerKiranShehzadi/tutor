@@ -12,6 +12,12 @@ on:
       - 'backend/src/controllers/dataset.controller.ts'
       - 'frontend/src/components/admin/DatasetManager.tsx'
       - '.github/workflows/multi-format-ingestion.yml'
+      - 'backend/src/db/migrations/022_courses.sql'
+      - 'backend/src/services/course.service.ts'
+      - 'backend/src/graphql/**'
+      - 'frontend/src/app/(admin)/admin/courses/**'
+      - 'frontend/src/app/(dashboard)/courses/**'
+      - 'frontend/src/app/(dashboard)/lectures/**'
 
 jobs:
   document-extraction:
@@ -48,3 +54,43 @@ jobs:
       - name: Typecheck frontend
         working-directory: frontend
         run: npm run typecheck
+
+  courses-migration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: offline-test
+          POSTGRES_DB: courses_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d courses_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGPASSWORD: offline-test
+      PGDATABASE: courses_test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL client if missing
+        run: command -v psql || (sudo apt-get update && sudo apt-get install -y postgresql-client)
+      - name: Create pre-course schema and legacy lectures
+        run: |
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/schema.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrate.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/scripts/test-courses-pre.sql
+      - name: Apply new course migration and verify preservation
+        run: |
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/022_courses.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/scripts/test-courses-post.sql
+      - name: Confirm migration idempotence and course isolation
+        run: |
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/022_courses.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/scripts/test-courses-rerun.sql
