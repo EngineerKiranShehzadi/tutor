@@ -33,6 +33,11 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Test document-to-RAG mapping
         working-directory: backend
+        env:
+          # Safe dummy values only: this test never connects to a database.
+          DB_PASSWORD: offline-test
+          JWT_SECRET: offline-test-access-secret-at-least-32-bytes
+          JWT_REFRESH_SECRET: offline-test-refresh-secret-at-least-32-bytes
         run: npm run test:document-ingestion
       - name: Typecheck backend
         working-directory: backend
