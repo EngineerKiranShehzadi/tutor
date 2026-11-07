@@ -1,5 +1,7 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { GET_COURSES } from '@/graphql/course.queries';
+import { DBCourse } from '@/types/course';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useQuery, useMutation } from '@apollo/client';
@@ -37,9 +39,15 @@ export default function AdminLectures() {
   const [search,      setSearch]      = useState('');
   const [deleteId,    setDeleteId]    = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState('');
+  const [courseFilter, setCourseFilter] = useState('');
+  const { data: courseData } = useQuery(GET_COURSES);
+  const courses: DBCourse[] = courseData?.courses ?? [];
+  useEffect(() => {
+    setCourseFilter(new URLSearchParams(window.location.search).get('courseId') ?? '');
+  }, []);
 
   const allLectures: DBLecture[] = data?.lectures ?? [];
-  const lectures    = allLectures.filter(l => !search || l.title.toLowerCase().includes(search.toLowerCase()));
+  const lectures    = allLectures.filter(l => (!courseFilter || l.courseId === courseFilter) && (!search || l.title.toLowerCase().includes(search.toLowerCase())));
   const readyCount  = allLectures.filter(l => agentById.get(Number(l.id))?.chatReady === true).length;
   const activeCount = allLectures.filter(l => l.status === 'PROCESSING' || l.status === 'EMBEDDING').length;
   const noDataCount = allLectures.filter(l => l.status === 'NO_DATASET').length;
@@ -64,7 +72,7 @@ export default function AdminLectures() {
         subtitle={`${allLectures.length} total · ${readyCount} AI-ready`}
         action={
           <Link
-            href="/admin/lectures/create"
+            href={courseFilter ? `/admin/lectures/create?courseId=${encodeURIComponent(courseFilter)}` : '/admin/lectures/create'}
             className="flex items-center gap-2 px-5 py-2.5 bg-white/15 text-white border border-white/25 backdrop-blur-sm rounded-xl text-[14px] font-semibold hover:bg-white/25 active:scale-95 transition-all"
           >
             <i className="fas fa-plus text-[11px]" /> New Lecture
@@ -95,6 +103,20 @@ export default function AdminLectures() {
         })}
       </div>
 
+      {/* Course filter, separate from existing lecture search */}
+      <div className="mb-4 flex gap-3 items-center">
+        <label htmlFor="admin-lecture-course-filter" className="text-sm font-semibold text-slate-600">Course</label>
+        <select
+          id="admin-lecture-course-filter"
+          value={courseFilter}
+          onChange={e => setCourseFilter(e.target.value)}
+          className="bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-700"
+        >
+          <option value="">All courses</option>
+          {courses.map(c => <option key={c.id} value={c.id}>{c.title}</option>)}
+        </select>
+        <Link href="/admin/courses" className="text-sm text-indigo-600 hover:underline">Manage courses</Link>
+      </div>
       {/* Search */}
       <div className="relative mb-5">
         <i className="fas fa-search absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-[13px]" />
@@ -186,6 +208,9 @@ export default function AdminLectures() {
                     {/* Title + video id */}
                     <div className="flex-1 min-w-0">
                       <p className="text-[15px] font-semibold text-slate-800 truncate leading-snug">{lec.title}</p>
+                      <p className="text-[11px] text-indigo-500 mt-0.5 truncate">
+                        {courses.find(c => c.id === lec.courseId)?.title ?? 'Course'}
+                      </p>
                       {agentNotReady && agentById.get(Number(lec.id))?.notReadyReason && (
                         <p className="text-[11px] text-amber-700 mt-0.5 truncate" title={agentById.get(Number(lec.id))?.notReadyReason ?? ''}>
                           {agentById.get(Number(lec.id))?.notReadyReason}
