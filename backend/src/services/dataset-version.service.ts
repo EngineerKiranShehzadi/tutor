@@ -9,7 +9,7 @@ import {
   EmbeddingUnavailableError, EmbeddingRateLimitedError, EmbeddingQuotaExceededError,
 } from './embedding.service';
 import { env } from '../config/env';
-import { parseExcel, toFileRowsReport, buildChunkPiecesReport, CHUNKING_CONFIG_VERSION, MAX_PIECES_PER_ROW, SkippedRow } from './chunk.service';
+import { parseExcel, toFileRowsReport, buildChunkPiecesReport, CHUNKING_CONFIG_VERSION, MAX_PIECES_PER_ROW, SkippedRow, RawRow } from './chunk.service';
 import { getLectureById, updateLectureProgress, updateLectureStatus } from './lecture.service';
 import { matchRows, fieldsEqual, findPossibleDuplicates, PossibleDuplicate, ActiveQa, QaFields, FileRow } from './dataset-plan';
 import { notifyAllStudents } from './notification.service';
@@ -110,6 +110,9 @@ export interface PrepareOptions {
   // Plan and report only; write nothing.
   dryRun?: boolean;
   filename?: string;
+  // Document ingestion supplies already-extracted source sections; Excel keeps
+  // using parseExcel(buffer), without changing its existing validation path.
+  rawRows?: RawRow[];
   // Runs after the plan is validated and right before anything is written
   // (the controller archives the raw file to S3 here, as it always did).
   beforeBuild?: (info: { firstVersion: boolean }) => Promise<void>;
@@ -462,7 +465,7 @@ export async function prepareDatasetVersion(
   if (mode !== 'MERGE' && mode !== 'REPLACE') throw new AppError('mode must be MERGE or REPLACE', 400);
 
   logger.info(`[DATASET] 🚀 Preparing ${mode} update for lecture #${lectureId}`);
-  const rawRows = parseExcel(buffer);
+  const rawRows = opts.rawRows ?? parseExcel(buffer);
   const fileHasQaIdColumn = rawRows.length > 0 && 'qa_id' in rawRows[0];
   const { rows: fileRows, skipped } = toFileRowsReport(rawRows);
   if (fileRows.length === 0) throw new AppError('No valid rows found in the dataset', 400);
