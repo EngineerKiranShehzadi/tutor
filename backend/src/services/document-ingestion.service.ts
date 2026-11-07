@@ -1,7 +1,7 @@
 import { spawn } from 'child_process';
 import path from 'path';
 import { AppError } from '../middleware/errorHandler';
-import { RawRow } from './chunk.service';
+import type { RawRow } from './chunk.service';
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 import { env } from '../config/env';
 
@@ -21,7 +21,7 @@ export type DocumentRowsResult = { rows: RawRow[]; warnings: string[]; units: nu
 
 const PYTHON_BIN = process.env.DOCUMENT_EXTRACT_PYTHON || 'python3';
 const EXTRACT_SCRIPT = path.resolve(__dirname, '../../scripts/extract_document.py');
-const MAX_RESULT_BYTES = 1_500_000;
+const MAX_RESULT_BYTES = 4_000_000; // 900k Unicode characters can occupy >1 MB in JSON
 const EXTRACT_TIMEOUT_MS = 30_000;
 
 // Separate limits for different risks: compressed upload, extracted text,
@@ -119,7 +119,6 @@ export const documentToRows = async (
       rows.push({
         question,
         answer: parts[part],
-        topic: null as any,
         start_time: `${safeName} | ${locator}`,
       });
       if (rows.length > env.DATASET.MAX_ROWS) {
