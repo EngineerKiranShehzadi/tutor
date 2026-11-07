@@ -35,6 +35,7 @@ export interface ApiResponse<T = undefined> {
 // ── DB Lecture (from GraphQL) ─────────────────────────
 export interface DBLecture {
   id:              string;
+  courseId:        string;
   title:           string;
   description?:    string;
   youtubeUrl:      string;
