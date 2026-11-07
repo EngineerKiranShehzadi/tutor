@@ -3,3 +3,8 @@ dist/
 .env
 *.log
 coverage/
+
+# Local Python document extractor environment
+.venv/
+__pycache__/
+*.pyc
