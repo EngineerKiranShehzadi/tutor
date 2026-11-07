@@ -35,7 +35,7 @@ const MAX_AGENT_INSTRUCTIONS_CHARS = 4000;
 export const createLecture = async (input: {
   title: string;
   description?: string;
-  youtubeUrl: string;
+  youtubeUrl?: string;
   agentName: string;
   agentInstructions: string;
   courseId?: number;
@@ -51,7 +51,7 @@ export const createLecture = async (input: {
     throw new AppError(`AI agent instructions must be at most ${MAX_AGENT_INSTRUCTIONS_CHARS} characters`, 400);
   }
 
-  const videoId = validateYoutubeUrl(youtubeUrl);
+  const videoId = youtubeUrl?.trim() ? validateYoutubeUrl(youtubeUrl) : null;
   const courseId = input.courseId ?? await defaultCourseId();
   await getCourse(courseId);
 
@@ -67,7 +67,7 @@ export const createLecture = async (input: {
        SELECT id, $5, $6 FROM new_lecture
      )
      SELECT * FROM new_lecture`,
-    [title.trim(), description?.trim() ?? null, youtubeUrl.trim(), videoId, agentName, agentInstructions, courseId]
+    [title.trim(), description?.trim() ?? null, youtubeUrl?.trim() ?? '', videoId, agentName, agentInstructions, courseId]
   );
 
   const lecture = rows[0];
