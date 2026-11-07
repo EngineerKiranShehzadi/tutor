@@ -12,11 +12,12 @@ import { NotificationBell } from '@/components/layout/NotificationBell';
 // /lecture/4, not /courses/4, so matching on href alone left nothing underlined
 // the moment a lecture was opened — the header then gave no clue where you were.
 const NAV_LINKS = [
+  { href: '/courses', label: 'Courses', icon: 'fas fa-layer-group', section: ['/courses'] },
   {
-    href: '/courses',
+    href: '/lectures',
     label: 'Lectures',
     icon: 'fas fa-circle-play',
-    section: ['/courses', '/lecture'],
+    section: ['/lectures', '/lecture'],
   },
   {
     href: '/profile/activity',
