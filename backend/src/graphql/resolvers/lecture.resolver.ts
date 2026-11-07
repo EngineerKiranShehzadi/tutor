@@ -30,6 +30,7 @@ function toGql(lecture: import('../../types').Lecture) {
   return {
     id: String(lecture.id),
     title: lecture.title,
+    courseId: String(lecture.course_id),
     description: lecture.description ?? null,
     youtubeUrl: lecture.youtube_url,
     youtubeVideoId: lecture.youtube_video_id ?? null,
@@ -52,11 +53,11 @@ function wrap(fn: () => Promise<unknown>) {
 
 export const lectureResolvers = {
   Query: {
-    lectures: (_: unknown, __: unknown, ctx: GraphQLContext) =>
+    lectures: (_: unknown, args: { courseId?: number }, ctx: GraphQLContext) =>
       wrap(async () => {
         const user = requireAuth(ctx);
         logger.info(`[GRAPHQL] lectures query by "${user.email}" (${user.role})`);
-        const list = await getLectures();
+        const list = await getLectures(args.courseId);
         logger.info(`[GRAPHQL] ✅ lectures: returned ${list.length} lecture(s) to "${user.email}"`);
         return list.map(toGql);
       }),
@@ -73,7 +74,7 @@ export const lectureResolvers = {
   Mutation: {
     createLecture: (
       _: unknown,
-      { input }: { input: { title: string; description?: string; youtubeUrl: string; agentName: string; agentInstructions: string } },
+      { input }: { input: { title: string; description?: string; youtubeUrl: string; agentName: string; agentInstructions: string; courseId?: number } },
       ctx: GraphQLContext
     ) =>
       wrap(async () => {
@@ -86,7 +87,7 @@ export const lectureResolvers = {
 
     updateLecture: (
       _: unknown,
-      { id, input }: { id: string; input: { title?: string; description?: string; youtubeUrl?: string } },
+      { id, input }: { id: string; input: { title?: string; description?: string; youtubeUrl?: string; courseId?: number } },
       ctx: GraphQLContext
     ) =>
       wrap(async () => {
