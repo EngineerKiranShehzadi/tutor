@@ -5,6 +5,7 @@ export const GET_LECTURES = gql`
     lectures {
       id
       courseId
+      agentName
       title
       description
       youtubeUrl
@@ -21,6 +22,7 @@ export const GET_LECTURE = gql`
     lecture(id: $id) {
       id
       courseId
+      agentName
       title
       description
       youtubeUrl
@@ -40,6 +42,7 @@ export const CREATE_LECTURE_MUTATION = gql`
       id
       courseId
       courseId
+      agentName
       title
       status
     }
@@ -51,6 +54,7 @@ export const UPDATE_LECTURE_MUTATION = gql`
     updateLecture(id: $id, input: $input) {
       id
       courseId
+      agentName
       title
       description
       youtubeUrl
