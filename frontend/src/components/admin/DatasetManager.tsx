@@ -63,6 +63,7 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [mode, setMode] = useState<DatasetMode>('MERGE');
   const [file, setFile] = useState<File | null>(null);
+  const [extractionWarnings, setExtractionWarnings] = useState<string[]>([]);
   const [phase, setPhase] = useState<Phase>('idle');
   const [preview, setPreview] = useState<DatasetPreview | null>(null);
   // The dry run plans the file in both modes; switching mode reads from here
@@ -131,11 +132,12 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
   }, [inFlight, versions]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const analyse = useCallback(async (f: File, m: DatasetMode) => {
-    setPhase('analysing'); setError(''); setNotice(''); setPreview(null); setPreviews({}); setConfirmed(false);
+    setPhase('analysing'); setError(''); setNotice(''); setPreview(null); setPreviews({}); setConfirmed(false); setExtractionWarnings([]);
     try {
       const res = await datasetApi.upload(lectureId, f, { mode: m, dryRun: true });
-      const data = res.data.data as { preview: DatasetPreview; previews?: Record<DatasetMode, DatasetPreview> };
+      const data = res.data.data as { preview: DatasetPreview; previews?: Record<DatasetMode, DatasetPreview>; extractionWarnings?: string[] };
       setPreviews(data.previews ?? { [m]: data.preview });
+    setExtractionWarnings(data.extractionWarnings ?? []);
       setPreview(data.preview);
       setPhase('preview');
     } catch (err) {
@@ -147,7 +149,7 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
   const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (!f) return;
-    if (!f.name.toLowerCase().endsWith('.xlsx')) { setError('Only .xlsx files are accepted.'); return; }
+    if (!/\.(xlsx|pdf|docx|pptx|txt|html|htm)$/i.test(f.name)) { setError('Use .xlsx, .pdf, .docx, .pptx, .txt or .html files.'); return; }
     setFile(f);
     void analyse(f, mode);
   };
@@ -164,7 +166,7 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
   };
 
   const reset = () => {
-    setFile(null); setPreview(null); setPreviews({}); setPhase('idle'); setConfirmed(false);
+    setFile(null); setPreview(null); setPreviews({}); setPhase('idle'); setConfirmed(false); setExtractionWarnings([]);
     if (fileRef.current) fileRef.current.value = '';
   };
 
@@ -279,7 +281,7 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
 
       <div className="p-6 flex flex-col gap-5">
         <p className="text-[15px] text-slate-500 leading-relaxed">
-          Upload a Q&amp;A spreadsheet. The AI tutor keeps answering from the live version until the new one is fully embedded and validated.
+          Upload Q&amp;A Excel or lecture notes (PDF, DOCX, PPTX, TXT, HTML). Documents are converted into searchable sections without manual Q&amp;A preparation. The live version stays available during processing.
           To edit existing rows, export first and keep the <code className="font-mono text-[13px] bg-slate-100 px-1 rounded">qa_id</code> column.
         </p>
 
@@ -311,14 +313,14 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
 
         {/* File picker */}
         <div className="flex items-center gap-4 flex-wrap">
-          <input ref={fileRef} type="file" accept=".xlsx" className="hidden" onChange={onFile} data-testid="dataset-file-input" />
+          <input ref={fileRef} type="file" accept=".xlsx,.pdf,.docx,.pptx,.txt,.html,.htm" className="hidden" onChange={onFile} data-testid="dataset-file-input" />
           <button
             onClick={() => fileRef.current?.click()}
             disabled={busy}
             data-testid="dataset-choose-file"
             className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 text-white rounded-xl text-[15px] font-semibold hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
           >
-            <i className="fas fa-cloud-arrow-up" /> {hasDataset ? 'Choose updated .xlsx' : 'Choose dataset .xlsx'}
+            <i className="fas fa-cloud-arrow-up" /> {hasDataset ? 'Choose updated content' : 'Choose learning material'}
           </button>
           {file && <span className="text-[14px] text-slate-600 font-mono">{file.name}</span>}
           {phase === 'analysing' && (
@@ -328,7 +330,14 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
         </div>
 
         {/* Preview */}
-        {preview && (phase === 'preview' || phase === 'applying') && (
+        {extractionWarnings.length > 0 && (
+            <div role="alert" className="my-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900" data-testid="extraction-warnings">
+              <b>Some content could not be extracted:</b>
+              <ul className="list-disc ml-5 mt-1">{extractionWarnings.map((warning, i) => <li key={i}>{warning}</li>)}</ul>
+              <p>Scanned pages and diagrams need OCR or text captions. Review before applying.</p>
+            </div>
+          )}
+          {preview && (phase === 'preview' || phase === 'applying') && (
           <div className="border border-slate-200 rounded-2xl overflow-hidden" data-testid="dataset-preview">
             <div className="px-5 py-3 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
               <span className="text-[14px] font-semibold text-slate-700">
