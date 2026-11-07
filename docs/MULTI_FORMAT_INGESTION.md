@@ -67,7 +67,7 @@ The existing Q&A row format remains unchanged. The RAG answer generator sees the
 - **Office ZIP checks**: at most 500 entries, at most 20 MB expanded, at most 10 MB per entry; rejects encrypted archives.
 - **PDF max 500 pages; PPTX max 500 slides**, and extracted text capped to 900,000 characters.
 - **At most DATASET_MAX_ROWS (default 1,000) document sections** per upload; oversized documents must be split.
-- **30-second extraction timeout**, max 1.5 MB JSON output from the extractor.
+- **30-second extraction timeout**, max 4 MB JSON output from the extractor.
 - Python subprocess does **not** receive command strings, user-controlled paths, or shell arguments other than an allowlisted extension. It reads file bytes from stdin, does not fetch URLs, and does not write uploaded files to disk.
 - Malformed, empty, image-only, encrypted or unreadable documents fail with a visible error. Pages/slides with missing selectable text appear as **warnings** in the dry-run preview.
 - There is **no OCR**. Scanned PDFs, images of code, and diagrams may lose content even if extraction finishes; verify the material before activating it.
