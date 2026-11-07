@@ -9,10 +9,11 @@ import {
 import { uploadRawDataset, isS3Configured } from '../services/s3-storage.service';
 import { sendSuccess, sendError } from '../utils/response';
 import { logger } from '../utils/logger';
+import { supportedDatasetExtension, runDocumentExtractor, documentToRows } from '../services/document-ingestion.service';
 
 const parseLectureId = (req: AuthenticatedRequest): number => parseInt(req.params['lectureId'] ?? '', 10);
 
-// POST /datasets/upload/:lectureId   multipart: file, [mode=MERGE|REPLACE], [confirmRemovals=<n>], [dryRun=true]
+// POST /datasets/upload/:lectureId   multipart: xlsx/pdf/docx/pptx/txt/html, [mode=MERGE|REPLACE], [confirmRemovals=<n>], [dryRun=true]
 //
 // The uploaded file is planned against the lecture's active dataset first
 // (validation, ambiguity checks, what would be added / updated / removed). Only
@@ -32,14 +33,13 @@ export const uploadDataset = async (
   }
 
   if (!req.file) {
-    sendError(res, 'No file uploaded. Please attach an .xlsx file.', 400);
+    sendError(res, 'No file uploaded. Attach an .xlsx, .pdf, .docx, .pptx, .txt or .html file.', 400);
     return;
   }
 
-  // Only accept .xlsx
-  const originalName = req.file.originalname.toLowerCase();
-  if (!originalName.endsWith('.xlsx')) {
-    sendError(res, 'Invalid file type. Only .xlsx files are accepted.', 400);
+  const extension = supportedDatasetExtension(req.file.originalname);
+  if (!extension) {
+    sendError(res, 'Supported formats: .xlsx, .pdf, .docx, .pptx, .txt, .html, .htm', 400);
     return;
   }
 
@@ -66,8 +66,12 @@ export const uploadDataset = async (
 
     logger.info(`[UPLOAD] Admin "${req.user?.email}" uploading dataset for lecture #${lectureId} "${lecture.title}" (mode=${mode}${dryRun ? ', dry run' : ''})`);
 
+    const document = extension === '.xlsx'
+      ? null
+      : await documentToRows(file.originalname, await runDocumentExtractor(file.buffer, extension));
     const result = await prepareDatasetVersion(lectureId, file.buffer, {
       mode, dryRun, confirmRemovals, filename: file.originalname,
+      ...(document ? { rawRows: document.rows } : {}),
       // Runs once the upload is known to be valid and just before anything is
       // written. Archive the raw file exactly as uploaded, before any parsing/
       // chunking touches it. Awaited (not fire-and-forget): if raw storage
@@ -90,11 +94,11 @@ export const uploadDataset = async (
     });
 
     if (result.kind === 'DRY_RUN') {
-      sendSuccess(res, 'Dry run — nothing was changed.', { lectureId, preview: result.preview, previews: result.previews });
+      sendSuccess(res, 'Dry run — nothing was changed.', { lectureId, preview: result.preview, previews: result.previews, extractionWarnings: document?.warnings ?? [] });
       return;
     }
     if (result.kind === 'NOOP') {
-      sendSuccess(res, 'The uploaded file matches the active dataset — nothing to update.', { lectureId, preview: result.preview });
+      sendSuccess(res, 'The uploaded file matches the active dataset — nothing to update.', { lectureId, preview: result.preview, extractionWarnings: document?.warnings ?? [] });
       return;
     }
 
@@ -103,7 +107,7 @@ export const uploadDataset = async (
     // only starts below); the lecture's own status is not reported (it stays
     // READY when a dataset is live, EMBEDDING for a first upload).
     sendSuccess(res, 'Dataset uploaded. Building the new version in the background; the current dataset stays live until it is complete.', {
-      lectureId, versionStatus: result.versionStatus, versionId: result.versionId, versionNo: result.versionNo, preview: result.preview,
+      lectureId, versionStatus: result.versionStatus, versionId: result.versionId, versionNo: result.versionNo, preview: result.preview, extractionWarnings: document?.warnings ?? [],
     });
 
     // Embed + validate + publish asynchronously so the HTTP response is already sent
