@@ -25,3 +25,23 @@ SET course_id = (SELECT id FROM courses WHERE legacy_key = 'original-playlist')
 WHERE course_id IS NULL;
 ALTER TABLE lectures ALTER COLUMN course_id SET NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_lectures_course_id ON lectures(course_id);
+
+-- Compatibility for legacy seed/test scripts that still insert a lecture
+-- without course_id. New admin mutations explicitly choose their course.
+CREATE OR REPLACE FUNCTION ensure_lecture_course_id()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.course_id IS NULL THEN
+    SELECT id INTO NEW.course_id FROM courses WHERE legacy_key = 'original-playlist' LIMIT 1;
+  END IF;
+  IF NEW.course_id IS NULL THEN
+    RAISE EXCEPTION 'Default course unavailable; apply course migration';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_ensure_lecture_course_id ON lectures;
+CREATE TRIGGER trg_ensure_lecture_course_id
+BEFORE INSERT ON lectures
+FOR EACH ROW EXECUTE FUNCTION ensure_lecture_course_id();
