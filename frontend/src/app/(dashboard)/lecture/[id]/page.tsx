@@ -40,7 +40,7 @@ export default function LecturePage({ params }: Props) {
   // Course order, not insertion order. Unsorted, this list opened with
   // Lecture 6 at the top and numbered the rows 1..7 by position, so the
   // numbers described the accident of insertion rather than the course.
-  const allLectures: DBLecture[]       = sortLectures(allData?.lectures ?? []);
+  const allLectures: DBLecture[]       = sortLectures((allData?.lectures ?? []).filter((l: DBLecture) => l.courseId === lecture?.courseId));
 
   // Displayed agent identity — resolved from the lecture's YouTube id via the
   // existing lecture -> agent mapping (no database ids hardcoded). The agent
