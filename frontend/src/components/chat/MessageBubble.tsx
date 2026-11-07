@@ -113,16 +113,16 @@ export const MessageBubble = ({ message, onSpeak, isSpeaking, onAskAgain }: Prop
           )}
         </div>
 
-        {/* Lecture timestamps — visual only, NOT part of spoken text */}
+        {/* Lecture timestamps or document page/slide references — visual only, never spoken. */}
         {!isUser && !message.isStreaming && timestampedSources.length > 0 && (
           <div className="flex flex-wrap gap-1.5 mt-0.5">
             {timestampedSources.map((src, i) => (
               <span
                 key={i}
                 className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-control bg-[var(--gold-soft)] border border-[#e6dcc0] text-[var(--gold)] text-[12px] font-semibold"
-                title={src.topic ?? 'Lecture segment'}
+                title={src.topic ?? (/(?:\.pdf|\.docx|\.pptx|\.txt|\.html|\.htm)\b/i.test(src.startTime ?? '') ? 'Document reference' : 'Lecture segment')}
               >
-                <i className="fas fa-film text-[10px]" />
+                <i className={`fas ${/(?:\.pdf|\.docx|\.pptx|\.txt|\.html|\.htm)\b/i.test(src.startTime ?? '') ? 'fa-file-lines' : 'fa-film'} text-[10px]`} />
                 {src.startTime}{src.endTime ? ` – ${src.endTime}` : ''}
               </span>
             ))}
