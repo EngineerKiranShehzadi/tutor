@@ -40,9 +40,17 @@ export interface UploadRawDatasetResult {
   key: string;
 }
 
-const XLSX_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+const CONTENT_TYPES: Record<string, string> = {
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.pdf': 'application/pdf',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.txt': 'text/plain; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.htm': 'text/html; charset=utf-8',
+};
 
-// Uploads the raw .xlsx buffer under a lecture- and timestamp-scoped key so
+// Uploads the raw source file under a lecture- and timestamp-scoped key so
 // re-uploads for the same lecture never overwrite an earlier raw file.
 export async function uploadRawDataset(
   lectureId: number,
@@ -52,13 +60,14 @@ export async function uploadRawDataset(
   const s3 = getS3Client();
   const bucket = env.S3.BUCKET_NAME;
   const safeName = originalFilename.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const extension = originalFilename.toLowerCase().match(/\.[a-z0-9]+$/)?.[0] ?? '';
   const key = `datasets/lecture-${lectureId}/${Date.now()}-${safeName}`;
 
   await s3.send(new PutObjectCommand({
     Bucket: bucket,
     Key: key,
     Body: buffer,
-    ContentType: XLSX_CONTENT_TYPE,
+    ContentType: CONTENT_TYPES[extension] ?? 'application/octet-stream',
   }));
 
   logger.info(`[S3] ✅ Raw dataset stored: s3://${bucket}/${key}`);
