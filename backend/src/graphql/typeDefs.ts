@@ -63,7 +63,7 @@ export const typeDefs = `#graphql
   input CreateLectureInput {
     title:       String!
     description: String
-    youtubeUrl:  String!
+    youtubeUrl:  String
     # The lecture's AI agent profile is created together with the lecture
     # (see lecture.service.ts createLecture); chat serves it once the
     # dataset reaches READY.
