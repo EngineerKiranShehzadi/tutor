@@ -8,6 +8,7 @@ import { cn } from '@/lib/cn';
 
 const NAV = [
   { href: '/admin/dashboard',     icon: 'fas fa-chart-pie',       label: 'Overview'           },
+  { href: '/admin/courses',       icon: 'fas fa-layer-group',     label: 'Courses'            },
   { href: '/admin/lectures',      icon: 'fas fa-play-circle',     label: 'Lectures'           },
   { href: '/admin/students',      icon: 'fas fa-user-graduate',   label: 'Students'           },
   { href: '/admin/questions',     icon: 'fas fa-comments',        label: 'Questions'          },
@@ -60,7 +61,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         {/* Nav */}
         <nav className="flex-1 px-3 py-4 overflow-y-auto">
           <p className="px-2 mb-2 text-[12px] font-semibold text-slate-600 uppercase tracking-widest">Analytics</p>
-          {NAV.slice(0, 5).map(({ href, icon, label }) => {
+          {NAV.slice(0, 6).map(({ href, icon, label }) => {
             const active = pathname === href || pathname.startsWith(href + '/');
             return (
               <Link key={href} href={href}
@@ -73,7 +74,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             );
           })}
           <p className="px-2 mt-4 mb-2 text-[12px] font-semibold text-slate-600 uppercase tracking-widest">Management</p>
-          {NAV.slice(5).map(({ href, icon, label }) => {
+          {NAV.slice(6).map(({ href, icon, label }) => {
             const active = pathname === href || pathname.startsWith(href + '/');
             return (
               <Link key={href} href={href}
