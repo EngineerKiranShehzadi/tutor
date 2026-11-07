@@ -3,6 +3,7 @@ import { notifyAllStudents } from './notification.service';
 import { AppError } from '../middleware/errorHandler';
 import { Lecture } from '../types';
 import { logger } from '../utils/logger';
+import { defaultCourseId, getCourse } from './course.service';
 
 // ── HELPERS ────────────────────────────────────────────────────
 function extractVideoId(youtubeUrl: string): string | null {
@@ -37,6 +38,7 @@ export const createLecture = async (input: {
   youtubeUrl: string;
   agentName: string;
   agentInstructions: string;
+  courseId?: number;
 }): Promise<Lecture> => {
   const { title, description, youtubeUrl } = input;
   const agentName = input.agentName?.trim() ?? '';
@@ -50,20 +52,22 @@ export const createLecture = async (input: {
   }
 
   const videoId = validateYoutubeUrl(youtubeUrl);
+  const courseId = input.courseId ?? await defaultCourseId();
+  await getCourse(courseId);
 
   // One statement, so the lecture and its agent profile are created
   // atomically — a lecture can never exist without its profile.
   const { rows } = await query<Lecture>(
     `WITH new_lecture AS (
-       INSERT INTO lectures (title, description, youtube_url, youtube_video_id)
-       VALUES ($1, $2, $3, $4)
+       INSERT INTO lectures (title, description, youtube_url, youtube_video_id, course_id)
+       VALUES ($1, $2, $3, $4, $7)
        RETURNING *
      ), new_profile AS (
        INSERT INTO lecture_agent_profiles (lecture_id, agent_name, instructions)
        SELECT id, $5, $6 FROM new_lecture
      )
      SELECT * FROM new_lecture`,
-    [title.trim(), description?.trim() ?? null, youtubeUrl.trim(), videoId, agentName, agentInstructions]
+    [title.trim(), description?.trim() ?? null, youtubeUrl.trim(), videoId, agentName, agentInstructions, courseId]
   );
 
   const lecture = rows[0];
@@ -79,8 +83,11 @@ export const createLecture = async (input: {
 };
 
 // ── GET ALL ────────────────────────────────────────────────────
-export const getLectures = async (): Promise<Lecture[]> => {
-  const { rows } = await query<Lecture>('SELECT * FROM lectures ORDER BY created_at DESC');
+export const getLectures = async (courseId?: number): Promise<Lecture[]> => {
+  if (courseId !== undefined) await getCourse(courseId);
+  const { rows } = courseId === undefined
+    ? await query<Lecture>('SELECT * FROM lectures ORDER BY created_at DESC, id DESC')
+    : await query<Lecture>('SELECT * FROM lectures WHERE course_id = $1 ORDER BY created_at DESC, id DESC', [courseId]);
   logger.info(`[LECTURE] Fetched ${rows.length} lecture(s)`);
   return rows;
 };
@@ -95,7 +102,7 @@ export const getLectureById = async (id: number): Promise<Lecture> => {
 // ── UPDATE ─────────────────────────────────────────────────────
 export const updateLecture = async (
   id: number,
-  input: { title?: string; description?: string; youtubeUrl?: string }
+  input: { title?: string; description?: string; youtubeUrl?: string; courseId?: number }
 ): Promise<Lecture> => {
   const existing = await getLectureById(id);
 
@@ -103,13 +110,15 @@ export const updateLecture = async (
   const description = input.description?.trim()  ?? existing.description;
   const youtubeUrl  = input.youtubeUrl?.trim()   ?? existing.youtube_url;
   const videoId     = input.youtubeUrl ? validateYoutubeUrl(youtubeUrl) : existing.youtube_video_id;
+  const courseId = input.courseId ?? existing.course_id;
+  await getCourse(courseId);
 
   const { rows } = await query<Lecture>(
     `UPDATE lectures
-     SET title = $1, description = $2, youtube_url = $3, youtube_video_id = $4, updated_at = NOW()
+     SET title = $1, description = $2, youtube_url = $3, youtube_video_id = $4, course_id = $6, updated_at = NOW()
      WHERE id = $5
      RETURNING *`,
-    [title, description, youtubeUrl, videoId, id]
+    [title, description, youtubeUrl, videoId, id, courseId]
   );
 
   logger.info(`[LECTURE] ✅ Updated lecture #${id}`);
