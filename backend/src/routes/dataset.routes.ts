@@ -3,20 +3,15 @@ import multer from 'multer';
 import { protect, requireRole } from '../middleware/auth.middleware';
 import { AppError } from '../middleware/errorHandler';
 import { env } from '../config/env';
+import { supportedDatasetExtension } from '../services/document-ingestion.service';
 import { uploadDataset, getDatasetVersions, rollbackDatasetVersion, exportDataset, cancelDatasetUpdate } from '../controllers/dataset.controller';
 
 const router = Router();
 
-// Store file in memory (no disk write) — buffer passed directly to xlsx parser.
-// Rejections are client errors (A16): an oversized file is a 413 and a
-// non-spreadsheet a 400 (errorHandler maps multer's errors); the file's
-// CONTENT is then checked by parseExcel (zip structure, size when unpacked)
-// before anything parses it.
-//
-// The name must end in .xlsx AND the browser-reported type must be a
-// spreadsheet or a generic binary type (some browsers/OSes send those for
-// .xlsx). A .csv, .pdf or image renamed to .xlsx is refused here, and anything
-// that is not really a workbook is refused by the content check.
+// Store a single file in memory, never execute its contents. Check extension
+// and browser MIME as a first gate; the actual Excel/Office/PDF parser
+// validates the bytes before building a dataset. Python extractor adds
+// expansion and text-size limits. Never trust MIME alone.
 export const XLSX_MIME_TYPES = new Set([
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   'application/vnd.ms-excel',
@@ -26,16 +21,24 @@ export const XLSX_MIME_TYPES = new Set([
   '',
 ]);
 
+const DOCUMENT_MIME_TYPES: Record<string, Set<string>> = {
+  '.pdf': new Set(['application/pdf', 'application/octet-stream', '']),
+  '.docx': new Set(['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/zip', 'application/octet-stream', '']),
+  '.pptx': new Set(['application/vnd.openxmlformats-officedocument.presentationml.presentation', 'application/zip', 'application/octet-stream', '']),
+  '.txt': new Set(['text/plain', 'application/octet-stream', '']),
+  '.html': new Set(['text/html', 'application/xhtml+xml', 'application/octet-stream', '']),
+  '.htm': new Set(['text/html', 'application/xhtml+xml', 'application/octet-stream', '']),
+};
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: env.DATASET.MAX_UPLOAD_BYTES, files: 1 },
   fileFilter: (_req, file, cb) => {
-    const isXlsxName = file.originalname.toLowerCase().endsWith('.xlsx');
-    if (isXlsxName && XLSX_MIME_TYPES.has((file.mimetype ?? '').toLowerCase())) {
-      cb(null, true);
-    } else {
-      cb(new AppError('Only .xlsx files are allowed.', 400));
-    }
+    const ext = supportedDatasetExtension(file.originalname);
+    const mime = (file.mimetype ?? '').toLowerCase();
+    const allowed = ext === '.xlsx' ? XLSX_MIME_TYPES : ext ? DOCUMENT_MIME_TYPES[ext] : undefined;
+    if (allowed?.has(mime)) cb(null, true);
+    else cb(new AppError('Unsupported file type. Use .xlsx, .pdf, .docx, .pptx, .txt or .html.', 400));
   },
 });
 
