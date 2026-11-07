@@ -86,6 +86,7 @@ jobs:
           psql -v ON_ERROR_STOP=1 -f backend/src/db/schema.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrate.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/scripts/test-courses-pre.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/020_notifications.sql
       - name: Apply new course migration and verify preservation
         run: |
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/022_courses.sql
@@ -94,3 +95,21 @@ jobs:
         run: |
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/022_courses.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/scripts/test-courses-rerun.sql
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install backend dependencies for course service checks
+        working-directory: backend
+        run: npm ci --ignore-scripts
+      - name: Verify course creation, lecture assignment and agent profile
+        working-directory: backend
+        env:
+          NODE_ENV: test
+          DB_HOST: 127.0.0.1
+          DB_PORT: '5432'
+          DB_USER: postgres
+          DB_PASSWORD: offline-test
+          DB_NAME: courses_test
+          JWT_SECRET: offline-test-access-secret-at-least-32-bytes
+          JWT_REFRESH_SECRET: offline-test-refresh-secret-at-least-32-bytes
+        run: npm run test:course-services
