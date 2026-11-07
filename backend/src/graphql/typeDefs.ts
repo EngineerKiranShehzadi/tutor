@@ -49,6 +49,7 @@ export const typeDefs = `#graphql
   type Lecture {
     id:              String!
     courseId:        String!
+    agentName:       String
     title:           String!
     description:     String
     youtubeUrl:      String!
