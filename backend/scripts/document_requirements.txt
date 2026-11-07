@@ -1,0 +1,6 @@
+# Offline document parsing for AskAITutor multi-format ingestion.
+# Install inside an isolated Python virtual environment.
+pypdf>=5.9,<7
+python-docx>=1.2,<2
+python-pptx>=1.0,<2
+beautifulsoup4>=4.13,<5
