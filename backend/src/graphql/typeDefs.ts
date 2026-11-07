@@ -23,9 +23,32 @@ export const typeDefs = `#graphql
   type AuthUserPayload { id: String!, name: String!, email: String!, role: String! }
   type SignupVerifyPayload { accessToken: String!, user: AuthUserPayload! }
 
+  # ── Courses ───────────────────────────────────────────
+  type Course {
+    id: String!
+    title: String!
+    subtitle: String!
+    description: String!
+    lectureCount: Int!
+    readyCount: Int!
+    createdAt: String!
+    updatedAt: String!
+  }
+  input CreateCourseInput {
+    title: String!
+    subtitle: String
+    description: String
+  }
+  input UpdateCourseInput {
+    title: String
+    subtitle: String
+    description: String
+  }
+
   # ── Lecture ───────────────────────────────────────────
   type Lecture {
     id:              String!
+    courseId:        String!
     title:           String!
     description:     String
     youtubeUrl:      String!
@@ -46,12 +69,14 @@ export const typeDefs = `#graphql
     # dataset reaches READY.
     agentName:         String!
     agentInstructions: String!
+    courseId: Int
   }
 
   input UpdateLectureInput {
     title:       String
     description: String
     youtubeUrl:  String
+    courseId:    Int
   }
 
   # ── Chat / RAG ────────────────────────────────────────
@@ -345,7 +370,9 @@ export const typeDefs = `#graphql
     # The signed-in student's own questions, newest first.
     # limit defaults to 10 and is capped at 50.
     myRecentQuestions(limit: Int, offset: Int): MyQuestionPage!
-    lectures:                        [Lecture!]!
+    courses:                         [Course!]!
+    course(id: String!):              Course!
+    lectures(courseId: Int):          [Lecture!]!
     lecture(id: String!):            Lecture!
     chatSessions(lectureId: Int!):                                            [ChatSession!]!
     sessionHistory(sessionId: Int!):                                          [ChatHistoryEntry!]!
@@ -377,6 +404,8 @@ export const typeDefs = `#graphql
     signup(input: SignupInput!):                                  SignupInitiatedPayload!
     resendSignupOtp(input: ResendSignupOtpInput!):                SuccessResponse!
     verifySignupOtp(input: VerifySignupOtpInput!):                SignupVerifyPayload!
+    createCourse(input: CreateCourseInput!):                     Course!
+    updateCourse(id: String!, input: UpdateCourseInput!):         Course!
     createLecture(input: CreateLectureInput!):                    Lecture!
     updateLecture(id: String!, input: UpdateLectureInput!):       Lecture!
     deleteLecture(id: String!):                                   Boolean!
