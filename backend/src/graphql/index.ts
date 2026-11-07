@@ -9,6 +9,7 @@ import { typeDefs } from './typeDefs';
 import { resolvers as authResolvers } from './resolvers/auth.resolver';
 import { chatResolvers } from './resolvers/chat.resolver';
 import { lectureResolvers } from './resolvers/lecture.resolver';
+import { courseResolvers } from './resolvers/course.resolver';
 import { analyticsResolvers } from './resolvers/analytics.resolver';
 import { userResolvers } from './resolvers/user.resolver';
 import { notificationResolvers } from './resolvers/notification.resolver';
@@ -24,6 +25,7 @@ const mergedResolvers = {
   Query: {
     ...authResolvers.Query,
     ...lectureResolvers.Query,
+    ...courseResolvers.Query,
     ...chatResolvers.Query,
     ...analyticsResolvers.Query,
     ...userResolvers.Query,
@@ -32,6 +34,7 @@ const mergedResolvers = {
   Mutation: {
     ...authResolvers.Mutation,
     ...lectureResolvers.Mutation,
+    ...courseResolvers.Mutation,
     ...chatResolvers.Mutation,
     ...userResolvers.Mutation,
     ...notificationResolvers.Mutation,
