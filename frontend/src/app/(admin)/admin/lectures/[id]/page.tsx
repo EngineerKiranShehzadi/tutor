@@ -13,7 +13,7 @@ interface QnaChunk { id: number; topic: string | null; question: string; answer:
 const POLLING_STATUSES = new Set(['DATASET_UPLOADED', 'PROCESSING', 'EMBEDDING']);
 
 const STATUS_CONFIG: Record<string, { label: string; icon: string; dot: string; bg: string; border: string; text: string; desc: string }> = {
-  NO_DATASET:       { label: 'No Dataset',    icon: 'fas fa-database',     dot: 'bg-slate-400',   bg: 'bg-slate-50',    border: 'border-slate-200',  text: 'text-slate-700',   desc: 'Upload an Excel dataset to activate the AI tutor for this lecture.' },
+  NO_DATASET:       { label: 'No Dataset',    icon: 'fas fa-database',     dot: 'bg-slate-400',   bg: 'bg-slate-50',    border: 'border-slate-200',  text: 'text-slate-700',   desc: 'Upload Excel, PDF, DOCX, PPTX, TXT or HTML learning material to activate the AI tutor.' },
   DATASET_UPLOADED: { label: 'Dataset Ready', icon: 'fas fa-file-check',   dot: 'bg-amber-400',   bg: 'bg-amber-50',    border: 'border-amber-200',  text: 'text-amber-800',   desc: 'Dataset uploaded — processing will begin shortly.' },
   PROCESSING:       { label: 'Processing',    icon: 'fas fa-cog',          dot: 'bg-blue-400',    bg: 'bg-blue-50',     border: 'border-blue-200',   text: 'text-blue-800',    desc: 'Parsing dataset and preparing chunks — auto-refreshing every 3 s.' },
   EMBEDDING:        { label: 'Embedding',     icon: 'fas fa-brain',        dot: 'bg-violet-400',  bg: 'bg-violet-50',   border: 'border-violet-200', text: 'text-violet-800',  desc: 'Generating AI embeddings — this may take a few minutes.' },
@@ -286,9 +286,11 @@ export default function LectureDetailPage({ params }: Props) {
                   <div className="col-span-2">
                     <dt className="text-[17px] font-semibold text-slate-400 uppercase tracking-wide mb-1">YouTube URL</dt>
                     <dd>
-                      <a href={lecture.youtubeUrl} target="_blank" rel="noreferrer" className="text-[17px] text-indigo-600 hover:underline break-all">
-                        {lecture.youtubeUrl}
-                      </a>
+                      {lecture.youtubeUrl ? (
+                        <a href={lecture.youtubeUrl} target="_blank" rel="noreferrer" className="text-[17px] text-indigo-600 hover:underline break-all">
+                          {lecture.youtubeUrl}
+                        </a>
+                      ) : <span className="text-[17px] text-slate-500">Document-only lecture</span>}
                     </dd>
                   </div>
                   {lecture.description && (
