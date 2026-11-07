@@ -86,15 +86,15 @@ export const createLecture = async (input: {
 export const getLectures = async (courseId?: number): Promise<Lecture[]> => {
   if (courseId !== undefined) await getCourse(courseId);
   const { rows } = courseId === undefined
-    ? await query<Lecture>('SELECT * FROM lectures ORDER BY created_at DESC, id DESC')
-    : await query<Lecture>('SELECT * FROM lectures WHERE course_id = $1 ORDER BY created_at DESC, id DESC', [courseId]);
+    ? await query<Lecture>('SELECT l.*, ap.agent_name FROM lectures l LEFT JOIN lecture_agent_profiles ap ON ap.lecture_id = l.id ORDER BY l.created_at DESC, l.id DESC')
+    : await query<Lecture>('SELECT l.*, ap.agent_name FROM lectures l LEFT JOIN lecture_agent_profiles ap ON ap.lecture_id = l.id WHERE l.course_id = $1 ORDER BY l.created_at DESC, l.id DESC', [courseId]);
   logger.info(`[LECTURE] Fetched ${rows.length} lecture(s)`);
   return rows;
 };
 
 // ── GET ONE ────────────────────────────────────────────────────
 export const getLectureById = async (id: number): Promise<Lecture> => {
-  const { rows } = await query<Lecture>('SELECT * FROM lectures WHERE id = $1', [id]);
+  const { rows } = await query<Lecture>('SELECT l.*, ap.agent_name FROM lectures l LEFT JOIN lecture_agent_profiles ap ON ap.lecture_id = l.id WHERE l.id = $1', [id]);
   if (!rows[0]) throw new AppError(`Lecture #${id} not found`, 404);
   return rows[0];
 };
