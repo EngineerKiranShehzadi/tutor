@@ -41,7 +41,6 @@ export const CREATE_LECTURE_MUTATION = gql`
     createLecture(input: $input) {
       id
       courseId
-      courseId
       agentName
       title
       status
