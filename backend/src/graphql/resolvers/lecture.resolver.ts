@@ -31,6 +31,7 @@ function toGql(lecture: import('../../types').Lecture) {
     id: String(lecture.id),
     title: lecture.title,
     courseId: String(lecture.course_id),
+    agentName: lecture.agent_name ?? null,
     description: lecture.description ?? null,
     youtubeUrl: lecture.youtube_url,
     youtubeVideoId: lecture.youtube_video_id ?? null,
