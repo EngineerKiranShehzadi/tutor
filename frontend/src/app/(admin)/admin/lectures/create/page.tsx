@@ -1,5 +1,8 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useQuery } from '@apollo/client';
+import { GET_COURSES } from '@/graphql/course.queries';
+import { DBCourse } from '@/types/course';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useMutation } from '@apollo/client';
@@ -11,16 +14,27 @@ export default function CreateLecturePage() {
   const router = useRouter();
   const [form, setForm] = useState({ title: '', description: '', youtubeUrl: '', agentName: '', agentInstructions: '' });
   const [error, setError] = useState('');
+  const [courseId, setCourseId] = useState('');
+  const { data: coursesData, loading: coursesLoading, error: coursesError } = useQuery(GET_COURSES);
+  const courses: DBCourse[] = coursesData?.courses ?? [];
+  useEffect(() => {
+    const selected = new URLSearchParams(window.location.search).get('courseId');
+    if (selected) setCourseId(selected);
+  }, []);
+  useEffect(() => {
+    if (!courseId && courses.length) setCourseId(courses[0].id);
+  }, [courses, courseId]);
 
   const [createLecture, { loading }] = useMutation(CREATE_LECTURE_MUTATION);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    if (!form.title.trim() || !form.youtubeUrl.trim()) {
-      setError('Title and YouTube URL are required.');
+    if (!form.title.trim()) {
+      setError('Lecture title is required.');
       return;
     }
+    if (!courseId || !courses.some(c => c.id === courseId)) { setError('Choose a valid course first.'); return; }
     if (!form.agentName.trim() || !form.agentInstructions.trim()) {
       setError('AI agent name and instructions are required.');
       return;
@@ -30,8 +44,9 @@ export default function CreateLecturePage() {
         variables: {
           input: {
             title:       form.title.trim(),
+            courseId: Number(courseId),
             description: form.description.trim() || undefined,
-            youtubeUrl:  form.youtubeUrl.trim(),
+            youtubeUrl:  form.youtubeUrl.trim() || undefined,
             agentName:         form.agentName.trim(),
             agentInstructions: form.agentInstructions.trim(),
           },
@@ -73,6 +88,24 @@ export default function CreateLecturePage() {
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 flex flex-col gap-5">
+          {/* Course */}
+          <div>
+            <label className="block text-[12px] font-semibold text-slate-600 uppercase tracking-wide mb-2">
+              Course <span className="text-red-500 normal-case">*</span>
+            </label>
+            <select
+              value={courseId}
+              onChange={e => setCourseId(e.target.value)}
+              disabled={coursesLoading}
+              required
+              className={FIELD_CLASS}
+            >
+              <option value="">Select course</option>
+              {courses.map(course => <option key={course.id} value={course.id}>{course.title}</option>)}
+            </select>
+            {coursesError && <p className="text-red-600 text-xs mt-1">Could not load courses.</p>}
+            <Link href="/admin/courses" className="text-xs text-indigo-600 hover:underline inline-block mt-2">Create or manage courses</Link>
+          </div>
           {/* Title */}
           <div>
             <label className="block text-[12px] font-semibold text-slate-600 uppercase tracking-wide mb-2">
@@ -90,7 +123,7 @@ export default function CreateLecturePage() {
           {/* YouTube URL */}
           <div>
             <label className="block text-[12px] font-semibold text-slate-600 uppercase tracking-wide mb-2">
-              YouTube URL <span className="text-red-500 normal-case">*</span>
+              YouTube URL <span className="text-slate-400 normal-case font-normal">(optional for document-only lectures)</span>
             </label>
             <div className="relative">
               <div className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">
@@ -105,7 +138,7 @@ export default function CreateLecturePage() {
               />
             </div>
             <p className="text-[11px] text-slate-400 mt-1.5">
-              Accepts youtube.com/watch?v=... and youtu.be/... formats
+              Optional. Add a YouTube video or create a lecture using PDF, Word, PowerPoint, TXT or HTML materials.
             </p>
           </div>
 
@@ -170,7 +203,7 @@ export default function CreateLecturePage() {
           <div className="flex gap-3 pt-2 border-t border-slate-100">
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || coursesLoading || !courseId}
               className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-[13px] font-semibold hover:bg-indigo-700 disabled:opacity-60 transition-colors shadow-sm"
             >
               {loading ? (
@@ -193,7 +226,7 @@ export default function CreateLecturePage() {
       <div className="mt-4 flex items-start gap-2.5 px-4 py-3 bg-indigo-50 border border-indigo-100 rounded-xl">
         <i className="fas fa-circle-info text-indigo-500 mt-0.5 shrink-0" />
         <p className="text-[12px] text-indigo-700 leading-relaxed">
-          After creating the lecture, you&apos;ll be taken to the detail page where you can upload an Excel dataset to activate the AI tutor.
+          After creating the lecture, you&apos;ll be taken to the detail page where you can upload Excel, PDF, DOCX, PPTX, TXT or HTML learning material to activate the AI tutor.
         </p>
       </div>
     </div>
