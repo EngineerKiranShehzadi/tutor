@@ -43,7 +43,7 @@ export const runDocumentExtractor = (buffer: Buffer, extension: string): Promise
   }
   return new Promise((resolve, reject) => {
     const child = spawn(PYTHON_BIN, [EXTRACT_SCRIPT, '--extension', extension], {
-      shell: false, stdio: ['pipe', 'pipe', 'pipe'],
+      shell: false, stdio: ['pipe', 'pipe', 'ignore'], // discard untrusted parser stderr; never log document contents
       env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
     });
     let settled = false;
