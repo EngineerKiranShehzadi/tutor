@@ -4,11 +4,12 @@ import { AppError } from '../middleware/errorHandler';
 import type { RawRow } from './chunk.service';
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 import { env } from '../config/env';
+import { enrichDocumentWithVision } from './document-vision.service';
 
 // The document boundary is isolated from the existing Excel parser and version
 // planner. No remote conversion services are used; the child process reads only
 // the uploaded bytes through stdin and outputs structured JSON through stdout.
-export const DOCUMENT_EXTENSIONS = new Set(['.pdf', '.docx', '.pptx', '.txt', '.html', '.htm']);
+export const DOCUMENT_EXTENSIONS = new Set(['.pdf', '.docx', '.ppt', '.pptx', '.txt', '.html', '.htm']);
 
 export const supportedDatasetExtension = (filename: string): string | null => {
   const ext = path.extname(filename).toLowerCase();
@@ -34,7 +35,7 @@ const splitter = new RecursiveCharacterTextSplitter({
   separators: ['\n\n', '\n', '. ', ' ', ''],
 });
 
-export const runDocumentExtractor = (buffer: Buffer, extension: string): Promise<ExtractionResult> => {
+const extractTextOnly = (buffer: Buffer, extension: string): Promise<ExtractionResult> => {
   if (!DOCUMENT_EXTENSIONS.has(extension)) {
     throw new AppError('Unsupported document format', 400);
   }
@@ -42,7 +43,7 @@ export const runDocumentExtractor = (buffer: Buffer, extension: string): Promise
     throw new AppError('Document is empty or exceeds the upload size limit', 413);
   }
   return new Promise((resolve, reject) => {
-    const child = spawn(PYTHON_BIN, [EXTRACT_SCRIPT, '--extension', extension], {
+    const child = spawn(PYTHON_BIN, [EXTRACT_SCRIPT, '--extension', extension, '--allow-visual', '--max-bytes', String(env.DATASET.MAX_UPLOAD_BYTES)], {
       shell: false, stdio: ['pipe', 'pipe', 'ignore'], // discard untrusted parser stderr; never log document contents
       env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
     });
@@ -90,6 +91,12 @@ export const runDocumentExtractor = (buffer: Buffer, extension: string): Promise
     child.stdin.end(buffer);
   });
 };
+
+export async function runDocumentExtractor(buffer: Buffer, extension: string): Promise<ExtractionResult> {
+  const textResult = await extractTextOnly(buffer, extension);
+  const enriched = await enrichDocumentWithVision(buffer, extension, textResult.units);
+  return { units: enriched.units, warnings: [...textResult.warnings, ...enriched.warnings] };
+}
 
 // Each document section is stored as one content-bearing row in the existing
 // dataset versioning tables. "Question" is a synthetic, deterministic source
