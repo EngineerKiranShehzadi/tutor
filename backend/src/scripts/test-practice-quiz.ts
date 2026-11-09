@@ -1,5 +1,5 @@
 import assert from 'assert/strict';
-import {allocateByLecture,validateGenerated,verifiedQuestionIndexes} from '../services/practice-quiz.service';
+import {allocateByLecture,validateGenerated,verifiedQuestionIndexes,mapWithConcurrency} from '../services/practice-quiz.service';
 
 const plan=allocateByLecture([10,11,12,13,14,15,16]);
 assert.equal([...plan.values()].reduce((sum,n)=>sum+n,0),10);
@@ -25,4 +25,22 @@ assert.deepEqual(validateGenerated({questions:[{...good,category:'UNSUPPORTED'}]
 assert.deepEqual([...verifiedQuestionIndexes({checks:[{index:0,grounded:true,unambiguous:true},{index:1,grounded:false,unambiguous:true}]},2)],[0]);
 assert.equal(verifiedQuestionIndexes({checks:[{index:0,grounded:true,unambiguous:true}]},2).size,0);
 assert.equal(verifiedQuestionIndexes({checks:[{index:0,grounded:true,unambiguous:true},{index:0,grounded:true,unambiguous:true}]},2).size,0);
-console.log('Practice quiz generation validation and lecture allocation checks passed');
+async function testConcurrency() {
+  let active = 0;
+  let peak = 0;
+  const values = Array.from({length: 17}, (_, i) => i);
+  const result = await mapWithConcurrency(values, 6, async value => {
+    active++;
+    peak = Math.max(peak, active);
+    await new Promise(resolve => setTimeout(resolve, (value % 3 + 1) * 2));
+    active--;
+    return value * 2;
+  });
+  assert.deepEqual(result, values.map(v => v * 2));
+  assert.ok(peak <= 6);
+  assert.ok(peak > 3);
+  assert.deepEqual(await mapWithConcurrency([], 6, async v => v), []);
+  await assert.rejects(() => mapWithConcurrency([1], 0, async v => v), /Invalid quiz concurrency/);
+  console.log('Practice quiz validation and bounded concurrent generation checks passed');
+}
+testConcurrency().catch(err => {console.error(err);process.exitCode=1;});
