@@ -1,7 +1,11 @@
 import { gql } from '@apollo/client';
 export const CREATE_PRACTICE_QUIZ=gql`
   mutation CreatePracticeQuiz($courseId:Int!,$lectureIds:[Int!]!){
-    createPracticeQuiz(courseId:$courseId,lectureIds:$lectureIds){id status total courseId}
+    createPracticeQuiz(courseId:$courseId,lectureIds:$lectureIds){
+      id courseId lectureIds status total correct percent createdAt submittedAt
+      questions {id lectureId lectureTitle position category question options selectedIndex correctIndex isCorrect explanation source}
+      breakdown {lectureId lectureTitle total correct incorrect recommendation}
+    }
   }
 `;
 export const GET_PRACTICE_QUIZ=gql`
