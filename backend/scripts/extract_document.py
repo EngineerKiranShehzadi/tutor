@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Local, text-only document extractor for AskAITutor.
+"""Local document text extractor for AskAITutor.
 
 Input: file bytes on stdin, extension as --extension.
 Output: one JSON object with ordered units and extraction warnings.
-No network requests, code execution, OCR, rendering or file writes.
+No network requests, macros, OCR or rendering. Temporary files are used only for local legacy-PPT conversion.
 """
 import argparse
 import io
@@ -11,10 +11,15 @@ import json
 import re
 import sys
 import zipfile
+import os
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
 
 MAX_BYTES = 10 * 1024 * 1024
 MAX_ZIP_ENTRIES = 500
-MAX_ZIP_EXPANDED = 20 * 1024 * 1024
+MAX_ZIP_EXPANDED = 64 * 1024 * 1024
 MAX_UNITS = 500
 MAX_TEXT_CHARS = 900_000
 
@@ -26,7 +31,7 @@ def clean(text):
     return text.strip()
 
 
-def zip_guard(data):
+def zip_guard(data, max_bytes=MAX_BYTES):
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
             entries = archive.infolist()
@@ -34,7 +39,7 @@ def zip_guard(data):
                 raise ValueError("Office file contains too many archive entries")
             if sum(i.file_size for i in entries) > MAX_ZIP_EXPANDED:
                 raise ValueError("Office file expands beyond the safe size limit")
-            if any(i.file_size > MAX_BYTES for i in entries):
+            if any(i.file_size > max_bytes for i in entries):
                 raise ValueError("Office file contains an oversized entry")
             if any(i.flag_bits & 0x1 for i in entries):
                 raise ValueError("Encrypted Office files are not supported")
@@ -42,7 +47,7 @@ def zip_guard(data):
         raise ValueError("This is not a valid DOCX or PPTX file") from exc
 
 
-def pdf_units(data, warnings):
+def pdf_units(data, warnings, include_empty=False):
     from pypdf import PdfReader
     reader = PdfReader(io.BytesIO(data), strict=False)
     if reader.is_encrypted:
@@ -59,7 +64,9 @@ def pdf_units(data, warnings):
         if text:
             out.append({"locator": f"Page {number}", "text": text})
         else:
-            warnings.append(f"Page {number} has no selectable text (scanned/image-only pages need OCR)")
+            warnings.append(f"Page {number} has no selectable text (visual analysis needed)")
+            if include_empty:
+                out.append({"locator": f"Page {number}", "text": ""})
     return out
 
 
@@ -83,9 +90,9 @@ def docx_units(data, warnings):
     return [{"locator": "Document", "text": "\n\n".join(blocks)}] if blocks else []
 
 
-def pptx_units(data, warnings):
+def pptx_units(data, warnings, include_empty=False, max_bytes=MAX_BYTES):
     from pptx import Presentation
-    zip_guard(data)
+    zip_guard(data, max_bytes)
     presentation = Presentation(io.BytesIO(data))
     if len(presentation.slides) > MAX_UNITS:
         raise ValueError("Presentation has too many slides; split it into smaller files")
@@ -106,8 +113,43 @@ def pptx_units(data, warnings):
         if text:
             output.append({"locator": f"Slide {number}", "text": text})
         else:
-            warnings.append(f"Slide {number} has no selectable text (images/diagrams need OCR or captions)")
+            warnings.append(f"Slide {number} has no selectable text (visual analysis needed)")
+            if include_empty:
+                output.append({"locator": f"Slide {number}", "text": ""})
     return output
+
+
+def convert_legacy_ppt(data):
+    """Convert OLE PPT to PPTX with a private headless LibreOffice profile."""
+    if not data.startswith(bytes.fromhex("D0CF11E0A1B11AE1")):
+        raise ValueError("File content is not a legacy PowerPoint (.ppt)")
+    soffice = shutil.which("soffice") or shutil.which("libreoffice")
+    if not soffice:
+        raise ValueError("Legacy .ppt requires LibreOffice (soffice) on the backend server")
+    with tempfile.TemporaryDirectory(prefix="askaitutor-ppt-") as tmp:
+        root = Path(tmp)
+        src = root / "uploaded.ppt"
+        src.write_bytes(data)
+        output_dir = root / "converted"
+        output_dir.mkdir()
+        profile = (root / "lo-profile").as_uri()
+        try:
+            proc = subprocess.run(
+                [soffice, "-env:UserInstallation=" + profile, "--headless",
+                 "--convert-to", "pptx", "--outdir", str(output_dir), str(src)],
+                cwd=tmp, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, timeout=25, check=False,
+                env={**os.environ, "HOME": tmp},
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ValueError("Legacy .ppt conversion timed out; split the presentation") from exc
+        converted = output_dir / "uploaded.pptx"
+        if proc.returncode != 0 or not converted.exists():
+            raise ValueError("Unable to convert legacy .ppt; verify that the presentation is not corrupt")
+        result = converted.read_bytes()
+        if not result or len(result) > MAX_ZIP_EXPANDED:
+            raise ValueError("Converted presentation exceeds the safe size limit")
+        return result
 
 
 def html_units(data, warnings):
@@ -130,26 +172,28 @@ def html_units(data, warnings):
     return [{"locator": "Document", "text": text}] if text else []
 
 
-def extract(data, extension):
+def extract(data, extension, include_empty=False, max_bytes=MAX_BYTES):
     warnings = []
-    if not data or len(data) > MAX_BYTES:
-        raise ValueError("File must be non-empty and no larger than 10 MB")
+    if not data or len(data) > max_bytes:
+        raise ValueError(f"File must be non-empty and no larger than {max_bytes // (1024 * 1024)} MB")
     ext = extension.lower()
     if ext == ".pdf":
         if not data.startswith(b"%PDF-"):
             raise ValueError("File content is not a PDF")
-        units = pdf_units(data, warnings)
+        units = pdf_units(data, warnings, include_empty)
     elif ext == ".docx":
         units = docx_units(data, warnings)
     elif ext == ".pptx":
-        units = pptx_units(data, warnings)
+        units = pptx_units(data, warnings, include_empty, max_bytes)
+    elif ext == ".ppt":
+        units = pptx_units(convert_legacy_ppt(data), warnings, include_empty, MAX_ZIP_EXPANDED)
     elif ext in {".html", ".htm"}:
         units = html_units(data, warnings)
     elif ext == ".txt":
         units = [{"locator": "Document", "text": clean(data.decode("utf-8-sig"))}]
     else:
         raise ValueError("Unsupported document type")
-    units = [unit for unit in units if unit["text"]]
+    units = [unit for unit in units if unit["text"] or (include_empty and ext in {".pdf", ".pptx", ".ppt"})]
     if not units:
         raise ValueError("No selectable text was found; scanned documents need OCR")
     if sum(len(unit["text"]) for unit in units) > MAX_TEXT_CHARS:
@@ -169,10 +213,15 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--extension", required=True)
+    parser.add_argument("--allow-visual", action="store_true")
+    parser.add_argument("--max-bytes", type=int, default=MAX_BYTES)
     args = parser.parse_args()
+    if not 1 <= args.max_bytes <= 25 * 1024 * 1024:
+        print(json.dumps({"error": "Document upload cap must be between 1 byte and 25 MB"}))
+        sys.exit(2)
     try:
-        data = sys.stdin.buffer.read(MAX_BYTES + 1)
-        print(json.dumps(extract(data, args.extension), ensure_ascii=False))
+        data = sys.stdin.buffer.read(args.max_bytes + 1)
+        print(json.dumps(extract(data, args.extension, args.allow_visual, args.max_bytes), ensure_ascii=False))
     except Exception as exc:
         # Return a controlled, bounded message; never echo file content or tracebacks.
         print(json.dumps({"error": str(exc)[:250]}, ensure_ascii=False))

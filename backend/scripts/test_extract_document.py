@@ -102,6 +102,20 @@ class TestDocumentExtractor(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "not a PDF"):
             extract(b"This is not a PDF", ".pdf")
 
+    def test_visual_only_pdf_retained_for_vision(self):
+        from pypdf import PdfWriter
+        writer = PdfWriter()
+        writer.add_blank_page(width=300, height=300)
+        stream = io.BytesIO()
+        writer.write(stream)
+        data = stream.getvalue()
+        result = extract(data, ".pdf", include_empty=True)
+        self.assertEqual(result["units"], [{"locator": "Page 1", "text": ""}])
+
+    def test_wrong_legacy_ppt_header_rejected(self):
+        with self.assertRaisesRegex(ValueError, "not a legacy PowerPoint"):
+            extract(b"not ppt", ".ppt")
+
     def test_unsupported_format_rejected(self):
         with self.assertRaisesRegex(ValueError, "Unsupported"):
             extract(b"any text", ".exe")
