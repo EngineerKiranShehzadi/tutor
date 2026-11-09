@@ -35,7 +35,7 @@ export default function PracticePage() {
   const [submitQuiz]=useMutation(SUBMIT_PRACTICE_QUIZ);
   const history=useQuery(GET_PRACTICE_HISTORY,{fetchPolicy:'network-only'});
   const progress=useQuery(GET_PRACTICE_PROGRESS,{fetchPolicy:'network-only'});
-  const quizQuery=useQuery(GET_PRACTICE_QUIZ,{variables:{id:activeId??0},skip:activeId===null,fetchPolicy:'network-only'});
+  const quizQuery=useQuery(GET_PRACTICE_QUIZ,{variables:{id:activeId??0},skip:activeId===null,fetchPolicy:'cache-first'});
   const quiz:Quiz|undefined=quizQuery.data?.myPracticeQuiz;
   const isFinished=quiz?.status==='COMPLETED';
   const list:DBCourse[]=courses.data?.courses??[];
@@ -64,7 +64,17 @@ export default function PracticePage() {
     if(pending||!courseId||selected.length===0)return;
     setPending(true);setLocalError('');
     try{
-      const result=await createQuiz({variables:{courseId,lectureIds:selected}});
+      const result=await createQuiz({
+        variables:{courseId,lectureIds:selected},
+        update(cache,{data}) {
+          const created=data?.createPracticeQuiz as Quiz|undefined;
+          if(created) cache.writeQuery({
+            query:GET_PRACTICE_QUIZ,
+            variables:{id:created.id},
+            data:{myPracticeQuiz:created},
+          });
+        },
+      });
       const created=result.data?.createPracticeQuiz as Quiz|undefined;
       if(!created)throw new Error('Quiz generation returned no questions.');
       setActiveId(created.id);setAnswers({});
