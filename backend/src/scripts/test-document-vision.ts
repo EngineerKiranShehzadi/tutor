@@ -1,7 +1,7 @@
 import assert from 'assert/strict';
 
 process.env.OPENAI_API_KEY = 'offline-test-vision-key';
-const { mergeVisionIntoUnits, describeVisual } = require('../services/document-vision.service') as typeof import('../services/document-vision.service');
+const { mergeVisionIntoUnits, describeVisual, formatVisualDescription } = require('../services/document-vision.service') as typeof import('../services/document-vision.service');
 
 const originalFetch = globalThis.fetch;
 
@@ -19,6 +19,9 @@ async function run() {
   assert.match(merged[2].text, /Loop diagram/);
   assert.equal(merged[2].locator, 'Slide 3');
 
+  const structured = formatVisualDescription({relevant:true,description:'A conditional branch.',topic:'If statements',nodes:['Start','Decision: marks >= 50','Pass','Fail'],connections:['Decision --Yes--> Pass','Decision --No--> Fail'],uncertainty:[]});
+  assert.match(structured,/Decision --Yes--> Pass/);
+  assert.match(structured,/Visual topic: If statements/);
   let captured = '';
   globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
     captured = String(init?.body || '');
