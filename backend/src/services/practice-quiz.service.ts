@@ -100,7 +100,7 @@ export function verifiedQuestionIndexes(raw: unknown, expectedCount: number): Se
     if (!item || typeof item !== 'object') return new Set();
     const row = item as Record<string, unknown>;
     const index = row.index;
-    if (!Number.isInteger(index) || typeof index !== 'number' || index < 0 || index >= expectedCount ||
+    if (typeof index !== 'number' || !Number.isInteger(index) || index < 0 || index >= expectedCount ||
         seen.has(index) || typeof row.grounded !== 'boolean' || typeof row.unambiguous !== 'boolean') {
       return new Set();
     }
