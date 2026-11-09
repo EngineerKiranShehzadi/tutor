@@ -57,6 +57,7 @@ async function main() {
     console.log('Practice grading database integration checks passed');
   } finally {
     await pool.query('DELETE FROM users WHERE id = ANY($1::uuid[])',[ [studentId,otherId] ]);
+    await pool.query(`DELETE FROM lectures WHERE course_id IN (SELECT id FROM courses WHERE title='Practice Test Course')`);
     await pool.query(`DELETE FROM courses WHERE title='Practice Test Course'`);
   }
 }
