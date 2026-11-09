@@ -12,9 +12,11 @@ const good={
   lectureId:10,sourceId:901,category:'CONCEPTUAL',question:'What does integrity require?',
   options:['Consistency across situations','Different morals for different people','Ignoring personal principles','Unethical shortcuts'],
   correctIndex:0,explanation:'The source states that principles apply consistently.',
+  evidenceQuote:'Integrity means acting according to principles in all situations.',
 };
 assert.deepEqual(validateGenerated({questions:[good]},sources).length,1);
 assert.deepEqual(validateGenerated({questions:[good,good]},sources).length,1);
+assert.equal(validateGenerated({questions:[{...good,evidenceQuote:'An invented sentence which does not exist.'}]},sources).length,0);
 assert.deepEqual(validateGenerated({questions:[{...good,sourceId:902}]},sources).length,0);
 assert.deepEqual(validateGenerated({questions:[{...good,lectureId:12}]},sources).length,0);
 assert.deepEqual(validateGenerated({questions:[{...good,correctIndex:4}]},sources).length,0);
