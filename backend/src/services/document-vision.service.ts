@@ -15,7 +15,7 @@ const ENABLED = process.env.DOCUMENT_VISION_ENABLED !== 'false';
 async function renderVisualPages(buffer: Buffer, extension: string): Promise<VisualPage[]> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.env.DOCUMENT_EXTRACT_PYTHON || 'python3',
-      [SCRIPT, '--extension', extension, '--max-bytes', String(env.DATASET.MAX_UPLOAD_BYTES),
+      [SCRIPT, '--extension', extension, '--max-bytes', String(Math.min(env.DATASET.MAX_UPLOAD_BYTES, 25 * 1024 * 1024)),
         '--max-visual-pages', String(PAGE_LIMIT)],
       { shell: false, stdio: ['pipe', 'pipe', 'ignore'], env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } });
     let output = '';

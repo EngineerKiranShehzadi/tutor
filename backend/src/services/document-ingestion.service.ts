@@ -22,7 +22,8 @@ export type DocumentRowsResult = { rows: RawRow[]; warnings: string[]; units: nu
 
 const PYTHON_BIN = process.env.DOCUMENT_EXTRACT_PYTHON || 'python3';
 const EXTRACT_SCRIPT = path.resolve(__dirname, '../../scripts/extract_document.py');
-const MAX_RESULT_BYTES = 4_000_000; // 900k Unicode characters can occupy >1 MB in JSON
+const MAX_RESULT_BYTES = 4_000_000;
+const MAX_DOCUMENT_BYTES = Math.min(env.DATASET.MAX_UPLOAD_BYTES, 25 * 1024 * 1024); // 900k Unicode characters can occupy >1 MB in JSON
 const EXTRACT_TIMEOUT_MS = 30_000;
 
 // Separate limits for different risks: compressed upload, extracted text,
@@ -39,11 +40,11 @@ const extractTextOnly = (buffer: Buffer, extension: string): Promise<ExtractionR
   if (!DOCUMENT_EXTENSIONS.has(extension)) {
     throw new AppError('Unsupported document format', 400);
   }
-  if (buffer.length === 0 || buffer.length > env.DATASET.MAX_UPLOAD_BYTES) {
+  if (buffer.length === 0 || buffer.length > MAX_DOCUMENT_BYTES) {
     throw new AppError('Document is empty or exceeds the upload size limit', 413);
   }
   return new Promise((resolve, reject) => {
-    const child = spawn(PYTHON_BIN, [EXTRACT_SCRIPT, '--extension', extension, '--allow-visual', '--max-bytes', String(env.DATASET.MAX_UPLOAD_BYTES)], {
+    const child = spawn(PYTHON_BIN, [EXTRACT_SCRIPT, '--extension', extension, '--allow-visual', '--max-bytes', String(MAX_DOCUMENT_BYTES)], {
       shell: false, stdio: ['pipe', 'pipe', 'ignore'], // discard untrusted parser stderr; never log document contents
       env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
     });
