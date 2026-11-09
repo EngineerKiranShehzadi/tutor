@@ -41,3 +41,52 @@ jobs:
       - name: Frontend typecheck
         working-directory: frontend
         run: npm run typecheck
+
+  practice-grading-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: offline-test
+          POSTGRES_DB: practice_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d practice_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGPASSWORD: offline-test
+      PGDATABASE: practice_test
+      DB_HOST: 127.0.0.1
+      DB_PORT: '5432'
+      DB_USER: postgres
+      DB_PASSWORD: offline-test
+      DB_NAME: practice_test
+      JWT_SECRET: offline-test-access-secret-at-least-32-bytes
+      JWT_REFRESH_SECRET: offline-test-refresh-secret-at-least-32-bytes
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci --ignore-scripts
+      - name: Apply disposable schema and quiz migrations
+        run: |
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/schema.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrate.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/022_courses.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/023_practice_quizzes.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/023_practice_quizzes.sql
+      - name: Grade quizzes in disposable PostgreSQL
+        working-directory: backend
+        run: npm run test:practice-grading
