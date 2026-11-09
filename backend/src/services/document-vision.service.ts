@@ -141,13 +141,13 @@ export async function enrichDocumentWithVision(
     const batch = pages.slice(i, i + IMAGE_CONCURRENCY);
     const response = await Promise.all(batch.map(p => {
       const current = all.get(p.locator) || '';
-      const match = /^(Page|Slide) (\\d+)$/.exec(p.locator);
+      const match = /^(Page|Slide) (\d+)$/.exec(p.locator);
       const previous = match && Number(match[2]) > 1
         ? all.get(match[1] + ' ' + (Number(match[2]) - 1)) || ''
         : '';
       const nearbyText = current.slice(0, 1900) +
         (previous && current.length < 1900
-          ? '\\n\\nPrevious page/slide context (may be unrelated):\\n' + previous.slice(-900)
+          ? '\n\nPrevious page/slide context (may be unrelated):\n' + previous.slice(-900)
           : '');
       return describeVisual(p, nearbyText);
     }));
