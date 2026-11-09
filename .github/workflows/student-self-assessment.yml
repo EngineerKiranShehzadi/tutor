@@ -2,7 +2,7 @@ name: Student practice quiz checks
 
 on:
   push:
-    branches: [feature/student-self-assessment]
+    branches: [feature/student-self-assessment, feature/multi-format-ingestion]
   pull_request:
     paths:
       - 'backend/src/services/practice-quiz.service.ts'
