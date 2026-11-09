@@ -273,7 +273,7 @@ export async function myPracticeProgress(studentId:string,courseId?:number|null)
   if(courseId!=null)safeInt(courseId,'course');
   const [{rows:counts},{rows:byLecture}]=await Promise.all([
     query<{attempts:string;questions:string;correct:string}>(
-      `SELECT COUNT(DISTINCT qz.id)::text AS attempts,COUNT(a.id)::text AS questions,
+      `SELECT COUNT(DISTINCT qz.id)::text AS attempts,COUNT(a.question_id)::text AS questions,
        COUNT(qa.id) FILTER (WHERE a.is_correct)::text AS correct
        FROM practice_quizzes qz JOIN practice_questions qa ON qa.quiz_id=qz.id
        LEFT JOIN practice_answers a ON a.quiz_id=qz.id AND a.question_id=qa.id
