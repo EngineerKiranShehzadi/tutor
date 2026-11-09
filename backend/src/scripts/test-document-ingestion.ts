@@ -47,6 +47,19 @@ async function run() {
   assert.match(visual.rows[0].answer!, /Yes arrow/);
   assert.match(visual.rows[0].answer!, /A flowchart decides/);
 
+  const structured = await documentToRows('flowchart.pptx', {
+    units: [{ locator: 'Slide 4',
+      text: 'If statements choose a branch.\n\n[Diagram and figure interpretation from Slide 4]\n\nVisual topic: Conditional statements\nA decision diamond controls branching.\nDiagram nodes and labels: Start | marks >= 50 | Pass | Fail\nDiagram edges and directions: Yes to Pass | No to Fail'
+    }],
+    warnings: [],
+  });
+  assert.equal(structured.rows.length, 2);
+  assert.equal(structured.rows[0].topic, undefined);
+  assert.equal(structured.rows[1].topic, 'Conditional statements');
+  assert.match(structured.rows[1].answer!, /No to Fail/);
+  assert.match(structured.rows[1].question!, /Visual 1/);
+  assert.match(structured.rows[0].answer!, /If statements/);
+
   const same = await documentToRows('chapter-one.pdf', {
     units: [{ locator: 'Page 3', text: 'Python variables store values. '.repeat(95) }],
     warnings: [],
