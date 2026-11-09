@@ -13,6 +13,7 @@ type QuestionRow = { id: string; quiz_id: string; lecture_id: number; title: str
 const LIMIT_LECTURES = 50;
 const MAX_QUESTION_COUNT = 50;
 const CONTENT_PER_LECTURE = 6500;
+const QUIZ_GENERATION_CONCURRENCY = 6;
 
 const schema: LlmSchema = {
   type: 'OBJECT',
@@ -140,6 +141,22 @@ export function allocateByLecture(lectureIds: number[]): Map<number, number> {
   return plan;
 }
 
+export async function mapWithConcurrency<T, R>(
+  values: readonly T[], concurrency: number, task: (value: T) => Promise<R>
+): Promise<R[]> {
+  if (!Number.isSafeInteger(concurrency) || concurrency < 1) throw new Error('Invalid quiz concurrency');
+  const output = new Array<R>(values.length);
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < values.length) {
+      const index = cursor++;
+      output[index] = await task(values[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, () => worker()));
+  return output;
+}
+
 async function generateBatch(lecture: { id: number; title: string; sources: Source[]; count: number; categoryOffset: number }): Promise<Generated[]> {
   const validSources = new Map(lecture.sources.map(s => [s.id, s]));
   const evidence = buildEvidence(lecture.sources);
@@ -207,11 +224,8 @@ export async function createPracticeQuiz(studentId: string, courseId: number, re
     categoryOffset += item.count;
     return scheduledItem;
   });
-  const results: Generated[] = [];
-  for (let start = 0; start < scheduled.length; start += 3) {
-    const group = await Promise.all(scheduled.slice(start,start + 3).map(generateBatch));
-    group.forEach(r => results.push(...r));
-  }
+  const groups = await mapWithConcurrency(scheduled, QUIZ_GENERATION_CONCURRENCY, generateBatch);
+  const results = groups.flat();
   const sources = new Map(all.flatMap(l => l.sources).map(s => [s.id,s]));
   const client = await pool.connect();
   try {
