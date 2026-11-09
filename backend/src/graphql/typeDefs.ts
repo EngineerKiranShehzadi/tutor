@@ -363,8 +363,73 @@ export const typeDefs = `#graphql
   }
 
   # ── Queries ───────────────────────────────────────────
+
+  type PracticeQuestion {
+    id: Int!
+    lectureId: Int!
+    lectureTitle: String!
+    category: String!
+    question: String!
+    options: [String!]!
+    position: Int!
+    selectedIndex: Int
+    correctIndex: Int
+    isCorrect: Boolean
+    explanation: String
+    source: String
+  }
+  type PracticeLectureBreakdown {
+    lectureId: Int!
+    lectureTitle: String!
+    total: Int!
+    correct: Int!
+    incorrect: Int!
+    recommendation: String!
+  }
+  type PracticeQuiz {
+    id: Int!
+    courseId: Int!
+    lectureIds: [Int!]!
+    status: String!
+    total: Int!
+    correct: Int
+    percent: Int
+    createdAt: String!
+    submittedAt: String
+    questions: [PracticeQuestion!]!
+    breakdown: [PracticeLectureBreakdown!]!
+  }
+  type PracticeQuizHistory {
+    id: Int!
+    courseId: Int!
+    status: String!
+    total: Int!
+    correct: Int
+    percent: Int
+    createdAt: String!
+    submittedAt: String
+  }
+  type PracticeLectureProgress {
+    lectureId: Int!
+    lectureTitle: String!
+    total: Int!
+    correct: Int!
+    percent: Int!
+  }
+  type PracticeProgress {
+    attempts: Int!
+    answered: Int!
+    correct: Int!
+    percent: Int!
+    lectures: [PracticeLectureProgress!]!
+  }
+  input PracticeAnswerInput { questionId: Int!, selectedIndex: Int! }
+
   type Query {
     myStats: StudentStats!
+    myPracticeQuiz(id: Int!): PracticeQuiz!
+    myPracticeQuizzes(courseId: Int): [PracticeQuizHistory!]!
+    myPracticeProgress(courseId: Int): PracticeProgress!
     # The signed-in user's own notifications, newest first.
     # limit defaults to 10 and is capped at 50.
     myNotifications(limit: Int, offset: Int): NotificationPage!
@@ -398,6 +463,8 @@ export const typeDefs = `#graphql
 
   # ── Mutations ─────────────────────────────────────────
   type Mutation {
+    createPracticeQuiz(courseId: Int!, lectureIds: [Int!]!): PracticeQuiz!
+    submitPracticeQuiz(id: Int!, answers: [PracticeAnswerInput!]!): PracticeQuiz!
     requestPasswordReset(input: RequestPasswordResetInput!):      SuccessResponse!
     resendPasswordResetOtp(input: ResendPasswordResetOtpInput!):  SuccessResponse!
     verifyOtp(input: VerifyOtpInput!):                            SuccessResponse!

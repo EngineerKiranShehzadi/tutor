@@ -13,6 +13,7 @@ import { courseResolvers } from './resolvers/course.resolver';
 import { analyticsResolvers } from './resolvers/analytics.resolver';
 import { userResolvers } from './resolvers/user.resolver';
 import { notificationResolvers } from './resolvers/notification.resolver';
+import { practiceQuizResolvers } from './resolvers/practice-quiz.resolver';
 import { GraphQLContext } from './context';
 import { verifyAccessToken } from '../utils/jwt';
 import { query } from '../config/database';
@@ -30,6 +31,7 @@ const mergedResolvers = {
     ...analyticsResolvers.Query,
     ...userResolvers.Query,
     ...notificationResolvers.Query,
+    ...practiceQuizResolvers.Query,
   },
   Mutation: {
     ...authResolvers.Mutation,
@@ -38,6 +40,7 @@ const mergedResolvers = {
     ...chatResolvers.Mutation,
     ...userResolvers.Mutation,
     ...notificationResolvers.Mutation,
+    ...practiceQuizResolvers.Mutation,
   },
 };
 
