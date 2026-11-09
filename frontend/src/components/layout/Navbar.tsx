@@ -20,6 +20,12 @@ const NAV_LINKS = [
     section: ['/lectures', '/lecture'],
   },
   {
+    href: '/practice',
+    label: 'Practice',
+    icon: 'fas fa-clipboard-check',
+    section: ['/practice'],
+  },
+  {
     href: '/profile/activity',
     label: 'My Activity',
     icon: 'fas fa-clock-rotate-left',
