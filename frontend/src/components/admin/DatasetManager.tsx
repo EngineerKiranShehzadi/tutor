@@ -150,6 +150,7 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
     const f = e.target.files?.[0];
     if (!f) return;
     if (!/\.(xlsx|pdf|docx|ppt|pptx|txt|html|htm)$/i.test(f.name)) { setError('Use .xlsx, .pdf, .docx, .ppt, .pptx, .txt or .html files.'); return; }
+    if (!f.size || f.size > 10 * 1024 * 1024) { setError('File must be non-empty and within the default 10 MB upload limit.'); return; }
     setFile(f);
     void analyse(f, mode);
   };
@@ -313,7 +314,7 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
 
         {/* File picker */}
         <div className="flex items-center gap-4 flex-wrap">
-          <input ref={fileRef} type="file" accept=".xlsx,.pdf,.docx,.pptx,.txt,.html,.htm" className="hidden" onChange={onFile} data-testid="dataset-file-input" />
+          <input ref={fileRef} type="file" accept=".xlsx,.pdf,.docx,.ppt,.pptx,.txt,.html,.htm" className="hidden" onChange={onFile} data-testid="dataset-file-input" />
           <button
             onClick={() => fileRef.current?.click()}
             disabled={busy}
