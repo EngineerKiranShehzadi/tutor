@@ -38,6 +38,13 @@ jobs:
           python -m pip install -r backend/scripts/document_requirements.txt
           python -m unittest discover -s backend/scripts -p test_extract_document.py -v
           python -m unittest discover -s backend/scripts -p test_visual_document.py -v
+      - name: Validate visual grounding and model failures
+        working-directory: backend
+        env:
+          DB_PASSWORD: offline-test
+          JWT_SECRET: offline-test-access-secret-at-least-32-bytes
+          JWT_REFRESH_SECRET: offline-test-refresh-secret-at-least-32-bytes
+        run: npm run test:document-vision
       - name: Backend typecheck
         working-directory: backend
         run: npm run typecheck

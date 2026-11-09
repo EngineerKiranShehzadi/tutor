@@ -62,7 +62,8 @@
     "test": "ts-node --transpile-only src/scripts/run-tests.ts",
     "test:practice-quiz": "ts-node --transpile-only src/scripts/test-practice-quiz.ts",
     "test:practice-grading": "ts-node --transpile-only src/scripts/test-practice-grading.ts",
-    "db:practice": "ts-node --transpile-only src/scripts/setup-practice-quizzes.ts"
+    "db:practice": "ts-node --transpile-only src/scripts/setup-practice-quizzes.ts",
+    "test:document-vision": "ts-node --transpile-only src/scripts/test-document-vision.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.35.0",

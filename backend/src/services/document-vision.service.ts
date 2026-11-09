@@ -83,7 +83,7 @@ export function mergeVisionIntoUnits(units: VisionUnit[], descriptions: Map<stri
   return merged;
 }
 
-async function describeVisual(page: VisualPage, nearbyText: string): Promise<VisionDescription> {
+export async function describeVisual(page: VisualPage, nearbyText: string): Promise<VisionDescription> {
   const key = env.LLM.OPENAI.API_KEY;
   if (!key) throw new AppError('Visual document ingestion requires OPENAI_API_KEY.', 503);
   const controller = new AbortController();
