@@ -19,7 +19,7 @@ MAX_RENDER_PIXELS = 1300 * 1300
 
 
 def to_jpeg(page):
-    import fitz
+    import pymupdf as fitz
     from PIL import Image
     ratio = min(1.6, 1300 / max(page.rect.width, page.rect.height, 1))
     pix = page.get_pixmap(matrix=fitz.Matrix(ratio, ratio), alpha=False)
@@ -75,12 +75,12 @@ def slide_visual_indexes(data, extension):
     targets = []
     types = {MSO_SHAPE_TYPE.PICTURE, MSO_SHAPE_TYPE.CHART, MSO_SHAPE_TYPE.GROUP,
              MSO_SHAPE_TYPE.FREEFORM, MSO_SHAPE_TYPE.AUTO_SHAPE,
-             MSO_SHAPE_TYPE.LINE, MSO_SHAPE_TYPE.GRAPHIC_FRAME,
+             MSO_SHAPE_TYPE.LINE, MSO_SHAPE_TYPE.TABLE, MSO_SHAPE_TYPE.DIAGRAM,
              MSO_SHAPE_TYPE.EMBEDDED_OLE_OBJECT}
     for idx, slide in enumerate(prs.slides):
         structural = sum(1 for shape in slide.shapes if shape.shape_type in types)
         pictures = any(shape.shape_type in (MSO_SHAPE_TYPE.PICTURE, MSO_SHAPE_TYPE.GROUP,
-                                            MSO_SHAPE_TYPE.GRAPHIC_FRAME) for shape in slide.shapes)
+                                            MSO_SHAPE_TYPE.TABLE, MSO_SHAPE_TYPE.CHART, MSO_SHAPE_TYPE.DIAGRAM) for shape in slide.shapes)
         if pictures or structural >= 2:
             targets.append(idx)
     return targets
