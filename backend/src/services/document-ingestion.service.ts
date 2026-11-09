@@ -134,16 +134,30 @@ export const documentToRows = async (
     const text = unit.text.trim();
     if (!text) continue;
     const locator = unit.locator.replace(/[\r\n\x00-\x1f]/g, ' ').trim().slice(0, 90) || `Section ${unitNumber}`;
-    const parts = await splitter.splitText(text);
-    for (let part = 0; part < parts.length; part++) {
-      const question = `Source excerpt: ${safeName} | ${locator} | Part ${part + 1}`;
-      rows.push({
-        question,
-        answer: parts[part],
-        start_time: `${safeName} | ${locator}`,
-      });
-      if (rows.length > env.DATASET.MAX_ROWS) {
-        throw new AppError(`Document contains more than ${env.DATASET.MAX_ROWS} sections. Split it into smaller files.`, 413);
+    const visualMarker = '[Diagram and figure interpretation from ' + unit.locator + ']';
+    const visualAt = text.indexOf(visualMarker);
+    const sections = visualAt >= 0
+      ? [{ body: text.slice(0, visualAt).trim(), isVisual: false },
+         { body: text.slice(visualAt + visualMarker.length).trim(), isVisual: true }]
+      : [{ body: text, isVisual: false }];
+    for (const section of sections) {
+      if (!section.body) continue;
+      const visualTopic = section.isVisual
+        ? /^Visual topic:\s*(.+)$/m.exec(section.body)?.[1]?.trim().slice(0, 200)
+        : undefined;
+      const parts = await splitter.splitText(section.body);
+      for (let part = 0; part < parts.length; part++) {
+        const kind = section.isVisual ? 'Visual' : 'Part';
+        const question = `Source excerpt: ${safeName} | ${locator} | ${kind} ${part + 1}`;
+        rows.push({
+          question,
+          answer: parts[part],
+          topic: visualTopic || undefined,
+          start_time: `${safeName} | ${locator}`,
+        });
+        if (rows.length > env.DATASET.MAX_ROWS) {
+          throw new AppError(`Document contains more than ${env.DATASET.MAX_ROWS} sections. Split it into smaller files.`, 413);
+        }
       }
     }
   }
