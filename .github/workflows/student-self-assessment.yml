@@ -45,6 +45,13 @@ jobs:
           JWT_SECRET: offline-test-access-secret-at-least-32-bytes
           JWT_REFRESH_SECRET: offline-test-refresh-secret-at-least-32-bytes
         run: npm run test:document-vision
+      - name: Test document-to-chunk ingestion mapping
+        working-directory: backend
+        env:
+          DB_PASSWORD: offline-test
+          JWT_SECRET: offline-test-access-secret-at-least-32-bytes
+          JWT_REFRESH_SECRET: offline-test-refresh-secret-at-least-32-bytes
+        run: npm run test:document-ingestion
       - name: Backend typecheck
         working-directory: backend
         run: npm run typecheck

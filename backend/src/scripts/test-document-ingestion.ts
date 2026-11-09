@@ -12,6 +12,7 @@ async function run() {
   assert.equal(supportedDatasetExtension('lecture.PDF'), '.pdf');
   assert.equal(supportedDatasetExtension('notes.docx'), '.docx');
   assert.equal(supportedDatasetExtension('slides.pptx'), '.pptx');
+  assert.equal(supportedDatasetExtension('legacy.PPT'), '.ppt');
   assert.equal(supportedDatasetExtension('explanation.txt'), '.txt');
   assert.equal(supportedDatasetExtension('lesson.html'), '.html');
   assert.equal(supportedDatasetExtension('qa.xlsx'), '.xlsx');
@@ -33,6 +34,18 @@ async function run() {
     assert.equal(pieces.length, 1);
     assert.ok(pieces[0].chunkText.includes(row.answer!));
   }
+
+  const visual = await documentToRows('programming.pptx', {
+    units: [{
+      locator: 'Slide 8',
+      text: 'A flowchart decides which branch runs.\\n\\n[Diagram and figure interpretation]\\nDiamond labeled Condition. Yes arrow to Task A. No arrow to Task B.'
+    }],
+    warnings: ['Vision-grounded description attached'],
+  });
+  assert.equal(visual.rows[0].start_time, 'programming.pptx | Slide 8');
+  assert.match(visual.rows[0].answer!, /Condition/);
+  assert.match(visual.rows[0].answer!, /Yes arrow/);
+  assert.match(visual.rows[0].answer!, /A flowchart decides/);
 
   const same = await documentToRows('chapter-one.pdf', {
     units: [{ locator: 'Page 3', text: 'Python variables store values. '.repeat(95) }],
