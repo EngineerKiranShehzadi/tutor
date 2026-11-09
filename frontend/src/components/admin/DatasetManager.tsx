@@ -150,7 +150,7 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
     const f = e.target.files?.[0];
     if (!f) return;
     if (!/\.(xlsx|pdf|docx|ppt|pptx|txt|html|htm)$/i.test(f.name)) { setError('Use .xlsx, .pdf, .docx, .ppt, .pptx, .txt or .html files.'); return; }
-    if (!f.size || f.size > 10 * 1024 * 1024) { setError('File must be non-empty and within the default 10 MB upload limit.'); return; }
+    if (!f.size) { setError('File is empty. Please select a non-empty file.'); return; }
     setFile(f);
     void analyse(f, mode);
   };
