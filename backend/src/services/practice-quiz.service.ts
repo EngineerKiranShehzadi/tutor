@@ -88,11 +88,11 @@ export function allocateByLecture(lectureIds: number[]): Map<number, number> {
   return plan;
 }
 
-async function generateBatch(lecture: { id: number; title: string; sources: Source[]; count: number }): Promise<Generated[]> {
+async function generateBatch(lecture: { id: number; title: string; sources: Source[]; count: number; categoryOffset: number }): Promise<Generated[]> {
   const validSources = new Map(lecture.sources.map(s => [s.id, s]));
   const evidence = buildEvidence(lecture.sources);
   const provider = resolveLlmProvider(env.LLM.RAG_ANSWER.PROVIDER);
-  const expected = Array.from({length: lecture.count}, (_, index) => CATEGORIES[index % CATEGORIES.length]).join(', ');
+  const expected = Array.from({length: lecture.count}, (_, index) => CATEGORIES[(lecture.categoryOffset + index) % CATEGORIES.length]).join(', ');
   const prompt = 'Lecture ID: ' + lecture.id + '\nTitle: ' + lecture.title + '\nGenerate EXACTLY ' + lecture.count +
     ' independent four-option MCQs. Categories in question order: ' + expected +
     '. Choose a sourceId only from the given source numbers, and set lectureId=' + lecture.id +
@@ -149,9 +149,15 @@ export async function createPracticeQuiz(studentId: string, courseId: number, re
     if (!rows.length) throw new AppError('A selected lecture has no usable learning content.', 400);
     return {id, title: lecture.title, sources: sampleSources(rows), count: plan.get(id)!};
   }));
+  let categoryOffset = 0;
+  const scheduled = all.map(item => {
+    const scheduledItem = {...item, categoryOffset};
+    categoryOffset += item.count;
+    return scheduledItem;
+  });
   const results: Generated[] = [];
-  for (let start = 0; start < all.length; start += 3) {
-    const group = await Promise.all(all.slice(start,start + 3).map(generateBatch));
+  for (let start = 0; start < scheduled.length; start += 3) {
+    const group = await Promise.all(scheduled.slice(start,start + 3).map(generateBatch));
     group.forEach(r => results.push(...r));
   }
   const sources = new Map(all.flatMap(l => l.sources).map(s => [s.id,s]));
@@ -207,7 +213,15 @@ export async function loadPracticeQuiz(studentId: string, quizId: number) {
       if(q.isCorrect) s.correct++; else s.incorrect++;
     }
   }
-  const breakdown=Array.from(byLecture.values()).map(s=>({...s,recommendation:completed&&s.incorrect>0?'Review '+s.lectureTitle+' and retry practice after revising the missed concepts.':completed?'All answers correct for this lecture.':'Not submitted yet.'}));
+  const breakdown=Array.from(byLecture.values()).map(s=>{
+    const missed=completed
+      ?questions.filter(q=>q.lectureId===s.lectureId&&!q.isCorrect).map(q=>q.question.replace(/[?!.]+$/,'').slice(0,120))
+      :[];
+    const recommendation=completed&&s.incorrect>0
+      ?'Revise '+s.lectureTitle+' with focus on: '+missed.slice(0,3).join('; ')+(missed.length>3?'; and other missed questions':'')+'.'
+      :completed?'All answers correct for this lecture.':'Not submitted yet.';
+    return {...s,recommendation};
+  });
   return {
     id:Number(quiz.id),courseId:quiz.course_id,lectureIds:quiz.lecture_ids,status:quiz.status,
     total:quiz.question_count,correct:completed?quiz.correct_count:null,

@@ -59,7 +59,8 @@
     "e2e:up": "bash e2e/up.sh",
     "e2e:browser": "node e2e/browser-e2e.js",
     "e2e:down": "bash e2e/down.sh",
-    "test": "ts-node --transpile-only src/scripts/run-tests.ts"
+    "test": "ts-node --transpile-only src/scripts/run-tests.ts",
+    "test:practice-quiz": "ts-node --transpile-only src/scripts/test-practice-quiz.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.35.0",
