@@ -1,5 +1,5 @@
 import assert from 'assert/strict';
-import {allocateByLecture,validateGenerated} from '../services/practice-quiz.service';
+import {allocateByLecture,validateGenerated,verifiedQuestionIndexes} from '../services/practice-quiz.service';
 
 const plan=allocateByLecture([10,11,12,13,14,15,16]);
 assert.equal([...plan.values()].reduce((sum,n)=>sum+n,0),10);
@@ -22,4 +22,7 @@ assert.deepEqual(validateGenerated({questions:[{...good,lectureId:12}]},sources)
 assert.deepEqual(validateGenerated({questions:[{...good,correctIndex:4}]},sources).length,0);
 assert.deepEqual(validateGenerated({questions:[{...good,options:['A','A','C','D']}]},sources).length,0);
 assert.deepEqual(validateGenerated({questions:[{...good,category:'UNSUPPORTED'}]},sources).length,0);
+assert.deepEqual([...verifiedQuestionIndexes({checks:[{index:0,grounded:true,unambiguous:true},{index:1,grounded:false,unambiguous:true}]},2)],[0]);
+assert.equal(verifiedQuestionIndexes({checks:[{index:0,grounded:true,unambiguous:true}]},2).size,0);
+assert.equal(verifiedQuestionIndexes({checks:[{index:0,grounded:true,unambiguous:true},{index:0,grounded:true,unambiguous:true}]},2).size,0);
 console.log('Practice quiz generation validation and lecture allocation checks passed');
