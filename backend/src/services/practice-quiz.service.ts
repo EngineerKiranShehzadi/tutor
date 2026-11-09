@@ -12,7 +12,7 @@ type QuizRow = { id: string; student_id: string; course_id: number; lecture_ids:
 type QuestionRow = { id: string; quiz_id: string; lecture_id: number; title: string; position: number; category: Category; question: string; options: string[]; correct_index: number; explanation: string; source_label: string; selected_index: number | null };
 const LIMIT_LECTURES = 50;
 const MAX_QUESTION_COUNT = 50;
-const CONTENT_PER_LECTURE = 3300;
+const CONTENT_PER_LECTURE = 6500;
 
 const schema: LlmSchema = {
   type: 'OBJECT',
@@ -46,7 +46,7 @@ function buildEvidence(sources: Source[]): string {
   }).join('\n\n');
 }
 
-function sampleSources(rows: Source[], max = 10): Source[] {
+function sampleSources(rows: Source[], max = 14): Source[] {
   if (rows.length <= max) return rows;
   const selected: Source[] = [];
   for (let i = 0; i < max; i++) selected.push(rows[Math.floor(i * (rows.length - 1) / (max - 1))]);
@@ -140,11 +140,11 @@ export async function createPracticeQuiz(studentId: string, courseId: number, re
   const all = await Promise.all(requestedIds.map(async id => {
     const lecture = lectureInfo.get(id)!;
     const {rows} = await query<Source>(
-      `SELECT c.id, c.lecture_id, c.answer, c.question, c.topic, c.start_time
+      `SELECT c.id, c.lecture_id, c.chunk_text AS answer, c.question, c.topic, c.start_time
          FROM lecture_qna_chunks c
          JOIN dataset_version_chunks d ON d.chunk_id = c.id
-         WHERE d.version_id = $1 AND c.lecture_id = $2 AND d.chunk_index = 0
-         ORDER BY c.id ASC`, [lecture.active_version_id, id]
+         WHERE d.version_id = $1 AND c.lecture_id = $2
+         ORDER BY d.qa_id ASC, d.chunk_index ASC, c.id ASC`, [lecture.active_version_id, id]
     );
     if (!rows.length) throw new AppError('A selected lecture has no usable learning content.', 400);
     return {id, title: lecture.title, sources: sampleSources(rows), count: plan.get(id)!};
@@ -270,7 +270,7 @@ export async function myPracticeProgress(studentId:string,courseId?:number|null)
   if(courseId!=null)safeInt(courseId,'course');
   const [{rows:counts},{rows:byLecture}]=await Promise.all([
     query<{attempts:string;questions:string;correct:string}>(
-      `SELECT COUNT(DISTINCT qz.id)::text AS attempts,COUNT(qa.id)::text AS questions,
+      `SELECT COUNT(DISTINCT qz.id)::text AS attempts,COUNT(a.id)::text AS questions,
        COUNT(qa.id) FILTER (WHERE a.is_correct)::text AS correct
        FROM practice_quizzes qz JOIN practice_questions qa ON qa.quiz_id=qz.id
        LEFT JOIN practice_answers a ON a.quiz_id=qz.id AND a.question_id=qa.id
