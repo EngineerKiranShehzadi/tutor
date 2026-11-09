@@ -40,7 +40,8 @@ export default function PracticePage() {
   const isFinished=quiz?.status==='COMPLETED';
   const list:DBCourse[]=courses.data?.courses??[];
   const all:DBLecture[]=lectures.data?.lectures??[];
-  const ready=useMemo(()=>sortLectures(all.filter(l=>Number(l.courseId)===courseId&&isLectureReady(l.status))),[all,courseId]);
+  const visible=useMemo(()=>sortLectures(all.filter(l=>Number(l.courseId)===courseId)),[all,courseId]);
+  const ready=visible.filter(l=>isLectureReady(l.status));
   const course=list.find(c=>Number(c.id)===courseId);
   const completed=(history.data?.myPracticeQuizzes??[]) as PastQuiz[];
   const stats=progress.data?.myPracticeProgress as Summary|undefined;
@@ -111,7 +112,7 @@ export default function PracticePage() {
               </select>
               <div className="flex items-center justify-between gap-4 mb-3">
                 <div>
-                  <p className="text-label font-semibold text-[var(--text)]">{ready.length} tutor-ready lecture{ready.length===1?'':'s'}</p>
+                  <p className="text-label font-semibold text-[var(--text)]">{ready.length} of {visible.length} lecture{visible.length===1?'':'s'} ready</p>
                   <p className="text-caption text-[var(--muted)]">Select any number of lectures from this course.</p>
                 </div>
                 <button disabled={!ready.length} onClick={()=>setSelected(selected.length===ready.length?[]:ready.map(l=>Number(l.id)))}
@@ -119,13 +120,16 @@ export default function PracticePage() {
                   {selected.length===ready.length&&ready.length?'Clear all':'Select all'}
                 </button>
               </div>
-              {ready.length===0?<div className="rounded-card bg-[var(--surface)] p-5 text-label text-[var(--muted)]">No lectures with ready learning material in this course yet.</div>:
+              {visible.length===0?<div className="rounded-card bg-[var(--surface)] p-5 text-label text-[var(--muted)]">No lectures have been added to this course yet.</div>:
               <div className="divide-y divide-[var(--border)] border border-[var(--border)] rounded-card overflow-hidden">
-                {ready.map(l=><label key={l.id} className="flex cursor-pointer items-center gap-3 px-4 py-3 hover:bg-[var(--surface)]">
-                  <input type="checkbox" checked={selected.includes(Number(l.id))} onChange={()=>toggle(Number(l.id))} className="h-4 w-4 accent-[var(--accent)]" />
-                  <span className="flex-1 text-label font-medium text-[var(--text)]">{l.title}</span>
-                  <span className="text-caption text-[var(--muted)]">Ready</span>
-                </label>)}
+                {visible.map(l=>{
+                  const selectable=isLectureReady(l.status);
+                  return <label key={l.id} className={'flex items-center gap-3 px-4 py-3 '+(selectable?'cursor-pointer hover:bg-[var(--surface)]':'opacity-55 cursor-not-allowed')}>
+                    <input type="checkbox" disabled={!selectable} checked={selected.includes(Number(l.id))} onChange={()=>toggle(Number(l.id))} className="h-4 w-4 accent-[var(--accent)]" />
+                    <span className="flex-1 text-label font-medium text-[var(--text)]">{l.title}</span>
+                    <span className="text-caption text-[var(--muted)]">{selectable?'Ready':'Material not ready'}</span>
+                  </label>;
+                })}
               </div>}
             </section>
             <aside className="rounded-card border border-[var(--border)] bg-white p-6 h-fit">
