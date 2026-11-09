@@ -149,7 +149,7 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
   const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (!f) return;
-    if (!/\.(xlsx|pdf|docx|pptx|txt|html|htm)$/i.test(f.name)) { setError('Use .xlsx, .pdf, .docx, .pptx, .txt or .html files.'); return; }
+    if (!/\.(xlsx|pdf|docx|ppt|pptx|txt|html|htm)$/i.test(f.name)) { setError('Use .xlsx, .pdf, .docx, .ppt, .pptx, .txt or .html files.'); return; }
     setFile(f);
     void analyse(f, mode);
   };
@@ -281,7 +281,7 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
 
       <div className="p-6 flex flex-col gap-5">
         <p className="text-[15px] text-slate-500 leading-relaxed">
-          Upload Q&amp;A Excel or lecture notes (PDF, DOCX, PPTX, TXT, HTML). Documents are converted into searchable sections without manual Q&amp;A preparation. The live version stays available during processing.
+          Upload Q&amp;A Excel or lecture notes (PDF, DOCX, PPT, PPTX, TXT, HTML). Documents are converted into searchable sections without manual Q&amp;A preparation. The live version stays available during processing.
           To edit existing rows, export first and keep the <code className="font-mono text-[13px] bg-slate-100 px-1 rounded">qa_id</code> column.
         </p>
 

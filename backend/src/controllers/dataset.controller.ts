@@ -33,13 +33,13 @@ export const uploadDataset = async (
   }
 
   if (!req.file) {
-    sendError(res, 'No file uploaded. Attach an .xlsx, .pdf, .docx, .pptx, .txt or .html file.', 400);
+    sendError(res, 'No file uploaded. Attach an .xlsx, .pdf, .docx, .ppt, .pptx, .txt or .html file.', 400);
     return;
   }
 
   const extension = supportedDatasetExtension(req.file.originalname);
   if (!extension) {
-    sendError(res, 'Supported formats: .xlsx, .pdf, .docx, .pptx, .txt, .html, .htm', 400);
+    sendError(res, 'Supported formats: .xlsx, .pdf, .docx, .ppt, .pptx, .txt, .html, .htm', 400);
     return;
   }
 

@@ -24,6 +24,7 @@ export const XLSX_MIME_TYPES = new Set([
 const DOCUMENT_MIME_TYPES: Record<string, Set<string>> = {
   '.pdf': new Set(['application/pdf', 'application/octet-stream', '']),
   '.docx': new Set(['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/zip', 'application/octet-stream', '']),
+  '.ppt': new Set(['application/vnd.ms-powerpoint', 'application/mspowerpoint', 'application/octet-stream', '']),
   '.pptx': new Set(['application/vnd.openxmlformats-officedocument.presentationml.presentation', 'application/zip', 'application/octet-stream', '']),
   '.txt': new Set(['text/plain', 'application/octet-stream', '']),
   '.html': new Set(['text/html', 'application/xhtml+xml', 'application/octet-stream', '']),
@@ -38,7 +39,7 @@ const upload = multer({
     const mime = (file.mimetype ?? '').toLowerCase();
     const allowed = ext === '.xlsx' ? XLSX_MIME_TYPES : ext ? DOCUMENT_MIME_TYPES[ext] : undefined;
     if (allowed?.has(mime)) cb(null, true);
-    else cb(new AppError('Unsupported file type. Use .xlsx, .pdf, .docx, .pptx, .txt or .html.', 400));
+    else cb(new AppError('Unsupported file type. Use .xlsx, .pdf, .docx, .ppt, .pptx, .txt or .html.', 400));
   },
 });
 
