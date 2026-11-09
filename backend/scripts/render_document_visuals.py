@@ -81,7 +81,12 @@ def slide_visual_indexes(data, extension):
         structural = sum(1 for shape in slide.shapes if shape.shape_type in types)
         pictures = any(shape.shape_type in (MSO_SHAPE_TYPE.PICTURE, MSO_SHAPE_TYPE.GROUP,
                                             MSO_SHAPE_TYPE.TABLE, MSO_SHAPE_TYPE.CHART, MSO_SHAPE_TYPE.DIAGRAM) for shape in slide.shapes)
-        if pictures or structural >= 2:
+        flowchart = any(
+            shape.shape_type == MSO_SHAPE_TYPE.AUTO_SHAPE
+            and "FLOW_CHART" in str(getattr(shape, "auto_shape_type", ""))
+            for shape in slide.shapes
+        )
+        if pictures or flowchart or structural >= 2:
             targets.append(idx)
     return targets
 
@@ -93,7 +98,8 @@ def identify_pdf_pages(doc):
         images = page.get_images(full=True)
         drawings = page.get_drawings()
         text = page.get_text("text").strip()
-        if images or len(drawings) >= 3 or (not text and drawings):
+        complex_vector = any(len(drawing.get("items", [])) >= 3 for drawing in drawings)
+        if images or len(drawings) >= 3 or complex_vector or (not text and drawings):
             selected.append(idx)
     return selected
 
