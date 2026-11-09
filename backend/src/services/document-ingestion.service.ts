@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { createHash } from 'crypto';
 import path from 'path';
 import { AppError } from '../middleware/errorHandler';
 import type { RawRow } from './chunk.service';
@@ -93,10 +94,22 @@ const extractTextOnly = (buffer: Buffer, extension: string): Promise<ExtractionR
   });
 };
 
+const extractionCache = new Map<string, { expiresAt: number; result: ExtractionResult }>();
+const EXTRACTION_CACHE_MS = 10 * 60_000;
+const EXTRACTION_CACHE_LIMIT = 8;
+
 export async function runDocumentExtractor(buffer: Buffer, extension: string): Promise<ExtractionResult> {
+  const digest = createHash('sha256').update(extension).update(buffer).digest('hex');
+  const found = extractionCache.get(digest);
+  if (found && found.expiresAt > Date.now()) return found.result;
+  if (found) extractionCache.delete(digest);
   const textResult = await extractTextOnly(buffer, extension);
   const enriched = await enrichDocumentWithVision(buffer, extension, textResult.units);
-  return { units: enriched.units, warnings: [...textResult.warnings, ...enriched.warnings] };
+  const result = { units: enriched.units, warnings: [...textResult.warnings, ...enriched.warnings] };
+  for (const [key, entry] of extractionCache) if (entry.expiresAt <= Date.now()) extractionCache.delete(key);
+  if (extractionCache.size >= EXTRACTION_CACHE_LIMIT) extractionCache.delete(extractionCache.keys().next().value!);
+  extractionCache.set(digest, { expiresAt: Date.now() + EXTRACTION_CACHE_MS, result });
+  return result;
 }
 
 // Each document section is stored as one content-bearing row in the existing
