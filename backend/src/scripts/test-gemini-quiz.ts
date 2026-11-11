@@ -63,6 +63,36 @@ async function run() {
     geminiLlmProvider.generate({ model: 'gemini-2.5-flash-lite', userPrompt: 'Quiz' }),
     /empty or blocked/
   );
+  now += 60_000;
+  let unavailableAttempts = 0;
+  globalThis.fetch = (async () => {
+    unavailableAttempts++;
+    if (unavailableAttempts === 1) return { ok: false, status: 503 } as Response;
+    return {
+      ok: true,
+      json: async () => ({
+        candidates: [{ content: { parts: [{ text: '{"questions":[]}' }] }, finishReason: 'STOP' }],
+      }),
+    } as Response;
+  }) as typeof fetch;
+  const recovered = await geminiLlmProvider.generate({
+    model: 'gemini-3.5-flash-lite', userPrompt: 'Quiz retry', timeoutMs: 10000,
+  });
+  assert.equal(recovered.raw, '{"questions":[]}');
+  assert.equal(unavailableAttempts, 2);
+
+  now += 60_000;
+  let permanentAttempts = 0;
+  globalThis.fetch = (async () => {
+    permanentAttempts++;
+    return { ok: false, status: 503 } as Response;
+  }) as typeof fetch;
+  await assert.rejects(
+    geminiLlmProvider.generate({ model: 'gemini-3.5-flash-lite', userPrompt: 'Quiz retry', timeoutMs: 10000 }),
+    /temporarily overloaded/
+  );
+  assert.equal(permanentAttempts, 2);
+
   console.log('Quiz-only Gemini structured output and quota failure tests passed');
 }
 
