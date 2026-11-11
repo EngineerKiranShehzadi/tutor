@@ -235,14 +235,24 @@ export async function createPracticeQuiz(studentId: string, courseId: number, re
       [studentId,courseId,requestedIds,results.length]
     );
     const quizId = quizResult.rows[0].id;
-    for (let i = 0; i < results.length; i++) {
-      const q = results[i], s = sources.get(q.sourceId)!;
-      await client.query(
-        `INSERT INTO practice_questions(quiz_id,lecture_id,position,category,question,options,correct_index,explanation,source_label,source_chunk_id)
-         VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10)`,
-        [quizId,q.lectureId,i + 1,q.category,q.question,JSON.stringify(q.options),q.correctIndex,q.explanation,label(s),s.id]
-      );
-    }
+    const questionRows = results.map((q, i) => {
+      const s = sources.get(q.sourceId)!;
+      return {
+        lecture_id: q.lectureId, position: i + 1, category: q.category,
+        question: q.question, options: q.options, correct_index: q.correctIndex,
+        explanation: q.explanation, source_label: label(s), source_chunk_id: s.id,
+      };
+    });
+    await client.query(
+      `INSERT INTO practice_questions(quiz_id,lecture_id,position,category,question,options,correct_index,explanation,source_label,source_chunk_id)
+       SELECT $1::bigint, p.lecture_id, p.position, p.category, p.question, p.options,
+              p.correct_index, p.explanation, p.source_label, p.source_chunk_id
+       FROM jsonb_to_recordset($2::jsonb) AS p(
+         lecture_id int, position int, category text, question text, options jsonb,
+         correct_index int, explanation text, source_label text, source_chunk_id int
+       )`,
+      [quizId, JSON.stringify(questionRows)]
+    );
     await client.query('COMMIT');
     return loadPracticeQuiz(studentId, Number(quizId));
   } catch(err) { await client.query('ROLLBACK'); throw err; }
@@ -311,11 +321,17 @@ export async function submitPracticeQuiz(studentId:string,quizId:number,submitte
     const keys=new Map(questions.map(q=>[Number(q.id),q.correct_index]));
     if(submitted.length!==keys.size||new Set(submitted.map(a=>a.questionId)).size!==keys.size||submitted.some(a=>!keys.has(a.questionId)))throw new AppError('Please answer every question before submitting.',400);
     let correct=0;
-    for(const a of submitted) {
-      const valid=a.selectedIndex===keys.get(a.questionId);
-      if(valid)correct++;
-      await client.query('INSERT INTO practice_answers(quiz_id,question_id,selected_index,is_correct) VALUES($1,$2,$3,$4)',[quizId,a.questionId,a.selectedIndex,valid]);
-    }
+    const answerRows = submitted.map(a => {
+      const isCorrect = a.selectedIndex === keys.get(a.questionId);
+      if (isCorrect) correct++;
+      return { question_id: a.questionId, selected_index: a.selectedIndex, is_correct: isCorrect };
+    });
+    await client.query(
+      `INSERT INTO practice_answers(quiz_id,question_id,selected_index,is_correct)
+       SELECT $1::bigint, a.question_id, a.selected_index, a.is_correct
+       FROM jsonb_to_recordset($2::jsonb) AS a(question_id bigint, selected_index int, is_correct boolean)`,
+      [quizId, JSON.stringify(answerRows)]
+    );
     await client.query("UPDATE practice_quizzes SET status='COMPLETED',correct_count=$2,submitted_at=NOW() WHERE id=$1",[quizId,correct]);
     await client.query('COMMIT');
     return loadPracticeQuiz(studentId,quizId);
