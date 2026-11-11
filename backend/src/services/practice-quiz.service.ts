@@ -206,18 +206,27 @@ export async function createPracticeQuiz(studentId: string, courseId: number, re
   }
   const plan = allocateByLecture(requestedIds);
   const lectureInfo = new Map(lectureRows.map(r => [r.id,r]));
-  const all = await Promise.all(requestedIds.map(async id => {
+  const { rows: sourceRows } = await query<Source>(
+    `SELECT c.id, c.lecture_id, c.chunk_text AS answer, c.question, c.topic, c.start_time
+       FROM lectures l
+       JOIN dataset_version_chunks d ON d.version_id = l.active_version_id
+       JOIN lecture_qna_chunks c ON c.id = d.chunk_id AND c.lecture_id = l.id
+       WHERE l.course_id = $1 AND l.id = ANY($2::int[])
+       ORDER BY l.id ASC, d.qa_id ASC, d.chunk_index ASC, c.id ASC`,
+    [courseId, requestedIds]
+  );
+  const sourcesByLecture = new Map<number, Source[]>();
+  for (const source of sourceRows) {
+    const entries = sourcesByLecture.get(source.lecture_id);
+    if (entries) entries.push(source);
+    else sourcesByLecture.set(source.lecture_id, [source]);
+  }
+  const all = requestedIds.map(id => {
     const lecture = lectureInfo.get(id)!;
-    const {rows} = await query<Source>(
-      `SELECT c.id, c.lecture_id, c.chunk_text AS answer, c.question, c.topic, c.start_time
-         FROM lecture_qna_chunks c
-         JOIN dataset_version_chunks d ON d.chunk_id = c.id
-         WHERE d.version_id = $1 AND c.lecture_id = $2
-         ORDER BY d.qa_id ASC, d.chunk_index ASC, c.id ASC`, [lecture.active_version_id, id]
-    );
+    const rows = sourcesByLecture.get(id) ?? [];
     if (!rows.length) throw new AppError('A selected lecture has no usable learning content.', 400);
-    return {id, title: lecture.title, sources: sampleSources(rows), count: plan.get(id)!};
-  }));
+    return { id, title: lecture.title, sources: sampleSources(rows), count: plan.get(id)! };
+  });
   let categoryOffset = 0;
   const scheduled = all.map(item => {
     const scheduledItem = {...item, categoryOffset};
