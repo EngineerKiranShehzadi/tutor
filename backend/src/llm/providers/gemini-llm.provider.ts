@@ -10,13 +10,18 @@ type GeminiReply = {
   error?: { message?: string; status?: string };
 };
 
-let nextSlot = 0;
+const reservedSlots: number[] = [];
 const reserveSlot = (): number => {
-  const interval = Math.ceil(60_000 / env.LLM.GEMINI.QUIZ_MAX_RPM);
   const now = Date.now();
-  const slot = Math.max(now, nextSlot);
-  nextSlot = slot + interval;
-  return Math.max(0, slot - now);
+  while (reservedSlots.length && reservedSlots[0] <= now - 60_000) reservedSlots.shift();
+  const limit = env.LLM.GEMINI.QUIZ_MAX_RPM;
+  if (reservedSlots.length >= limit * 3) {
+    throw new AppError('Gemini quiz queue is busy. Please retry shortly.', 503);
+  }
+  const nextIndex = reservedSlots.length - limit;
+  const slot = nextIndex >= 0 ? Math.max(now, reservedSlots[nextIndex] + 60_000) : now;
+  reservedSlots.push(slot);
+  return slot - now;
 };
 
 const sleep = (milliseconds: number): Promise<void> =>
