@@ -42,6 +42,12 @@ async function run() {
   assert.equal(request.generationConfig.responseJsonSchema.type, 'object');
   assert.equal(request.generationConfig.thinkingConfig.thinkingBudget, 0);
 
+  const second = await geminiLlmProvider.generate({
+    model: 'gemini-2.5-flash-lite', userPrompt: 'Verify quiz', timeoutMs: 5000,
+  });
+  assert.equal(second.provider, 'gemini');
+  assert.equal(calls, 2);
+
   now += 60_000;
   globalThis.fetch = (async () => ({ ok: false, status: 429 }) as Response) as typeof fetch;
   await assert.rejects(
