@@ -56,7 +56,7 @@ export function compactReadinessReason(reason: string): string {
 // question/answer pairs the router, rewriter and answer prompt consume.
 // slice(-0) would return everything, so 0 is handled explicitly.
 export function selectHistoryTurns(
-  history: ChatHistoryEntry[],
+  history: Pick<ChatHistoryEntry, 'question' | 'answer'>[],
   turns: number
 ): { question: string; answer: string }[] {
   if (turns <= 0) return [];
@@ -181,6 +181,21 @@ export const getSessionHistory = async (
     [sessionId, studentId]
   );
   return rows;
+};
+
+export const getRecentSessionHistoryForPrompt = async (
+  studentId: string, sessionId: number, turns: number
+): Promise<Pick<ChatHistoryEntry, 'question' | 'answer'>[]> => {
+  if (turns <= 0) return [];
+  const { rows } = await query<Pick<ChatHistoryEntry, 'question' | 'answer'>>(
+    `SELECT question, answer
+     FROM chat_history
+     WHERE session_id = $1 AND student_id = $2 AND cleared_by_student = FALSE
+     ORDER BY created_at DESC, id DESC
+     LIMIT $3`,
+    [sessionId, studentId, turns]
+  );
+  return rows.reverse();
 };
 
 export const deleteChatSession = async (
@@ -510,7 +525,8 @@ export const askLectureAgent = async (
 
     // 4. Load current session's history for follow-up context
     currentStage = 'load-session-history';
-    const recentHistory = await trace.span('load-session-history', () => getSessionHistory(studentId, sessionId));
+    const recentHistory = await trace.span('load-session-history', () =>
+      getRecentSessionHistoryForPrompt(studentId, sessionId, env.CHAT.HISTORY_TURNS));
     const historyTurns  = selectHistoryTurns(recentHistory, env.CHAT.HISTORY_TURNS);
 
     if (historyTurns.length > 0) {
