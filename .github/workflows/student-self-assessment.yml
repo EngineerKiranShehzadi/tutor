@@ -32,6 +32,13 @@ jobs:
           JWT_SECRET: offline-test-access-secret-at-least-32-bytes
           JWT_REFRESH_SECRET: offline-test-refresh-secret-at-least-32-bytes
         run: npm run test:practice-quiz
+      - name: Validate Gemini quiz-only provider
+        working-directory: backend
+        env:
+          DB_PASSWORD: offline-test
+          JWT_SECRET: offline-test-access-secret-at-least-32-bytes
+          JWT_REFRESH_SECRET: offline-test-refresh-secret-at-least-32-bytes
+        run: npm run test:gemini-quiz
       - name: Python document regression checks
         run: |
           if ! command -v soffice >/dev/null; then sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends libreoffice-impress >/dev/null; fi
