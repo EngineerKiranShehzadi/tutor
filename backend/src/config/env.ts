@@ -331,6 +331,13 @@ export const env = {
       API_KEY:  nonBlank('OPENAI_API_KEY', ''),
       BASE_URL: nonBlank('OPENAI_BASE_URL', 'https://api.openai.com/v1'),
     },
+    GEMINI: {
+      API_KEY: nonBlank('GEMINI_API_KEY', ''),
+      QUIZ_MAX_RPM: positiveInt('GEMINI_QUIZ_MAX_RPM', 10),
+    },
+    QUIZ: {
+      MODEL: nonBlank('QUIZ_GEMINI_MODEL', 'gemini-2.5-flash-lite'),
+    },
     RAG_ANSWER: {
       PROVIDER:        RAG_PROVIDER,
       MODEL:           RAG_MODEL,
