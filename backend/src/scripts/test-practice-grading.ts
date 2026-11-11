@@ -18,10 +18,22 @@ async function main() {
     const ids=[lectureA.rows[0].id,lectureB.rows[0].id];
     const quiz=await pool.query<{id:string}>(`INSERT INTO practice_quizzes(student_id,course_id,lecture_ids,question_count) VALUES($1,$2,$3,2) RETURNING id`,[studentId,courseId,ids]);
     const quizId=Number(quiz.rows[0].id);
-    const insert=`INSERT INTO practice_questions(quiz_id,lecture_id,position,category,question,options,correct_index,explanation,source_label) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9) RETURNING id`;
-    const q1=await pool.query<{id:string}>(insert,[quizId,ids[0],1,'FACTUAL','Which term means a set of beliefs about right and wrong?',JSON.stringify(['Ethics','Physics','Geometry','Botany']),0,'Ethics is about beliefs of right and wrong.','Lecture 01.pptx | Slide 11']);
-    const q2=await pool.query<{id:string}>(insert,[quizId,ids[1],2,'CONCEPTUAL','Why should an organisation establish a code of ethics?',JSON.stringify(['To remove laws','To guide ethical decisions','To replace staff','To remove accountability']),1,'The code guides recognition and resolution of ethical issues.','Lecture 02.pptx | Slide 13']);
-    const id1=Number(q1.rows[0].id),id2=Number(q2.rows[0].id);
+    const questionRows = [
+      {lecture_id:ids[0],position:1,category:'FACTUAL',question:'Which term means a set of beliefs about right and wrong?',options:['Ethics','Physics','Geometry','Botany'],correct_index:0,explanation:'Ethics is about beliefs of right and wrong.',source_label:'Lecture 01.pptx | Slide 11',source_chunk_id:null},
+      {lecture_id:ids[1],position:2,category:'CONCEPTUAL',question:'Why should an organisation establish a code of ethics?',options:['To remove laws','To guide ethical decisions','To replace staff','To remove accountability'],correct_index:1,explanation:'The code guides recognition and resolution of ethical issues.',source_label:'Lecture 02.pptx | Slide 13',source_chunk_id:null},
+    ];
+    const inserted = await pool.query<{id:string;position:number}>(
+      `INSERT INTO practice_questions(quiz_id,lecture_id,position,category,question,options,correct_index,explanation,source_label,source_chunk_id)
+       SELECT $1::bigint,p.lecture_id,p.position,p.category,p.question,p.options,p.correct_index,p.explanation,p.source_label,p.source_chunk_id
+       FROM jsonb_to_recordset($2::jsonb) AS p(
+         lecture_id int,position int,category text,question text,options jsonb,
+         correct_index int,explanation text,source_label text,source_chunk_id int
+       ) RETURNING id,position`,
+      [quizId,JSON.stringify(questionRows)]
+    );
+    assert.equal(inserted.rows.length,2);
+    const idByPosition = new Map(inserted.rows.map(q=>[q.position,Number(q.id)]));
+    const id1=idByPosition.get(1)!,id2=idByPosition.get(2)!;
     const before=await loadPracticeQuiz(studentId,quizId);
     assert.equal(before.status,'READY');
     assert.equal(before.questions.length,2);
