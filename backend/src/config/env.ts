@@ -336,7 +336,7 @@ export const env = {
       QUIZ_MAX_RPM: positiveInt('GEMINI_QUIZ_MAX_RPM', 10),
     },
     QUIZ: {
-      MODEL: nonBlank('QUIZ_GEMINI_MODEL', 'gemini-2.5-flash-lite'),
+      MODEL: nonBlank('QUIZ_GEMINI_MODEL', 'gemini-3.5-flash-lite'),
     },
     RAG_ANSWER: {
       PROVIDER:        RAG_PROVIDER,
