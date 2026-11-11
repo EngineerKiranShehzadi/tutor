@@ -6,7 +6,7 @@ import { DBCourse } from '@/types/course';
 
 export default function CoursesPage() {
   const router = useRouter();
-  const { data, loading, error, refetch } = useQuery(GET_COURSES, { fetchPolicy: 'network-only' });
+  const { data, loading, error, refetch } = useQuery(GET_COURSES, { fetchPolicy: 'cache-and-network' });
   const courses: DBCourse[] = data?.courses ?? [];
 
   return (
@@ -15,11 +15,11 @@ export default function CoursesPage() {
         <h1 className="text-h2 font-semibold text-[var(--text)]">Courses</h1>
         <p className="text-label text-[var(--muted)] mt-1">Choose a course to explore its lectures and AI tutors.</p>
       </div>
-      {loading ? (
+      {loading && !data ? (
         <div className="flex justify-center py-20">
           <div className="w-8 h-8 border-4 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
         </div>
-      ) : error ? (
+      ) : error && !data ? (
         <div role="alert" className="bg-white border border-[var(--border)] rounded-card p-8 text-center">
           <p className="text-red-600 mb-4">Courses could not be loaded.</p>
           <button onClick={() => void refetch()} className="px-4 py-2 bg-[var(--ink-soft)] text-white rounded-control text-label">Try again</button>
