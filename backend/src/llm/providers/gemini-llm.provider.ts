@@ -34,11 +34,12 @@ export const geminiLlmProvider: LlmProvider = {
   },
   async generate(request: LlmRequest): Promise<LlmResponse> {
     geminiLlmProvider.assertConfigured?.();
-    const wait = reserveSlot();
-    if (wait) await sleep(wait);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), request.timeoutMs ?? 60_000);
     try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+      const wait = reserveSlot();
+      if (wait) await sleep(wait);
       const response = await fetch(
         'https://generativelanguage.googleapis.com/v1beta/models/' +
           encodeURIComponent(request.model) + ':generateContent',
@@ -66,6 +67,13 @@ export const geminiLlmProvider: LlmProvider = {
         }
       );
       if (!response.ok) {
+        if (response.status === 503) {
+          if (attempt === 0 && !controller.signal.aborted) {
+            await sleep(1100 + Math.floor(Math.random() * 400));
+            continue;
+          }
+          throw new AppError('Gemini model is temporarily overloaded (HTTP 503). Please try again shortly.', 503);
+        }
         if (response.status === 429) throw new AppError('Gemini quiz rate limit or daily quota reached. Check Google AI Studio limits and try again later.', 503);
         if (response.status === 401 || response.status === 403) throw new AppError('Gemini quiz API key is invalid or does not have access to this model.', 503);
         if (response.status === 404) throw new AppError('Configured Gemini quiz model is not available to this API key.', 503);
@@ -87,6 +95,8 @@ export const geminiLlmProvider: LlmProvider = {
           totalTokens: payload.usageMetadata?.totalTokenCount,
         },
       };
+      }
+      throw new AppError('Gemini quiz request failed after retry.', 503);
     } catch (error) {
       if (error instanceof AppError) throw error;
       throw new AppError('Gemini quiz request timed out or the network is unavailable.', 503);
