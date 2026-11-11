@@ -253,8 +253,9 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
     }
 
     let idx = 0;
+    const step = Math.max(1, Math.ceil(words.length / 20));
     streamTimerRef.current = setInterval(() => {
-      idx++;
+      idx = Math.min(words.length, idx + step);
       const partial = words.slice(0, idx).join(' ');
       setLocalMessages(prev =>
         prev.map(m => m.id === msgId ? { ...m, content: partial } : m)
@@ -269,7 +270,7 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
         setSessionsRefreshKey(k => k + 1);
         console.log(`[CHAT] ✅ Stream complete (${rawAnswer.length} chars)`);
       }
-    }, 35);
+    }, 25);
   }, []);
 
   // ── Send a message in the current session ─────────────────
