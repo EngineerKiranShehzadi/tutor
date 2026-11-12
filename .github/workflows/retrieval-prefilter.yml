@@ -1,0 +1,34 @@
+name: Retrieval candidate admission checks
+
+on:
+  push:
+    branches: [feature/multi-format-ingestion]
+  pull_request:
+    paths:
+      - 'backend/src/services/vector-search.service.ts'
+      - 'backend/src/services/rerank.service.ts'
+      - 'backend/src/rag/query-processing/retrieval/**'
+      - 'backend/tests/retrieval-prefilter.test.cjs'
+      - '.github/workflows/retrieval-prefilter.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci --ignore-scripts
+      - name: Run offline retrieval regression tests
+        working-directory: backend
+        run: node --test tests/retrieval-prefilter.test.cjs
+      - name: Typecheck full backend
+        working-directory: backend
+        run: npm run typecheck
