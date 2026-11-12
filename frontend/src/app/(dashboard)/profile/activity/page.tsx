@@ -4,6 +4,7 @@ import { type ReactNode } from 'react';
 import { useQuery } from '@apollo/client';
 import { cn } from '@/lib/cn';
 import { MY_STATS_QUERY, MY_RECENT_QUESTIONS_QUERY } from '@/graphql/analytics.queries';
+import { GET_PRACTICE_PROGRESS } from '@/graphql/practice.queries';
 
 /**
  * My activity — where to pick the work back up.
@@ -90,6 +91,16 @@ export default function ActivityPage() {
     fetchPolicy: 'network-only',
     notifyOnNetworkStatusChange: true,
   });
+
+  // Lifetime quiz totals. They were shown on the practice page beside the
+  // results of a single quiz, which read as two competing scoreboards; "how am
+  // I doing overall" belongs here instead. A failure is silent: this is an
+  // extra panel, not the reason the page exists.
+  const quiz = useQuery(GET_PRACTICE_PROGRESS, { fetchPolicy: 'cache-and-network' });
+  const quizStats = quiz.data?.myPracticeProgress as
+    | { attempts:number; answered:number; correct:number; percent:number;
+        lectures:{lectureId:number;lectureTitle:string;total:number;correct:number;percent:number}[] }
+    | undefined;
 
   const s = stats.data?.myStats;
 
@@ -199,15 +210,15 @@ export default function ActivityPage() {
       {/* Resume. The one thing a student coming back actually wants, and the
           only place the most recent question is used — to name the lecture. */}
       {last && (
-        <div className="bg-[var(--ink-soft)] rounded-card px-6 py-5 mb-4 flex flex-wrap items-center justify-between gap-4">
+        <div className="bg-[var(--accent)] rounded-card px-6 py-5 mb-4 flex flex-wrap items-center justify-between gap-4">
           <div className="min-w-0">
-            <p className="text-caption font-semibold tracking-wide" style={{ color: '#8fd6b4' }}>
+            <p className="text-caption font-semibold tracking-wide" style={{ color: 'var(--accent-dim)' }}>
               Continue where you left off
             </p>
             <p className="text-label font-semibold text-white mt-1.5 truncate">
               {last.lectureTitle}
             </p>
-            <p className="text-caption mt-1" style={{ color: '#a7b3ad' }}>
+            <p className="text-caption mt-1" style={{ color: '#a3a7ad' }}>
               You last asked here {formatWhen(last.createdAt)}
             </p>
           </div>
@@ -252,6 +263,42 @@ export default function ActivityPage() {
           ))}
         </div>
       </Section>
+
+      {quizStats && quizStats.attempts > 0 && (
+        <Section
+          title="Practice quizzes"
+          hint="Across every quiz you have submitted."
+          right={<Link href="/practice" className="font-semibold text-[var(--accent)] hover:underline">Take a quiz</Link>}
+        >
+          <div className="grid grid-cols-3 gap-4">
+            {[
+              { label: 'Quizzes taken',      value: String(quizStats.attempts) },
+              { label: 'Questions answered', value: String(quizStats.answered) },
+              { label: 'Accuracy',           value: quizStats.answered ? `${quizStats.percent}%` : '—' },
+            ].map(tile => (
+              <div key={tile.label} className="rounded-card border border-[var(--border)] bg-[var(--surface)] px-4 py-4">
+                <p className="text-h1 font-semibold text-[var(--text)] leading-none tabular-nums">{tile.value}</p>
+                <p className="text-caption text-[var(--muted)] mt-2">{tile.label}</p>
+              </div>
+            ))}
+          </div>
+          {quizStats.lectures.length > 0 && (
+            <div className="mt-5 space-y-3">
+              {quizStats.lectures.map(l => (
+                <div key={l.lectureId}>
+                  <div className="flex justify-between gap-3 text-label mb-1.5">
+                    <span className="text-[var(--text)] truncate">{l.lectureTitle}</span>
+                    <span className="text-[var(--muted)] shrink-0 font-semibold tabular-nums">{l.percent}%</span>
+                  </div>
+                  <div className="h-2 rounded-full bg-[var(--surface)] border border-[var(--border)] overflow-hidden">
+                    <div className="h-full rounded-full bg-[var(--accent)]" style={{ width: `${l.percent}%` }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Section>
+      )}
 
       <Section
         title="Questions by lecture"

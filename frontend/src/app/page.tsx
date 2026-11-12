@@ -38,7 +38,7 @@ const STEPS = [
     n: '01',
     icon: 'fas fa-upload',
     title: 'Your instructor adds the lecture',
-    body: 'The recorded lecture, plus a dataset of the questions and answers it covers.',
+    body: 'The recorded lecture, plus its material: a dataset of questions and answers, or documents such as PDFs and slide decks.',
   },
   {
     n: '02',
@@ -75,6 +75,11 @@ const CAPABILITIES = [
     icon: 'fas fa-circle-check',
     title: 'It says when it is not sure',
     body: 'Before an answer reaches you it is checked against the lecture text it was built from. If it cannot be supported by that text, it is withheld instead of shown.',
+  },
+  {
+    icon: 'fas fa-list-check',
+    title: 'You can test yourself on it',
+    body: 'Practice questions are written from the lecture material you choose, and every one must quote the passage it came from. After submitting you see which lectures to go back to.',
   },
 ];
 
@@ -130,7 +135,7 @@ function Section({ id, tint = false, children }: {
     <section
       id={id}
       className={cn(
-        'px-6 py-20 md:py-24 border-t border-[var(--border)]',
+        'px-6 py-14 md:py-16 border-t border-[var(--border)]',
         tint ? 'bg-[var(--surface)]' : 'bg-white'
       )}
     >
@@ -141,9 +146,9 @@ function Section({ id, tint = false, children }: {
 
 function Heading({ overline, title, body }: { overline: string; title: string; body?: string }) {
   return (
-    <div className="max-w-[620px] mb-10">
+    <div className="max-w-[620px] mb-8">
       <p className="text-label font-semibold text-[var(--accent)] mb-2.5">{overline}</p>
-      <h2 className="text-h1 md:text-[32px] font-semibold text-[var(--text)] leading-[1.2]">{title}</h2>
+      <h2 className="text-h1 md:text-[28px] font-semibold text-[var(--text)] leading-[1.2]">{title}</h2>
       {body && <p className="text-body text-[var(--muted)] mt-3.5 leading-relaxed">{body}</p>}
     </div>
   );
@@ -173,7 +178,7 @@ export default function LandingPage() {
 
       {/* ── Header — the same dark bar as the signed-in app, so the product
              does not change identity at the door. ── */}
-      <nav className="sticky top-0 z-50 bg-[var(--ink-soft)] border-b border-white/10">
+      <nav className="sticky top-0 z-50 bg-[var(--accent)] border-b border-white/10">
         <div className="px-6 md:px-8 h-[72px] flex items-center">
           <Logo variant="dark" className="h-10 w-auto shrink-0" />
           <div className="hidden lg:flex items-center gap-7 ml-10">
@@ -208,7 +213,7 @@ export default function LandingPage() {
           <div className="min-w-0">
             {/* The one place the type scale is exceeded, deliberately: a
                 landing headline is the largest thing on the site. */}
-            <h1 className="text-display md:text-[52px] font-semibold text-[var(--text)] leading-[1.08] tracking-tight">
+            <h1 className="text-display md:text-[44px] font-semibold text-[var(--text)] leading-[1.08] tracking-tight">
               Ask your lecture anything
             </h1>
             <p className="text-body md:text-h3 text-[var(--muted)] mt-5 max-w-[520px] leading-relaxed">
@@ -393,12 +398,17 @@ export default function LandingPage() {
           that do not exist — the same reason the invented student reviews were
           deleted. The lecture attribution is here because the course material
           genuinely is someone else's work. */}
-      <footer className="px-6 md:px-8 pt-14 pb-8 bg-[var(--ink-soft)]">
+      <footer className="px-6 md:px-8 pt-14 pb-8 bg-[var(--accent)]">
 
-        <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-4 lg:gap-12">
+        <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-[1.7fr_1fr_1fr_1fr] lg:gap-14">
 
+          {/* The logo stands where the other columns put their heading, inside
+              a box of the same height, so all four columns start their text on
+              the same line instead of this one sitting lower. */}
           <div>
-            <Logo variant="dark" className="h-9 w-auto mb-4" />
+            <div className="h-[22px] flex items-center mb-2.5">
+              <Logo variant="dark" className="h-8 w-auto -ml-2.5" />
+            </div>
             <p className="text-label leading-relaxed text-justify hyphens-auto" style={{ color: '#a7b3ad' }}>
               A tutor for one lecture at a time. It answers from what your
               instructor taught, and shows you where the answer came from.
@@ -409,8 +419,8 @@ export default function LandingPage() {
               were listed together under "Pages", which three of the five are
               not. */}
           <div>
-            <p className="text-label font-semibold text-white mb-4">On this page</p>
-            <ul className="flex flex-col gap-2.5">
+            <p className="text-label font-semibold text-white mb-2.5">On this page</p>
+            <ul className="flex flex-col gap-2">
               {[['#how', 'How it works'], ['#what', 'What it does'], ['#faq', 'Questions']].map(([href, label]) => (
                 <li key={href}>
                   <a href={href} className="text-label transition-colors hover:text-white" style={{ color: '#a7b3ad' }}>
@@ -422,8 +432,8 @@ export default function LandingPage() {
           </div>
 
           <div>
-            <p className="text-label font-semibold text-white mb-4">Your account</p>
-            <ul className="flex flex-col gap-2.5">
+            <p className="text-label font-semibold text-white mb-2.5">Your account</p>
+            <ul className="flex flex-col gap-2">
               <li>
                 <Link href="/login" className="text-label transition-colors hover:text-white" style={{ color: '#a7b3ad' }}>
                   Sign in
@@ -438,7 +448,7 @@ export default function LandingPage() {
           </div>
 
           <div>
-            <p className="text-label font-semibold text-white mb-4">Lecture content</p>
+            <p className="text-label font-semibold text-white mb-2.5">Lecture content</p>
             <p className="text-label leading-relaxed text-justify hyphens-auto" style={{ color: '#a7b3ad' }}>
               The course recordings this tutor answers from are the work of{' '}
               <span className="text-white">Fazal Qadir Khan Islamic Institute Pakistan</span>.

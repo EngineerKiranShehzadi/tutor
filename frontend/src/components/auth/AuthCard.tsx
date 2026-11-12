@@ -29,8 +29,8 @@ export const AuthCard = ({ children }: Props) => (
         profile and activity pages. This panel was the only dark surface still
         on the deeper --ink, so signing in looked like a different product
         from the one you land in. */}
-    <aside className="hidden md:flex flex-col justify-between px-12 lg:px-16 py-14" style={{ background: 'var(--ink-soft)' }}>
-      <Logo variant="dark" className="h-10 w-auto" />
+    <aside className="hidden md:flex flex-col justify-between px-12 lg:px-16 py-14" style={{ background: 'var(--accent)' }}>
+      <Logo variant="dark" className="h-10 w-auto -ml-3" />
 
       <div className="max-w-[360px]">
         <h1 className="text-h1 font-semibold text-white mb-4">

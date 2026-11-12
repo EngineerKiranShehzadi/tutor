@@ -359,18 +359,19 @@ export const ChatSidebar = ({
             onClick={onNewChat}
             className="w-full flex items-center gap-2 px-3 py-2 rounded-card border bg-[var(--surface)] text-[var(--text)] border-[var(--border)] hover:bg-[var(--accent-soft)] hover:border-[var(--border)] hover:text-[var(--accent)] text-[13px] font-semibold transition-colors"
           >
-            <div className="w-5 h-5 rounded-control bg-[var(--accent)] flex items-center justify-center shrink-0">
-              <i className="fas fa-plus text-white text-[9px]" />
-            </div>
+            {/* A plain plus at the same weight as the magnifier below. The
+                filled navy tile made two buttons of identical shape look like
+                two different kinds of control. */}
+            <i className="fas fa-plus text-[10px] shrink-0" />
             <span className="flex-1 text-left">New Chat</span>
           </button>
 
           <button
             onClick={() => setShowSearch(true)}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-card border border-[var(--border)] bg-[var(--surface)] text-[13px] font-medium text-[var(--muted)] hover:bg-gray-100 hover:text-[var(--text)] transition-colors"
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-card border border-[var(--border)] bg-[var(--surface)] text-[13px] font-semibold text-[var(--muted)] hover:bg-gray-100 hover:text-[var(--text)] transition-colors"
           >
             <i className="fas fa-magnifying-glass text-[10px]" />
-            <span>Search chats</span>
+            <span>Search Chats</span>
           </button>
         </div>
 

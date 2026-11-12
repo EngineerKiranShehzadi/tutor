@@ -94,7 +94,7 @@ export default function CoursesPage() {
             {firstReady && (
               <button
                 onClick={() => router.push(`/lecture/${firstReady.id}`)}
-                className="flex items-center gap-2 h-10 px-5 bg-[var(--ink-soft)] hover:bg-[var(--ink)] text-white rounded-control text-label font-semibold transition-colors shrink-0"
+                className="flex items-center gap-2 h-10 px-5 bg-[var(--accent)] hover:bg-[var(--accent-deep)] text-white rounded-control text-label font-semibold transition-colors shrink-0"
               >
                 <i className="fas fa-play text-[10px]" /> Start Learning
               </button>
@@ -118,22 +118,26 @@ export default function CoursesPage() {
                 <div
                   key={lec.id}
                   onClick={() => isReady && router.push(`/lecture/${lec.id}`)}
-                  className={`flex gap-3 px-4 py-3 border-b border-[var(--border)] transition-colors ${
+                  className={`group flex gap-3 px-4 py-3 border-b border-[var(--border)] transition-colors ${
                     isReady ? 'cursor-pointer hover:bg-[var(--surface)]' : 'opacity-60 cursor-default'
                   }`}
                 >
                   {/* Thumbnail */}
                   {lec.youtubeVideoId ? (
-                    <div className="w-[100px] shrink-0 aspect-video rounded-md overflow-hidden bg-black">
+                    <div className="w-[78px] shrink-0 aspect-video rounded-control overflow-hidden bg-black border border-[var(--border)]">
+                      {/* YouTube thumbnails are whatever colour the video author
+                          chose, so a row of them fights the page. Holding them
+                          slightly muted until the row is hovered lets them sit
+                          inside our palette while staying recognisable. */}
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         src={`https://i.ytimg.com/vi/${lec.youtubeVideoId}/hqdefault.jpg`}
                         alt={lec.title}
-                        className="w-full h-full object-cover"
+                        className="w-full h-full object-cover saturate-[.7] opacity-90 transition duration-200 group-hover:saturate-100 group-hover:opacity-100"
                       />
                     </div>
                   ) : (
-                    <div className="w-[100px] shrink-0 aspect-video rounded-md bg-[var(--surface)] flex items-center justify-center">
+                    <div className="w-[78px] shrink-0 aspect-video rounded-control bg-[var(--surface)] border border-[var(--border)] flex items-center justify-center">
                       <i className="fas fa-play-circle text-lg text-[var(--muted)]" />
                     </div>
                   )}
@@ -143,17 +147,11 @@ export default function CoursesPage() {
                     <p className="text-label font-semibold leading-snug line-clamp-2 mb-2 text-[var(--text)]">
                       {lec.title}
                     </p>
-                    {/* Ready is the normal case, so it is stated quietly: a
-                        dot and grey text rather than a filled pill. Seven
-                        identical green pills read as decoration. Anything
-                        that is NOT ready still gets a real badge, because
-                        that is the case worth noticing. */}
-                    {isReady ? (
-                      <span className="inline-flex items-center gap-2 text-caption font-medium text-[var(--muted)]">
-                        <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)]" />
-                        Tutor ready
-                      </span>
-                    ) : (
+                    {/* Ready is the normal case for every row, so saying it on
+                        each one is noise that reads like a status update. Only
+                        a lecture that is NOT ready is labelled, because that is
+                        the case a student needs to notice. */}
+                    {isReady ? null : (
                       <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-caption font-medium ${badge.color}`}>
                         <i className="fas fa-clock text-[9px]" />
                         {badge.label}

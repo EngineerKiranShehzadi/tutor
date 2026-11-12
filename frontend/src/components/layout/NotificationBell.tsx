@@ -121,7 +121,7 @@ export const NotificationBell = () => {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-[calc(100%+8px)] w-80 bg-white rounded-card border border-[var(--border)] shadow-lg z-50 overflow-hidden">
+        <div className="absolute right-0 top-[calc(100%+8px)] w-[380px] bg-white rounded-card border border-[var(--border)] shadow-lg z-50 overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border)]">
             <span className="text-label font-semibold text-[var(--text)]">Notifications</span>
             <span className="text-caption text-[var(--muted)]">
@@ -146,17 +146,21 @@ export const NotificationBell = () => {
                 const isNew = unreadOnOpen.has(n.id);
                 const body = (
                   <>
+                    {/* Something already read is stated quietly: grey icon,
+                        normal weight. Only what is new carries the accent, bold
+                        title and dot, so the two states are told apart at a
+                        glance instead of every row looking identical. */}
                     <span className="w-7 h-7 rounded-control bg-[var(--surface)] flex items-center justify-center shrink-0 mt-0.5">
                       <i
                         className={cn(
                           'text-caption',
                           ICON[n.type] ?? 'fas fa-circle-info',
-                          n.type === 'TUTOR_READY' ? 'text-[var(--accent)]' : 'text-[var(--muted)]'
+                          isNew ? 'text-[var(--accent)]' : 'text-[var(--muted2)]'
                         )}
                       />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block text-label font-medium text-[var(--text)]">{n.title}</span>
+                      <span className={cn('block text-label text-[var(--text)]', isNew ? 'font-semibold' : 'font-normal')}>{n.title}</span>
                       <span className="block text-caption text-[var(--muted)] mt-0.5 line-clamp-2">{n.body}</span>
                       <span className="block text-caption text-[var(--muted2)] mt-1">{relative(n.createdAt)}</span>
                     </span>

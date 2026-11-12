@@ -28,10 +28,10 @@ interface Props {
  */
 export const Logo = ({ variant = 'dark', size = 'full', className = '' }: Props) => {
   const onDark     = variant === 'dark';
-  const textMain   = variant === 'dark' ? '#ffffff' : '#15201c';
+  const textMain   = variant === 'dark' ? '#ffffff' : '#1c1f24';
   // On the dark band the accent is lightened so it stays legible; on white
   // it is the brand colour itself.
-  const textAccent = variant === 'dark' ? '#74c4a4' : '#15664f';
+  const textAccent = variant === 'dark' ? '#8fb0d0' : '#1f3a5f';
   const wordmarkFont = "var(--font-sans), 'Segoe UI', system-ui, sans-serif";
 
   // ViewBox width tightens for compact and icon variants
@@ -49,8 +49,8 @@ export const Logo = ({ variant = 'dark', size = 'full', className = '' }: Props)
         {/* Brand gradient - one hue in two stops, so the tile has depth
             without bringing a second colour into the theme. */}
         <linearGradient id="lg-askai" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%"   stopColor="#1b7259" />
-          <stop offset="100%" stopColor="#104534" />
+          <stop offset="0%"   stopColor="#2a4a76" />
+          <stop offset="100%" stopColor="#142b45" />
         </linearGradient>
 
         {/* Inner depth — top-left radial glow for glass/depth feel */}
@@ -62,7 +62,7 @@ export const Logo = ({ variant = 'dark', size = 'full', className = '' }: Props)
 
       {/* ─── ICON ──────────────────────────────────────────── */}
 
-      {/* Brand tile - the same deep green everywhere. */}
+      {/* Brand tile - the same deep navy everywhere. */}
       <rect x="1" y="4" width="44" height="44" rx="12" fill="url(#lg-askai)" />
       <rect x="1" y="4" width="44" height="44" rx="12" fill="url(#rg-askai)" />
 

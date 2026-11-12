@@ -41,9 +41,9 @@ export const OtpVerificationStep = ({
 
   return (
     <div>
-      <h2 className="text-[26px] font-bold mb-2 text-[var(--text)]">Verify your email</h2>
-      <p className="text-[15px] text-[var(--muted)] mb-7">
-        {message || `A 6-digit code has been sent to `}
+      <h2 className="text-h2 font-semibold mb-2 text-[var(--text)]">Verify your email</h2>
+      <p className="text-label text-[var(--muted)] mb-7">
+        {message || `A 5-digit code has been sent to `}
         <strong className="text-[var(--text)]">{email}</strong>
       </p>
 
@@ -71,7 +71,7 @@ export const OtpVerificationStep = ({
           </div>
         )}
 
-        <div className="text-center text-[15px] text-[var(--muted)]">
+        <div className="text-center text-label text-[var(--muted)]">
           {canResend ? (
             <button
               type="button"

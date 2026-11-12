@@ -24,6 +24,19 @@ const CHANNEL = {
   subscribers: '3.05K',
 };
 
+/**
+ * Is this description just the title again?
+ *
+ * Lectures were imported with the description set to the title, but not always
+ * character for character: one says "Lecture 5 | Prompt Engineering…" and the
+ * other "Lecture 5 — Prompt Engineering…". Comparing the raw strings therefore
+ * let the repeat through, so punctuation, spacing and case are stripped before
+ * the two are compared and only the words decide.
+ */
+const wordsOnly = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '');
+const sameAsTitle = (description: string, title: string) =>
+  wordsOnly(description) === wordsOnly(title);
+
 interface Props { params: { id: string } }
 
 export default function LecturePage({ params }: Props) {
@@ -102,6 +115,19 @@ export default function LecturePage({ params }: Props) {
   // them can be re-asked — not just the latest. The answer arrives as a new
   // exchange at the bottom; the original stays where it is. Hidden while an
   // answer is in flight, so a second pipeline cannot be stacked on the first.
+
+  // The newest answer already on screen. After a reload nothing has been
+  // spoken yet, so the play button sat greyed out beside a page full of
+  // answers and only came alive once one had been read aloud. It now plays the
+  // last answer in the conversation, which is what pressing play looks like it
+  // should do. The welcome notice is skipped: it is not something the tutor said.
+  // In a chat with no answers yet the tutor's opening greeting is what play
+  // reads, so a new chat starts with a working button instead of a dead one.
+  // A real answer always wins over it.
+  const lastAnswer = ([...chat.messages].reverse()
+    .find(m => m.role === 'ai' && m.id !== 'welcome' && !m.isStreaming)?.content)
+    ?? chat.messages.find(m => m.id === 'welcome')?.content
+    ?? null;
 
   // Clear speakingMsgId when TTS finishes (built-in voice, or the avatar's voice when it is shown)
   const anySpeaking = avatarVisible ? speech.isSpeaking : chat.isSpeaking;
@@ -219,8 +245,11 @@ export default function LecturePage({ params }: Props) {
             </button>
           </div>}
 
-          {/* Description */}
-          {lecture.description && (
+          {/* Description. Many lectures were imported with the description set
+              to the title, which printed the same sentence twice under each
+              other. A description that only repeats the heading says nothing,
+              so it is not shown; a real one still is. */}
+          {lecture.description && sameAsTitle(lecture.description, lecture.title) === false && (
             <div className="bg-[var(--surface)] rounded-card p-3.5 text-[14px] text-[var(--muted)] leading-relaxed mb-4">
               {lecture.description}
             </div>
@@ -242,7 +271,7 @@ export default function LecturePage({ params }: Props) {
                       key={lec.id}
                       onClick={() => isReady && !isActive && router.push(`/lecture/${lec.id}`)}
                       className={cn(
-                        'flex gap-3 p-2.5 rounded-card border transition-colors',
+                        'group flex gap-3 p-2.5 rounded-card border transition-colors',
                         isActive
                           ? 'bg-[var(--accent-soft)] border-[var(--border)] cursor-default'
                           : isReady
@@ -256,16 +285,19 @@ export default function LecturePage({ params }: Props) {
                           : i + 1}
                       </span>
                       {lec.youtubeVideoId ? (
-                        <div className="w-24 shrink-0 aspect-video rounded-control overflow-hidden bg-black">
+                        <div className="w-[76px] shrink-0 aspect-video rounded-control overflow-hidden bg-black border border-[var(--border)]">
+                          {/* Held slightly muted until the row is hovered, for
+                              the same reason as the lecture list: the artwork
+                              belongs to the video, not to our palette. */}
                           {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img
                             src={`https://i.ytimg.com/vi/${lec.youtubeVideoId}/hqdefault.jpg`}
                             alt={lec.title}
-                            className="w-full h-full object-cover"
+                            className="w-full h-full object-cover saturate-[.7] opacity-90 transition duration-200 group-hover:saturate-100 group-hover:opacity-100"
                           />
                         </div>
                       ) : (
-                        <div className="w-24 shrink-0 aspect-video rounded-control bg-[var(--surface)] flex items-center justify-center">
+                        <div className="w-[76px] shrink-0 aspect-video rounded-control bg-[var(--surface)] border border-[var(--border)] flex items-center justify-center">
                           <i className="fas fa-video text-[var(--muted)]" />
                         </div>
                       )}
@@ -273,18 +305,10 @@ export default function LecturePage({ params }: Props) {
                         <p className={cn('text-[14px] font-semibold line-clamp-2 leading-snug', isActive && 'text-[var(--accent)]')}>
                           {lec.title}
                         </p>
-                        {/* Identical to the courses page: ready is stated
-                            quietly with a dot, and only a lecture that is NOT
-                            ready gets a real badge, because that is the case
-                            worth noticing. Seven green pills read as
-                            decoration, and "AI Ready" here against "Tutor
-                            ready" there described one thing two ways. */}
-                        {isReady ? (
-                          <span className="mt-1 inline-flex items-center gap-1.5 text-[12px] font-medium text-[var(--muted)]">
-                            <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)]" />
-                            Tutor ready
-                          </span>
-                        ) : (
+                        {/* Identical to the lectures list: ready is the ordinary
+                            case for every row, so it is not labelled at all.
+                            Only a lecture that is NOT ready gets a badge. */}
+                        {isReady ? null : (
                           <span className={`mt-1 inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium ${badge.color}`}>
                             <i className="fas fa-clock text-[9px]" />
                             {badge.label}
@@ -320,9 +344,19 @@ export default function LecturePage({ params }: Props) {
                 isSpeaking={speech.isSpeaking}
                 isPaused={speech.isPaused}
                 muted={speech.muted}
-                canReplay={speech.hasSpoken()}
+                canReplay={!!lastAnswer}
                 errorMessage={speech.error}
-                onPlay={speech.replay}
+                // Pressing play while muted is a request to hear the answer, so
+                // it unmutes first. Otherwise the button appears to do nothing.
+                // Always the newest answer in the chat that is open. Replaying
+                // "whatever was last spoken" meant opening a new chat and
+                // pressing play read out an answer from the previous one,
+                // because the speech engine remembers across sessions and the
+                // chat does not.
+                onPlay={() => {
+                  if (speech.muted) speech.toggleMute();
+                  if (lastAnswer) speech.speak(lastAnswer);
+                }}
                 onPause={speech.pause}
                 onResume={speech.resume}
                 onStop={speech.stop}
@@ -385,6 +419,11 @@ export default function LecturePage({ params }: Props) {
                             setSpeakingMsgId(null);
                             return;
                           }
+                          // Pressing the speaker under an answer is a request to
+                          // hear it, so it overrides mute. Without this the
+                          // answer was read at volume zero while this icon said
+                          // it was speaking and the avatar's button said muted.
+                          if (speech.muted) speech.toggleMute();
                           setSpeakingMsgId(msg.id);
                           if (avatarSpeaksRef.current) {
                             chat.stopSpeaking();      // never two voices

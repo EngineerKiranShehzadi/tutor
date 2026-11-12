@@ -39,19 +39,28 @@ export const PORTRAITS = {
   // pivoting at the neck, so the figure does not look like it is floating.
   instructor: {
     url: '/avatar/teacher-instructor.png',
-    headUrl: '/avatar/teacher-instructor-head.png',
-    bodyUrl: '/avatar/teacher-instructor-body.png',
+    // Head and body were two cut-outs stacked on top of each other. However
+    // carefully they were aligned, the seam at the neck stayed visible and the
+    // figure read as two pictures joined. The complete photograph is used
+    // instead: one image cannot come apart.
+    headUrl: undefined,
+    bodyUrl: undefined,
     headPivot: { x: 48, y: 61 },
-    blink: true,
+    // Blinking is drawn as two coloured ovals over a photograph. At every size
+    // and speed tried it looked like lids placed on the face, so it is off.
+    blink: false,
     // iris centres behind the glasses; lids are kept small so the frames stay visible
     eyeLeft:  { x: 41.0, y: 30.4 },
     eyeRight: { x: 52.3, y: 31.4 },
     eyeWidthPct: 7.6,
     eyeHeightPct: 3.4,
     mouth:    { x: 46.3, y: 43.4 },
-    mouthWidthPct: 10.4,
-    mouthMaxOpenPct: 4.4,
-    jawDropPct: 3.6,       // lower face drop at full mouth opening (% of image height)
+    // Narrowed from 10.4 / 4.4: at the old size the dark shape was wider than
+    // the mouth it sat on, so a fully open vowel read as a patch laid over the
+    // beard rather than a mouth opening.
+    mouthWidthPct: 8.4,
+    mouthMaxOpenPct: 3.2,
+    jawDropPct: 2.6,       // lower face drop at full mouth opening (% of image height)
     eyelidLeft:  { top: '#a07f73', bottom: '#b79284' },
     eyelidRight: { top: '#9a786b', bottom: '#b08c7e' },
   },

@@ -8,34 +8,40 @@
    by a 1px hairline — never almost the same.
    Variable names are unchanged so existing components keep working. */
 :root {
-  --bg:          #f1f3ef;   /* the page: tinted enough that a white card reads */
-  --surface:     #f7f8f6;   /* field fills and tinted rows */
+  /* The lecture videos are not ours: their thumbnails are amber and their
+     slides are blue, and no CSS of ours can change that. A tinted base fought
+     them, so the base is neutral grey and the accent is a deep slate-navy that
+     sits with the blue of the slides, while gold — already our citation
+     colour — is the amber the thumbnails are made of. Nothing on screen is
+     then a colour the content is not already using. */
+  --bg:          #f5f4f1;   /* the page: warm grey, leaning toward the amber */
+  --surface:     #faf9f7;   /* field fills and tinted rows */
   --card:        #ffffff;   /* cards */
-  --text:        #15201c;
-  --muted:       #5c6661;
-  --muted2:      #99a39d;
-  --border:      #e2e5e1;
+  --text:        #1c1f24;
+  --muted:       #5f6068;
+  --muted2:      #8e8e92;
+  --border:      #e5e3df;
 
-  --accent:      #15664f;   /* ONLY: buttons, links, active states */
-  --accent-deep: #0e4a39;
-  --accent-soft: #e7f0eb;
-  --accent-dim:  #74c4a4;   /* the accent, readable on the dark band */
+  --accent:      #1f3a5f;   /* ONLY: buttons, links, active states */
+  --accent-deep: #16293f;
+  --accent-soft: #e8edf3;
+  --accent-dim:  #8fb0d0;   /* the accent, readable on the dark band */
 
-  --gold:        #9a6b12;   /* ONLY: source citations */
-  --gold-soft:   #f6efdd;
+  --gold:        #a35f0d;   /* ONLY: source citations */
+  --gold-soft:   #fbf1e2;
 
-  --ink:         #15201c;   /* the dark band: sign-in panel, footer */
-  --ink-soft:    #223029;   /* the same band, lifted - used for the navbar */
+  --ink:         #161a1f;   /* the dark band: sign-in panel, footer */
+  --ink-soft:    #232a33;   /* the same band, lifted - used for the navbar */
 
   /* Aliases kept so existing components keep working: these were a leftover
      YouTube red and an indigo that disagreed with tailwind.config.ts. */
-  --red:    #15664f;
-  --red2:   #0e4a39;
-  --purple: #15664f;
+  --red:    #1f3a5f;
+  --red2:   #16293f;
+  --purple: #1f3a5f;
 }
 
-/* One product, one colour: the auth pages no longer switch to blue. */
-.auth-dark { --red: #15664f; --red2: #0e4a39; }
+/* One product, one colour: the auth pages no longer switch to another blue. */
+.auth-dark { --red: #1f3a5f; --red2: #16293f; }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 

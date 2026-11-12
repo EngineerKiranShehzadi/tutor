@@ -66,11 +66,22 @@ export const MessageBubble = ({ message, onSpeak, isSpeaking, onAskAgain }: Prop
     }
   };
 
-  // Unique timestamps only — shown as separate UI, never read aloud
+  // Document references only (file name plus page or slide), shown as separate
+  // UI and never read aloud.
+  //
+  // Video timestamps used to be shown here too. The course playlist was
+  // replaced with a re-recorded English version whose timing differs by
+  // minutes, while the dataset still carries the old times, so a student
+  // clicking one would be sent to the wrong moment. The answers themselves are
+  // unaffected — retrieval matches on the meaning of the text, not on a clock
+  // reading — so only the stale pointer is withheld. Restore this once the
+  // dataset is rebuilt against the current videos.
+  const isDocumentRef = (value: string | null | undefined) =>
+    /(?:\.pdf|\.docx?|\.pptx?|\.txt|\.html?)\b/i.test(value ?? '');
   const timestampedSources = Array.from(
     new Map(
       (message.sources ?? [])
-        .filter(s => s.startTime)
+        .filter(s => s.startTime && isDocumentRef(s.startTime))
         .map(s => [`${s.startTime}-${s.endTime}`, s])
     ).values()
   );
@@ -89,7 +100,7 @@ export const MessageBubble = ({ message, onSpeak, isSpeaking, onAskAgain }: Prop
       {/* Content */}
       <div className={`max-w-[78%] flex flex-col gap-1 ${isUser ? 'items-end' : ''}`}>
         <div
-          className={`px-4 py-3 rounded-card text-[16px] leading-relaxed ${
+          className={`px-4 py-3 rounded-card text-label leading-relaxed ${
             isUser
               ? 'bg-[var(--accent)] text-white rounded-br-sm'
               : 'bg-white text-[var(--text)] rounded-bl-sm border border-[var(--border)] shadow-sm'

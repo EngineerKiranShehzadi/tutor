@@ -10,7 +10,10 @@ import type { AvatarLoadStatus } from './AvatarCanvas';
 
 // Three.js / the VRM loader are only fetched when the panel is actually shown,
 // and never during server rendering.
-const PortraitAvatar = dynamic(() => import('./PortraitAvatar'), { ssr: false });
+// The portrait is now real footage of the presenter rather than a photo with
+// drawn eyelids and a drawn mouth; PortraitAvatar is left in the codebase but
+// no longer rendered.
+const VideoAvatar = dynamic(() => import('./VideoAvatar'), { ssr: false });
 const AvatarCanvas = dynamic(() => import('./AvatarCanvas'), {
   ssr: false,
   loading: () => <div className="w-full h-full flex items-center justify-center text-[12px] text-[var(--muted2)]">Loading 3D engine…</div>,
@@ -75,7 +78,7 @@ export function TeacherAvatarPanel(p: TeacherAvatarPanelProps) {
     const CBtn = ({ title, onClick, disabled, active, children }: { title: string; onClick: () => void; disabled?: boolean; active?: boolean; children: React.ReactNode }) => (
       <button
         type="button" title={title} aria-label={title} onClick={onClick} disabled={disabled}
-        className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors disabled:opacity-35 disabled:cursor-not-allowed ${
+        className={`w-7 h-7 rounded-full flex items-center justify-center transition-colors disabled:opacity-35 disabled:cursor-not-allowed ${
           active ? 'bg-[var(--accent)] text-white hover:bg-[var(--accent-deep)]' : 'text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]'}`}
       >{children}</button>
     );
@@ -85,7 +88,10 @@ export function TeacherAvatarPanel(p: TeacherAvatarPanelProps) {
         data-avatar-mode={portrait ? 'portrait' : 'vrm'}
         data-avatar-status={portrait ? (showPortrait ? load.status : 'fallback') : webgl === null ? 'pending' : use3d ? load.status : 'fallback'}
         data-avatar-state={p.state}
-        className="relative shrink-0 border-b border-[var(--border)] bg-gradient-to-b from-[var(--accent-soft)] via-white to-white"
+        // Flat surface instead of a blue-to-white gradient: the gradient was
+        // the only one in the product, and it made this strip read as a
+        // separate widget rather than the top of the chat column.
+        className="relative shrink-0 border-b border-[var(--border)] bg-[var(--surface)]"
       >
         <button type="button" onClick={p.onHide} title="Hide avatar" aria-label="Hide avatar"
           className="absolute top-2 right-3 z-10 w-7 h-7 rounded-full flex items-center justify-center text-[var(--muted2)] hover:text-[var(--accent)] hover:bg-[var(--accent-soft)]">
@@ -93,19 +99,19 @@ export function TeacherAvatarPanel(p: TeacherAvatarPanelProps) {
         </button>
 
         <div className="flex flex-col items-center pt-3">
-          {/* Stage: spotlight halo behind the bust, centred */}
-          <div className="relative w-[168px] h-[156px]">
-            <div className={`absolute left-1/2 -translate-x-1/2 top-2 w-[116px] h-[116px] rounded-full bg-gradient-to-b from-[var(--accent-soft)] to-[var(--accent-soft)] transition-shadow duration-300 ${
-              speakingNow ? 'shadow-[0_0_0_6px_rgba(99,102,241,0.25),0_0_28px_6px_rgba(99,102,241,0.25)]' : 'shadow-[0_0_0_4px_rgba(99,102,241,0.08)]'}`} />
+          {/* Stage: the portrait, centred. Height is just the circle plus the
+              room the pill needs to overlap it — the old box was 40px taller
+              than its contents, which is where the empty space came from. */}
+          <div className="relative w-[168px] h-[96px]">
+            <div className={`absolute left-1/2 -translate-x-1/2 top-0 w-[96px] h-[96px] rounded-full bg-white ring-1 ring-[var(--border)] transition-shadow duration-300 ${
+              // A quiet ring at rest; the accent only appears while speaking,
+              // so the glow means something instead of decorating.
+              speakingNow ? 'shadow-[0_0_0_3px_rgba(31,58,95,0.30)]' : ''}`} />
             <div className="absolute inset-0">
               {showPortrait ? (
-                <PortraitAvatar
-                  state={p.state}
-                  getMouth={p.getMouth}
-                  zoom={1}
-                  transparent
-                  onStatus={(status, detail) => setLoad({ status, detail })}
-                />
+                <div className="absolute left-1/2 -translate-x-1/2 top-0 w-[96px] h-[96px] rounded-full overflow-hidden">
+                  <VideoAvatar state={p.state} />
+                </div>
               ) : use3d ? (
                 <AvatarCanvas url={stableUrl} state={p.state} getMouth={p.getMouth}
                   onStatus={(status, detail) => setLoad({ status, detail })} onProgress={setProgress} />
@@ -119,7 +125,10 @@ export function TeacherAvatarPanel(p: TeacherAvatarPanelProps) {
                   </p>
                 </div>
               )}
-              {(use3d || showPortrait) && load.status === 'loading' && (
+              {/* 3D canvas only. The video portrait never reports loading, so
+                  including it here left this ring spinning over the tutor's
+                  face for as long as the page stayed open. */}
+              {use3d && load.status === 'loading' && (
                 <div className="absolute inset-0 flex items-center justify-center">
                   <div className="w-6 h-6 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
                 </div>
@@ -128,17 +137,33 @@ export function TeacherAvatarPanel(p: TeacherAvatarPanelProps) {
           </div>
 
           {/* Name + status + controls: one floating pill that overlaps the bust's cut-off edge */}
-          <div className="relative -mt-5 mb-3 flex items-center gap-1 bg-white rounded-full shadow-md border border-[var(--border)] pl-3.5 pr-1.5 py-1">
+          {/* Sits below the portrait with a gap, not on top of it: the overlap
+              cut into the shoulders and read as two things colliding. */}
+          <div className="relative mt-2.5 mb-3 flex items-center gap-1 bg-white rounded-full border border-[var(--border)] pl-3.5 pr-1.5 py-1">
             <span className="text-[14px] font-bold text-[var(--text)]">AI teacher</span>
+            {/* Speaking shows moving bars, the shape every audio player uses
+                for sound coming out. Thinking keeps a pulsing dot, because
+                nothing is being heard yet, and anything else is a still dot.
+                A single dot for all three said almost nothing. */}
             <span role="status" className="ml-1.5 inline-flex items-center gap-1.5 text-[12px] font-semibold text-[var(--muted)]">
-              <span className={`w-2 h-2 rounded-full ${dot[p.state]} ${p.state === 'SPEAKING' || p.state === 'THINKING' ? 'animate-pulse' : ''}`} />
+              {p.state === 'SPEAKING' && !p.isPaused ? (
+                <span className="inline-flex items-end gap-[2px] h-[11px]" aria-hidden="true">
+                  <span className="waveform-bar w-[2px] h-full rounded-full bg-[var(--accent)]" />
+                  <span className="waveform-bar w-[2px] h-full rounded-full bg-[var(--accent)]" />
+                  <span className="waveform-bar w-[2px] h-full rounded-full bg-[var(--accent)]" />
+                </span>
+              ) : (
+                <span className={`w-2 h-2 rounded-full ${dot[p.state]} ${p.state === 'THINKING' ? 'animate-pulse' : ''}`} />
+              )}
               {p.isPaused ? 'Paused' : label.text}
             </span>
             <span className="w-px h-5 bg-[var(--border)] mx-1.5" />
+            {/* None of these is "on", so none is filled. The filled circle made
+                play look like a different, larger control than stop beside it. */}
             {p.isPaused ? (
-              <CBtn title="Resume" onClick={p.onResume} active><i className="fas fa-play text-[11px]" /></CBtn>
+              <CBtn title="Resume" onClick={p.onResume}><i className="fas fa-play text-[11px]" /></CBtn>
             ) : speakingNow ? (
-              <CBtn title="Pause" onClick={p.onPause} active><i className="fas fa-pause text-[11px]" /></CBtn>
+              <CBtn title="Pause" onClick={p.onPause}><i className="fas fa-pause text-[11px]" /></CBtn>
             ) : (
               <CBtn title={p.canReplay ? 'Play last answer' : 'Nothing to play yet'} onClick={p.onPlay} disabled={!p.speechSupported || !p.canReplay}>
                 <i className="fas fa-play text-[11px]" />
@@ -146,7 +171,7 @@ export function TeacherAvatarPanel(p: TeacherAvatarPanelProps) {
             )}
             <CBtn title="Stop" onClick={p.onStop} disabled={!(speakingNow || p.isPaused)}><i className="fas fa-stop text-[11px]" /></CBtn>
             <CBtn title={p.muted ? 'Unmute' : 'Mute'} onClick={p.onToggleMute} active={p.muted}>
-              <i className={`fas ${p.muted ? 'fa-volume-xmark' : 'fa-volume-high'} text-[12px]`} />
+              <i className={`fas ${p.muted ? 'fa-volume-xmark' : 'fa-volume-high'} text-[11px]`} />
             </CBtn>
           </div>
           {!p.speechSupported && (
@@ -171,12 +196,7 @@ export function TeacherAvatarPanel(p: TeacherAvatarPanelProps) {
       {/* Stage */}
       <div className={`relative shrink-0 bg-gradient-to-b from-[var(--accent-soft)] via-white to-[var(--accent-soft)] ${p.compact ? (portrait ? 'w-[118px] h-[136px]' : 'w-[110px] h-[136px]') : (portrait ? 'w-[230px] h-[290px]' : 'w-[210px] h-[250px]')}`}>
         {showPortrait ? (
-          <PortraitAvatar
-            state={p.state}
-            getMouth={p.getMouth}
-            zoom={p.compact ? 1.5 : 1}
-            onStatus={(status, detail) => setLoad({ status, detail })}
-          />
+          <VideoAvatar state={p.state} />
         ) : use3d ? (
           <AvatarCanvas
             url={stableUrl}
@@ -195,7 +215,8 @@ export function TeacherAvatarPanel(p: TeacherAvatarPanelProps) {
             </p>
           </div>
         )}
-        {(use3d || showPortrait) && load.status === 'loading' && (
+        {/* Same as above: this spinner belongs to the 3D canvas only. */}
+        {use3d && load.status === 'loading' && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-white/70">
             <div className="w-6 h-6 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
             <span className="text-[11px] text-[var(--muted)]">Loading teacher… {!portrait && progress > 0 ? `${Math.round(progress * 100)}%` : ''}</span>

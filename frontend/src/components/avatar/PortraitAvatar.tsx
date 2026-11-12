@@ -26,7 +26,7 @@ const JAW_MASK = [
   `radial-gradient(ellipse 21% 38% at ${PORTRAIT_LAYOUT.mouth.x}% ${PORTRAIT_LAYOUT.mouth.y + 11}%, #000 55%, transparent 100%)`,
 ].join(', ');
 
-const clamp = (v: number, a = 0, b = 1) => Math.min(b, Math.max(a, v));
+// clamp() drove the eyelid and mouth overlays, which are no longer drawn.
 
 export default function PortraitAvatar({ state, getMouth, onStatus, imageUrl = PORTRAIT_IMAGE_URL, zoom = 1, transparent = false }: PortraitAvatarProps) {
   const zoomRef = useRef(zoom);
@@ -62,30 +62,35 @@ export default function PortraitAvatar({ state, getMouth, onStatus, imageUrl = P
       const rot = pose.head.roll * L.rollDegPerRad;
       const stage = stageRef.current;
       if (layeredRef.current) {
+        // The head is a cut-out laid over a body image. Letting it drift and
+        // rotate on its own pulled it off the shoulders, which is what made the
+        // portrait look like two pictures stacked. The whole stage still
+        // breathes, so the figure is not frozen; the head simply stays put.
         if (stage) stage.style.transform = `scale(${((1.02 * zoomRef.current) + breath * 0.003).toFixed(4)})`;
         const head = headRef.current;
-        if (head) head.style.transform = `translate(${(tx * 0.35).toFixed(2)}px, ${(ty * 0.35).toFixed(2)}px) rotate(${(rot * 0.6).toFixed(3)}deg)`;
+        if (head) head.style.transform = 'translate(0px, 0px) rotate(0deg)';
       } else if (stage) {
-        stage.style.transform = `translate(${tx.toFixed(2)}px, ${ty.toFixed(2)}px) rotate(${rot.toFixed(3)}deg) scale(${((1.02 * zoomRef.current) + breath * 0.004).toFixed(4)})`;
+        // Idle means idle: a photograph drifting left and right on its own,
+        // while nobody is talking to it, is the thing that looks wrong. The
+        // picture is held exactly still unless the tutor is listening,
+        // thinking or speaking.
+        if (stateRef.current === 'IDLE') {
+          stage.style.transform = `scale(${(1.02 * zoomRef.current).toFixed(4)})`;
+        } else {
+          stage.style.transform = `translate(${tx.toFixed(2)}px, ${ty.toFixed(2)}px) rotate(${rot.toFixed(3)}deg) scale(${((1.02 * zoomRef.current) + breath * 0.004).toFixed(4)})`;
+        }
       }
 
-      // eyelids
-      const lid = clamp(pose.expr.blink).toFixed(3);
-      if (lidLRef.current) lidLRef.current.style.transform = `translate(-50%, -50%) scaleY(${lid})`;
-      if (lidRRef.current) lidRRef.current.style.transform = `translate(-50%, -50%) scaleY(${lid})`;
-
-      // mouth: opening from the open vowels, narrower for "ou", wider for "ee"
-      const m = pose.mouth;
-      const open = clamp(m.aa * 1.0 + m.oh * 0.85 + m.ou * 0.55 + m.ee * 0.5 + m.ih * 0.4);
-      const widen = 1 + 0.18 * m.ee - 0.3 * m.ou;
-      const mouth = mouthRef.current;
-      if (mouth) {
-        mouth.style.opacity = open > 0.04 ? '1' : '0';
-        mouth.style.transform = `translate(-50%, -30%) scale(${widen.toFixed(3)}, ${(0.15 + open).toFixed(3)})`;
-      }
-      // jaw: the lower face (chin + beard) drops with the mouth opening
-      const jaw = jawRef.current;
-      if (jaw) jaw.style.transform = `translateY(${(open * L.jawDropPct).toFixed(3)}%)`;
+      // Nothing is drawn on top of the face any more. The eyelid ovals and the
+      // mouth patch were tuned against the old head crop; on the full
+      // photograph they would land in the wrong place, and both read as shapes
+      // stuck on a picture in the first place. The portrait breathes and sways
+      // as a whole, which is movement the photograph can actually carry, and
+      // the status chip beside it says when the tutor is speaking.
+      if (lidLRef.current) lidLRef.current.style.opacity = '0';
+      if (lidRRef.current) lidRRef.current.style.opacity = '0';
+      if (mouthRef.current) mouthRef.current.style.opacity = '0';
+      if (jawRef.current) jawRef.current.style.transform = 'translateY(0%)';
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);

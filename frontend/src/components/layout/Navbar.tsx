@@ -22,7 +22,7 @@ const NAV_LINKS = [
   {
     href: '/practice',
     label: 'Practice',
-    icon: 'fas fa-clipboard-check',
+    icon: 'fas fa-list-check',
     section: ['/practice'],
   },
   {
@@ -61,7 +61,7 @@ export const Navbar = () => {
 
   return (
     <nav
-      className="sticky top-0 z-50 flex items-center px-8 h-[72px] gap-4 bg-[var(--ink-soft)]"
+      className="sticky top-0 z-50 flex items-center px-8 h-[72px] gap-4 bg-[var(--accent)]"
       style={{ backdropFilter: 'blur(12px)' }}
     >
       {/* Logo */}
@@ -95,7 +95,10 @@ export const Navbar = () => {
       <div className="flex-1" />
 
       {/* Right: bell + profile dropdown */}
-      <div className="flex items-center gap-2">
+      {/* gap-4: gap-6 matched the nav links, but those are text labels while
+          these are two round controls, and the same number left a visible hole
+          between them. */}
+      <div className="flex items-center gap-4">
 
         <NotificationBell />
 
@@ -104,10 +107,13 @@ export const Navbar = () => {
           <button
             onClick={() => setDropdownOpen(v => !v)}
             className={cn(
-              'flex items-center gap-2 pl-2 pr-3 py-1.5 rounded-card border transition-colors',
+              // The avatar alone, as Gmail and Slack do it. A pill drawn around
+              // the avatar and a caret made an odd two-blob shape; the open and
+              // hover states are a ring on the circle itself instead.
+              'rounded-full transition-shadow',
               dropdownOpen
-                ? 'bg-white/15 border-white/25'
-                : 'border-white/20 hover:bg-white/10 hover:border-white/30'
+                ? 'ring-2 ring-white/60'
+                : 'hover:ring-2 hover:ring-white/30'
             )}
           >
             {/* Avatar */}
@@ -116,21 +122,24 @@ export const Navbar = () => {
               <img
                 src={user.avatar_url}
                 alt={user.name}
-                className="w-8 h-8 rounded-control object-cover shrink-0"
+                className="w-9 h-9 rounded-full object-cover shrink-0"
               />
             ) : (
-              <div className="w-8 h-8 rounded-control bg-white/20 flex items-center justify-center text-white text-[12px] font-bold shrink-0">
+              // Near-white circle, deep navy initials: the highest contrast
+              // pair we own, so it reads as a deliberate mark rather than a
+              // translucent grey patch that failed to load. The hairline keeps
+              // its edge from merging with the dark bar.
+              // The circle is filled with the same white the nav links use when
+              // they are not the current page, and the initials are cut out of
+              // it in the bar's own colour.
+              <div className="w-9 h-9 rounded-full bg-white/65 flex items-center justify-center text-[var(--ink-soft)] text-caption font-semibold tracking-[0.02em] shrink-0">
                 {initials}
               </div>
             )}
-            <div className="text-left hidden sm:block">
-              <p className="text-label font-semibold text-white leading-none">{user?.name}</p>
-              <p className="text-[11px] text-white/70 mt-0.5">Student</p>
-            </div>
-            <i className={cn(
-              'fas fa-chevron-down text-[9px] text-white/70 ml-0.5 transition-transform',
-              dropdownOpen && 'rotate-180'
-            )} />
+            {/* The name and a hardcoded "Student" line used to sit here. The
+                role was wrong for an admin, and both are shown on the profile
+                page anyway. The avatar carries the person's initials, and the
+                dropdown names them in full. */}
           </button>
 
           {/* Dropdown panel */}

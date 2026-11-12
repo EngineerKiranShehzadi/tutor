@@ -162,7 +162,7 @@ function LoginPageInner() {
         <button
           type="button"
           onClick={() => { setMode('login'); setDigits(['', '', '', '', '', '']); }}
-          className="flex items-center gap-1.5 text-[13px] text-[var(--muted)] hover:text-[var(--text)] transition-colors mb-6"
+          className="flex items-center gap-1.5 text-caption text-[var(--muted)] hover:text-[var(--text)] transition-colors mb-6"
         >
           <i className="fas fa-arrow-left text-[11px]" /> Back to Sign In
         </button>

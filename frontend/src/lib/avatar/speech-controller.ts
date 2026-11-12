@@ -155,14 +155,29 @@ export class SpeechController {
   setMuted(muted: boolean): void {
     if (this.muted === muted) return;
     this.muted = muted;
-    // Volume cannot change mid-utterance in speechSynthesis: restart the current
-    // short chunk (clause/sentence) so the change is audible immediately.
-    if (this.state === 'speaking' && this.chunkClockRunning) {
+    // speechSynthesis cannot change volume part-way through an utterance, so
+    // this used to cancel the current clause and start it again at volume zero.
+    // That restart did not reliably produce an "end" event, and the controller
+    // was then stuck reporting "speaking" with nothing audible — unmuting
+    // restarted a chunk that never finished either, so the status never
+    // cleared and no further answer could be spoken.
+    //
+    // The answer keeps running either way: a chunk spoken at volume 0 still
+    // ends and still hands over to the next one, so muting silences the voice
+    // without stopping progress, and unmuting lands wherever the answer has
+    // reached by then.
+    //
+    // Volume cannot be changed part-way through an utterance, so the clause
+    // being spoken right now is cancelled and started again at the new volume.
+    // It used to be restarted in the same tick as the cancel, which Chrome
+    // sometimes discards — leaving the controller reporting "speaking" with no
+    // audio and no way back. A short gap after the cancel makes it reliable.
+    if (this.state === 'speaking') {
       const t = ++this.token;
       this.deps.synth.cancel();
       this.chunkClockRunning = false;
       this.pausedAccum = 0;
-      this.startChunk(t);
+      this.deps.setTimeout(() => this.startChunk(t), 80);
     }
     this.emit();
   }

@@ -167,7 +167,7 @@ export default function ProfilePage() {
 
       {/* Identity. Flat --ink-soft, the same colour as the header, instead of
           the three-stop slate-to-indigo gradient this used to carry. */}
-      <div className="bg-[var(--ink-soft)] rounded-card px-6 py-6 flex items-center gap-5">
+      <div className="bg-[var(--accent)] rounded-card px-6 py-6 flex items-center gap-5">
         <button
           type="button"
           onClick={() => fileRef.current?.click()}
@@ -178,7 +178,7 @@ export default function ProfilePage() {
             /* eslint-disable-next-line @next/next/no-img-element */
             <img src={avatarPreview} alt="" className="w-20 h-20 rounded-card object-cover" />
           ) : (
-            <div className="w-20 h-20 rounded-card bg-[var(--accent)] flex items-center justify-center text-white text-h2 font-semibold">
+            <div className="w-20 h-20 rounded-card bg-white/10 ring-1 ring-white/20 flex items-center justify-center text-white text-h2 font-semibold">
               {initials}
             </div>
           )}
@@ -242,7 +242,7 @@ export default function ProfilePage() {
 
         {activeTab === 'profile' && (
           <>
-            <Card title="Personal information">
+            <Card title="Personal Information">
               <Field label="Display name" hint={`${name.length}/100 characters`}>
                 <input
                   value={name}
@@ -276,7 +276,7 @@ export default function ProfilePage() {
               </Field>
             </Card>
 
-            <Card title="Account details">
+            <Card title="Account Details">
               {/* Every row below is read from the signed-in account. A fifth
                   row, "Status: Active", used to sit here with the word written
                   into the code: there is no status field on the user record, so

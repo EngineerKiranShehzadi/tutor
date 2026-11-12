@@ -155,7 +155,7 @@ export function ForgotPasswordFlow({ onBack }: Props) {
           onClick={onBack}
           className="flex items-center gap-1.5 text-xs text-[var(--muted)] hover:text-[var(--text)] transition-colors mb-5"
         >
-          <i className="fas fa-arrow-left" /> Back to Sign In
+          <i className="fas fa-arrow-left text-[11px]" /> Back to Sign In
         </button>
         <h2 className="text-xl font-bold mb-1 text-[var(--text)]">Forgot Password</h2>
         <p className="text-sm text-[var(--muted)] mb-6">
@@ -172,7 +172,7 @@ export function ForgotPasswordFlow({ onBack }: Props) {
             error={emailError}
           />
           <Button type="submit" size="lg" loading={emailLoading} className="w-full rounded-lg mt-1">
-            <i className="fas fa-paper-plane" /> Send OTP
+            <i className="fas fa-paper-plane text-[12px]" /> Send OTP
           </Button>
         </form>
       </AuthCard>
@@ -187,7 +187,7 @@ export function ForgotPasswordFlow({ onBack }: Props) {
           onClick={onBack}
           className="flex items-center gap-1.5 text-xs text-[var(--muted)] hover:text-[var(--text)] transition-colors mb-5"
         >
-          <i className="fas fa-arrow-left" /> Back to Sign In
+          <i className="fas fa-arrow-left text-[11px]" /> Back to Sign In
         </button>
         <h2 className="text-xl font-bold mb-1 text-[var(--text)]">Enter OTP</h2>
         <p className="text-sm text-[var(--muted)] mb-6">
@@ -301,7 +301,7 @@ export function ForgotPasswordFlow({ onBack }: Props) {
           </p>
         </div>
         <Button size="lg" onClick={onBack} className="rounded-lg w-full">
-          <i className="fas fa-sign-in-alt" /> Back to Sign In
+          <i className="fas fa-sign-in-alt text-[11px]" /> Back to Sign In
         </Button>
       </div>
     </AuthCard>

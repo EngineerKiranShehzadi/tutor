@@ -22,7 +22,7 @@ export default function CoursesPage() {
       ) : error && !data ? (
         <div role="alert" className="bg-white border border-[var(--border)] rounded-card p-8 text-center">
           <p className="text-red-600 mb-4">Courses could not be loaded.</p>
-          <button onClick={() => void refetch()} className="px-4 py-2 bg-[var(--ink-soft)] text-white rounded-control text-label">Try again</button>
+          <button onClick={() => void refetch()} className="px-4 py-2 bg-[var(--accent)] hover:bg-[var(--accent-deep)] text-white rounded-control text-label transition-colors">Try again</button>
         </div>
       ) : courses.length === 0 ? (
         <div className="rounded-card border border-[var(--border)] bg-white py-16 text-center text-[var(--muted)]">
@@ -30,7 +30,10 @@ export default function CoursesPage() {
           <p className="font-semibold">No courses available yet</p>
         </div>
       ) : (
-        <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
+        // A single course in a three-column grid sits in a narrow box with the
+        // rest of the row empty. One card is given a wider, readable width of
+        // its own; two or more fall back to the grid.
+        <div className={courses.length === 1 ? 'grid gap-5 max-w-[720px]' : 'grid gap-5 sm:grid-cols-2 xl:grid-cols-3'}>
           {courses.map(course => (
             <button
               type="button"

@@ -18,7 +18,7 @@ export const Input = forwardRef<HTMLInputElement, Props>(
     return (
       <div className="flex flex-col gap-1.5">
         {label && (
-          <label className="flex items-center gap-1.5 text-label font-medium text-[var(--muted)]">
+          <label className="flex items-center gap-1.5 text-caption font-semibold text-[var(--muted)]">
             {icon && <i className={`${icon} text-[10px]`} />}
             {label}
           </label>
@@ -26,19 +26,17 @@ export const Input = forwardRef<HTMLInputElement, Props>(
         <div className="relative">
           {iconInField && (
             <div className="absolute inset-y-0 left-3.5 flex items-center pointer-events-none">
-              <i className={`${iconInField} text-[var(--muted2)] text-caption`} />
+              <i className={`${iconInField} text-slate-400 text-[13px]`} />
             </div>
           )}
           <input
             ref={ref}
             type={resolvedType}
             className={cn(
-              'w-full h-11 px-3.5 text-body border rounded-control outline-none transition-colors',
-              // White on a white card, defined by its border: a grey fill on a grey page
-              // is the merging problem this theme avoids.
-              'bg-white text-[var(--text)] placeholder:text-[var(--muted2)]',
+              'w-full px-3.5 py-3 text-label border-[1.5px] rounded-lg outline-none transition-all',
+              'bg-[var(--surface)] text-[var(--text)] placeholder:text-[var(--muted2)]',
               /* Consistency: same focus ring as other inputs across the app */
-              'focus:ring-2 focus:ring-blue-100',
+              'focus:ring-2 focus:ring-[var(--accent-soft)]',
               iconInField && 'pl-10',
               showPasswordToggle && 'pr-10',
               error
@@ -62,7 +60,7 @@ export const Input = forwardRef<HTMLInputElement, Props>(
           )}
         </div>
         {error && (
-          <p className="text-caption text-red-500 flex items-center gap-1">
+          <p className="text-caption text-red-700 flex items-center gap-1">
             <i className="fas fa-circle-exclamation text-[10px]" />{error}
           </p>
         )}
