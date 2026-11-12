@@ -3,24 +3,21 @@
 import { useState } from 'react';
 import api from '@/lib/api';
 import { useAuth } from '@/hooks/useAuth';
+import PersonalYouTubeCourses from './PersonalYouTubeCourses';
 
 interface Playlist { playlistId: string; title: string; channelTitle: string; thumbnail: string | null }
 interface Video { videoId: string; title: string; thumbnail: string | null }
 
 export default function YouTubePilotSearch() {
   const { user } = useAuth();
-  const [myCourses, setMyCourses] = useState<Array<{id:string;title:string;status:string;videos:Array<{video_id:string;title:string}>}>>([]);
+  const [coursesRefresh, setCoursesRefresh] = useState(0);
   const [adding, setAdding] = useState(false);
-  const loadMyCourses = async () => {
-    try { const response=await api.get('/youtube/my-courses'); setMyCourses(response.data.data.courses); }
-    catch { setMessage('Unable to load personal courses.'); }
-  };
-  const addToMyCourses = async (playlistId:string) => {
+  const addToMyCourses = async (playlistId: string) => {
     setAdding(true); setMessage('');
     try {
-      await api.post('/youtube/my-courses',{playlistId});
-      await loadMyCourses();
-      setMessage('Added to My Courses as preview-only. AI tutor is not ready.');
+      await api.post('/youtube/my-courses', { playlistId });
+      setCoursesRefresh(v => v + 1);
+      setMessage('Added to My Courses. You can start the 2-video AI import above if the pilot is enabled.');
     } catch { setMessage('Unable to add playlist to My Courses.'); }
     finally { setAdding(false); }
   };
@@ -79,7 +76,7 @@ export default function YouTubePilotSearch() {
   return (
     <section aria-label="YouTube playlist discovery pilot" className="mb-8 rounded-card border border-[var(--border)] bg-white p-5">
       <div className="mb-3"><h2 className="text-h3 font-semibold">Discover YouTube playlists <span className="text-caption text-[var(--muted)]">(Pilot)</span></h2>
-        <p className="text-label text-[var(--muted)]">Search top matches and preview up to 2 videos. Course import will be enabled after transcript tests.</p></div>
+        <p className="text-label text-[var(--muted)]">Search top matches, preview up to 2 videos, and add a private course. AI import is a separate opt-in testing step.</p></div>
       <form onSubmit={e => { e.preventDefault(); void search(); }} className="flex flex-wrap gap-2 mb-4">
         <input aria-label="Playlist topic" value={query} onChange={e => setQuery(e.target.value)} minLength={3} maxLength={120} required className="min-w-[180px] flex-1 border rounded-control p-2" />
         <select aria-label="Lecture language" value={language} onChange={e => setLanguage(e.target.value as 'hi' | 'en')} className="border rounded-control p-2">
@@ -87,14 +84,13 @@ export default function YouTubePilotSearch() {
         </select>
         <button disabled={loading} className="bg-[var(--accent)] text-white px-4 py-2 rounded-control disabled:opacity-50">{loading ? 'Searching...' : 'Search playlists'}</button>
       </form>
+      {user?.role === 'STUDENT' && <PersonalYouTubeCourses refreshKey={coursesRefresh} />}
       {user?.role === 'STUDENT' && <div className="mb-4">
-        <button type="button" onClick={() => void loadMyCourses()} className="text-label underline mb-2 mr-4">Load My YouTube Courses</button>
-        {myCourses.map(c => <div key={c.id} className="border rounded-control p-3 mb-2"><strong>{c.title}</strong><p className="text-caption">Preview only — AI tutor not ready</p><p className="text-caption">{c.videos.length} preview videos</p></div>)}
         <button type="button" onClick={() => void loadSaved()} className="text-label underline mb-2">Load My Saved Playlists</button>
         {saved.length > 0 && <div className="grid gap-2 sm:grid-cols-2">{saved.map(p =>
           <div key={p.playlistId} className="border rounded-control p-3">
             <p className="font-semibold text-label">{p.title}</p>
-            <p className="text-caption text-[var(--muted)]">Saved only — AI tutor not ready</p>
+            <p className="text-caption text-[var(--muted)]">Saved bookmark</p>
             <button disabled={saving} type="button" className="text-label underline" onClick={() => void remove(p.playlistId)}>Remove</button>
           </div>)}</div>}
       </div>}
@@ -116,7 +112,7 @@ export default function YouTubePilotSearch() {
           className="mt-3 mr-3 px-4 py-2 bg-[var(--accent)] text-white rounded-control disabled:opacity-50">Add to My Courses (Preview)</button>}
         {user?.role === 'STUDENT' && <button type="button" disabled={saving} onClick={() => void save(selected)}
           className="mt-3 px-4 py-2 bg-[var(--accent)] text-white rounded-control disabled:opacity-50">Save to My Playlists</button>}
-        <p className="text-caption text-[var(--muted)] mt-3">Saving bookmarks this playlist only. It does not download videos, import transcripts, or enable AI Q&A.</p>
+        <p className="text-caption text-[var(--muted)] mt-3">Add to My Courses saves a private preview. Transcript import must be started separately; it may fail when captions are unavailable.</p>
       </div>}
     </section>
   );

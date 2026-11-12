@@ -42,3 +42,28 @@ Base: feature/multi-format-ingestion; development branch: feature/youtube-playli
 - The experimental transcript library may be blocked or unavailable; official YouTube metadata access does not imply transcript-download rights.
 - No production-ready permissioned transcript provider is configured.
 - No real database, network, or provider E2E test has been run in this chat.
+
+
+## Phase 6 — student frontend integration
+The Courses page now embeds a personal YouTube courses panel with:
+- course status (PREVIEW_ONLY, QUEUED, PROCESSING, PARTIAL, READY, FAILED);
+- explicit "Start AI Import" and retry actions, enabled only by local pilot flags;
+- automatic progress refresh every five seconds while queued/processing;
+- a course-specific question form when at least one video is indexed;
+- grounded answers with clickable YouTube video timestamp citations;
+- explicit removal of a private course and its indexed chunks;
+- individual video ingestion status/error details, to make partial success visible.
+
+The panel uses the existing authenticated Axios client. No access tokens are
+stored in browser storage. The backend verifies course ownership on all private
+operations. Search, preview and saving do not automatically ingest anything.
+
+### Required validation before calling this feature complete
+Run backend/frontend typechecks and offline tests. Then on a throwaway local DB:
+1. Test one playlist with at most two videos that have accessible captions.
+2. Verify UI status transitions and at least one grounded answer with a valid
+   timestamp link. Verify the response cites only the selected student's course.
+3. Test another student cannot query or ingest the first student's course ID.
+4. Test captions missing, unavailable embeddings, partial success, retry,
+   and deleting a course while an import is in progress.
+5. Keep the pull request draft until a real integration smoke test passes.

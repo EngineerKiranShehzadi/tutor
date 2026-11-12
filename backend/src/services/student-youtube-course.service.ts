@@ -4,10 +4,12 @@ import { getPlaylistMetadata, previewPlaylist, validPlaylistId } from './youtube
 
 export interface PersonalCourseVideo {
   video_id: string; title: string; thumbnail_url: string|null; position: number;
+  ingest_status?: string; last_error?: string|null;
 }
 export interface PersonalCourse {
   id: string; playlist_id: string; title: string; channel_title: string;
   thumbnail_url: string|null; status: 'PREVIEW_ONLY' | 'QUEUED' | 'PROCESSING' | 'PARTIAL' | 'READY' | 'FAILED'; created_at: Date;
+  last_error?: string|null;
   videos: PersonalCourseVideo[];
 }
 export const MAX_PERSONAL_COURSES = 10;
@@ -20,9 +22,10 @@ export const validatePersonalCourseId = (id: unknown): number => {
 
 export async function listPersonalCourses(studentId: string): Promise<PersonalCourse[]> {
   const { rows } = await query<PersonalCourse>(
-    `SELECT c.id,c.playlist_id,c.title,c.channel_title,c.thumbnail_url,c.status,c.created_at,
+    `SELECT c.id,c.playlist_id,c.title,c.channel_title,c.thumbnail_url,c.status,c.created_at,c.last_error,
       COALESCE(json_agg(json_build_object(
-        'video_id',v.video_id,'title',v.title,'thumbnail_url',v.thumbnail_url,'position',v.position
+        'video_id',v.video_id,'title',v.title,'thumbnail_url',v.thumbnail_url,'position',v.position,
+        'ingest_status',v.ingest_status,'last_error',v.last_error
       ) ORDER BY v.position) FILTER (WHERE v.video_id IS NOT NULL),'[]'::json) AS videos
       FROM student_youtube_courses c
       LEFT JOIN student_youtube_course_videos v ON v.course_id=c.id
