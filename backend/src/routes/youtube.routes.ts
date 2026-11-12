@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { listPersonalCourses, addPersonalCourse, removePersonalCourse, validatePersonalCourseId } from '../services/student-youtube-course.service';
 import { listSavedPlaylists, savePlaylist, removeSavedPlaylist } from '../services/saved-playlists.service';
 import { enqueueImport, getImportJob, retryImport, runImport } from '../services/youtube-import.service';
 import { AppError } from '../middleware/errorHandler';
@@ -74,4 +75,23 @@ router.delete('/saved/:playlistId', requireRole('STUDENT'), async (req: Authenti
     sendSuccess(res, 'Playlist removed');
   } catch (e) { next(e); }
 });
+
+router.get('/my-courses', requireRole('STUDENT'), async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try { sendSuccess(res, 'My personal YouTube courses', { courses: await listPersonalCourses(req.user!.id) }); }
+  catch (e) { next(e); }
+});
+router.post('/my-courses', requireRole('STUDENT'), async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    if (typeof req.body?.playlistId !== 'string') throw new AppError('playlistId required', 400);
+    const course = await addPersonalCourse(req.user!.id,req.body.playlistId);
+    sendSuccess(res, 'Playlist added to My Courses (preview only)', { course }, 201);
+  } catch(e) { next(e); }
+});
+router.delete('/my-courses/:id', requireRole('STUDENT'), async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    await removePersonalCourse(req.user!.id,validatePersonalCourseId(req.params.id));
+    sendSuccess(res,'Personal course removed');
+  } catch(e) { next(e); }
+});
 export default router;
+

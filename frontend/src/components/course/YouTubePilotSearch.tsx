@@ -9,6 +9,21 @@ interface Video { videoId: string; title: string; thumbnail: string | null }
 
 export default function YouTubePilotSearch() {
   const { user } = useAuth();
+  const [myCourses, setMyCourses] = useState<Array<{id:string;title:string;status:string;videos:Array<{video_id:string;title:string}>}>>([]);
+  const [adding, setAdding] = useState(false);
+  const loadMyCourses = async () => {
+    try { const response=await api.get('/youtube/my-courses'); setMyCourses(response.data.data.courses); }
+    catch { setMessage('Unable to load personal courses.'); }
+  };
+  const addToMyCourses = async (playlistId:string) => {
+    setAdding(true); setMessage('');
+    try {
+      await api.post('/youtube/my-courses',{playlistId});
+      await loadMyCourses();
+      setMessage('Added to My Courses as preview-only. AI tutor is not ready.');
+    } catch { setMessage('Unable to add playlist to My Courses.'); }
+    finally { setAdding(false); }
+  };
   const [saved, setSaved] = useState<Playlist[]>([]);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
@@ -73,6 +88,8 @@ export default function YouTubePilotSearch() {
         <button disabled={loading} className="bg-[var(--accent)] text-white px-4 py-2 rounded-control disabled:opacity-50">{loading ? 'Searching...' : 'Search playlists'}</button>
       </form>
       {user?.role === 'STUDENT' && <div className="mb-4">
+        <button type="button" onClick={() => void loadMyCourses()} className="text-label underline mb-2 mr-4">Load My YouTube Courses</button>
+        {myCourses.map(c => <div key={c.id} className="border rounded-control p-3 mb-2"><strong>{c.title}</strong><p className="text-caption">Preview only — AI tutor not ready</p><p className="text-caption">{c.videos.length} preview videos</p></div>)}
         <button type="button" onClick={() => void loadSaved()} className="text-label underline mb-2">Load My Saved Playlists</button>
         {saved.length > 0 && <div className="grid gap-2 sm:grid-cols-2">{saved.map(p =>
           <div key={p.playlistId} className="border rounded-control p-3">
@@ -95,6 +112,8 @@ export default function YouTubePilotSearch() {
             <div className="aspect-video"><iframe className="w-full h-full" src={'https://www.youtube-nocookie.com/embed/' + v.videoId} title={v.title} allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture" allowFullScreen loading="lazy" referrerPolicy="strict-origin-when-cross-origin" /></div>
             <p className="text-label mt-2">{v.title}</p>
           </div>)}</div>}
+        {user?.role === 'STUDENT' && <button type="button" disabled={adding} onClick={() => void addToMyCourses(selected.playlistId)}
+          className="mt-3 mr-3 px-4 py-2 bg-[var(--accent)] text-white rounded-control disabled:opacity-50">Add to My Courses (Preview)</button>}
         {user?.role === 'STUDENT' && <button type="button" disabled={saving} onClick={() => void save(selected)}
           className="mt-3 px-4 py-2 bg-[var(--accent)] text-white rounded-control disabled:opacity-50">Save to My Playlists</button>}
         <p className="text-caption text-[var(--muted)] mt-3">Saving bookmarks this playlist only. It does not download videos, import transcripts, or enable AI Q&A.</p>

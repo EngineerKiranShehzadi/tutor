@@ -71,3 +71,13 @@ third-party captions. Production needs an authorized transcript provider.
   preloaded. The UI labels entries "AI tutor not ready".
 - Next: do not connect student imports to existing shared courses until the
   authorization model covers all GraphQL/REST/chat/retrieval paths.
+
+## Phase 4 — separate personal course preview records
+- Migration 028 adds student_youtube_courses and student_youtube_course_videos.
+- Authenticated STUDENT may POST /api/v1/youtube/my-courses with playlistId,
+  GET /api/v1/youtube/my-courses and DELETE /api/v1/youtube/my-courses/:id.
+- Max 10 personal courses per student, max 2 preview videos each.
+- These records are NOT shared courses or RAG lectures and have no access to
+  existing global course content. AI tutor remains explicitly NOT READY.
+- Follow-up must implement owner-scoped ingestion, retrieval and chat before
+  changing the status or exposing AI Q&A.
