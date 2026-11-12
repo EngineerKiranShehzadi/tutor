@@ -96,6 +96,16 @@ const start = async () => {
       // Continue any dataset build that was interrupted by a restart. Only
       // chunks that still have no embedding are processed; finished work is
       // never repeated. Runs in the background — startup does not wait for it.
+      // Private student course pilot uses a separate worker and tables.
+      import('./services/personal-youtube-rag.service')
+        .then(m => {
+          void m.resumePersonalRagJobs().catch(err => logger.error('[PERSONAL-RAG] resume failed',{type:err?.name}));
+          setInterval(() => {
+            void m.resumePersonalRagJobs().catch(err => logger.error('[PERSONAL-RAG] periodic resume failed',{type:err?.name}));
+          }, 60_000).unref();
+        })
+        .catch(err => logger.error('[PERSONAL-RAG] worker unavailable',{type:err?.name}));
+
       // Resume pilot jobs after restart (disabled in production).
       import('./services/youtube-import.service')
         .then(m => {

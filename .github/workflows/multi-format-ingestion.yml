@@ -45,6 +45,17 @@ jobs:
           JWT_SECRET: offline-test-access-secret-at-least-32-bytes
           JWT_REFRESH_SECRET: offline-test-refresh-secret-at-least-32-bytes
         run: npm run test:document-ingestion
+      - name: Offline YouTube pilot and personal-RAG contracts
+        working-directory: backend
+        env:
+          DB_PASSWORD: offline-test
+          JWT_SECRET: offline-test-access-secret-at-least-32-bytes
+          JWT_REFRESH_SECRET: offline-test-refresh-secret-at-least-32-bytes
+        run: |
+          npm run test:youtube-pilot
+          npm run test:youtube-import
+          npm run test:student-youtube-courses
+          npm run test:personal-youtube-rag
       - name: Typecheck backend
         working-directory: backend
         run: npm run typecheck
@@ -97,6 +108,10 @@ jobs:
           psql -v ON_ERROR_STOP=1 -f backend/src/scripts/test-courses-rerun.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/024_course_archive.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/025_lecture_archive.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/026_youtube_import_pilot.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/027_student_saved_playlists.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/028_student_youtube_courses.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/029_personal_youtube_rag.sql
       - uses: actions/setup-node@v4
         with:
           node-version: '20'

@@ -7,7 +7,7 @@ export interface PersonalCourseVideo {
 }
 export interface PersonalCourse {
   id: string; playlist_id: string; title: string; channel_title: string;
-  thumbnail_url: string|null; status: 'PREVIEW_ONLY'; created_at: Date;
+  thumbnail_url: string|null; status: 'PREVIEW_ONLY' | 'QUEUED' | 'PROCESSING' | 'PARTIAL' | 'READY' | 'FAILED'; created_at: Date;
   videos: PersonalCourseVideo[];
 }
 export const MAX_PERSONAL_COURSES = 10;
@@ -20,14 +20,14 @@ export const validatePersonalCourseId = (id: unknown): number => {
 
 export async function listPersonalCourses(studentId: string): Promise<PersonalCourse[]> {
   const { rows } = await query<PersonalCourse>(
-    \`SELECT c.id,c.playlist_id,c.title,c.channel_title,c.thumbnail_url,c.status,c.created_at,
+    `SELECT c.id,c.playlist_id,c.title,c.channel_title,c.thumbnail_url,c.status,c.created_at,
       COALESCE(json_agg(json_build_object(
         'video_id',v.video_id,'title',v.title,'thumbnail_url',v.thumbnail_url,'position',v.position
       ) ORDER BY v.position) FILTER (WHERE v.video_id IS NOT NULL),'[]'::json) AS videos
       FROM student_youtube_courses c
       LEFT JOIN student_youtube_course_videos v ON v.course_id=c.id
       WHERE c.student_id=$1
-      GROUP BY c.id ORDER BY c.created_at DESC,c.id DESC\`, [studentId]);
+      GROUP BY c.id ORDER BY c.created_at DESC,c.id DESC`, [studentId]);
   return rows;
 }
 
@@ -56,8 +56,8 @@ export async function addPersonalCourse(studentId: string, playlistId: string): 
         'SELECT COUNT(*)::int AS n FROM student_youtube_courses WHERE student_id=$1',[studentId]);
       if (count.rows[0].n >= MAX_PERSONAL_COURSES) throw new AppError('Maximum 10 personal courses allowed', 409);
       const created = await client.query<{id:string}>(
-        \`INSERT INTO student_youtube_courses(student_id,playlist_id,title,channel_title,thumbnail_url)
-         VALUES($1,$2,$3,$4,$5) RETURNING id\`,
+        `INSERT INTO student_youtube_courses(student_id,playlist_id,title,channel_title,thumbnail_url)
+         VALUES($1,$2,$3,$4,$5) RETURNING id`,
         [studentId,playlistId,metadata.title,metadata.channelTitle,metadata.thumbnail]);
       courseId = created.rows[0].id;
       for (let i=0;i<videos.length;i++) {

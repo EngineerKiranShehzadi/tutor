@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { queuePersonalRag, runPersonalRagJob, askPersonalRag, personalRagEnabled } from '../services/personal-youtube-rag.service';
 import { listPersonalCourses, addPersonalCourse, removePersonalCourse, validatePersonalCourseId } from '../services/student-youtube-course.service';
 import { listSavedPlaylists, savePlaylist, removeSavedPlaylist } from '../services/saved-playlists.service';
 import { enqueueImport, getImportJob, retryImport, runImport } from '../services/youtube-import.service';
@@ -93,5 +94,25 @@ router.delete('/my-courses/:id', requireRole('STUDENT'), async (req: Authenticat
     sendSuccess(res,'Personal course removed');
   } catch(e) { next(e); }
 });
+
+router.post('/my-courses/:id/ingest', requireRole('STUDENT'), async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const courseId=validatePersonalCourseId(req.params.id);
+    await queuePersonalRag(req.user!.id,courseId);
+    sendSuccess(res,'Personal course transcript import queued',{courseId},202);
+    void runPersonalRagJob(courseId);
+  } catch(e) { next(e); }
+});
+router.post('/my-courses/:id/ask', requireRole('STUDENT'), async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const courseId=validatePersonalCourseId(req.params.id);
+    if (typeof req.body?.question !== 'string') throw new AppError('Question required',400);
+    sendSuccess(res,'Grounded course answer',await askPersonalRag(req.user!.id,courseId,req.body.question));
+  } catch(e) { next(e); }
+});
+router.get('/my-courses/pilot-status', requireRole('STUDENT'), (_req: AuthenticatedRequest, res: Response) => {
+  sendSuccess(res,'Personal AI tutor pilot status',{enabled:personalRagEnabled()});
+});
 export default router;
+
 
