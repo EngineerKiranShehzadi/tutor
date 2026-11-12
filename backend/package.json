@@ -52,6 +52,7 @@
     "test:record-trace": "ts-node --transpile-only src/scripts/test-record-trace.ts",
     "test:auth-hardening": "ts-node --transpile-only src/scripts/test-auth-hardening.ts",
     "test:dataset-pipeline": "ts-node --transpile-only src/scripts/test-dataset-pipeline.ts",
+    "test:youtube-import": "ts-node --transpile-only src/scripts/test-youtube-import.ts",
     "test:youtube-pilot": "ts-node --transpile-only src/scripts/test-youtube-pilot.ts",
     "test:document-ingestion": "ts-node --transpile-only src/scripts/test-document-ingestion.ts",
     "test:course-services": "ts-node --transpile-only src/scripts/test-course-services.ts",

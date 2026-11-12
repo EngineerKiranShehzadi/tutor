@@ -1,4 +1,6 @@
 import { Router } from 'express';
+import { enqueueImport, getImportJob, retryImport, runImport } from '../services/youtube-import.service';
+import { AppError } from '../middleware/errorHandler';
 import type { Response, NextFunction } from 'express';
 import { protect, requireRole } from '../middleware/auth.middleware';
 import type { AuthenticatedRequest } from '../types';
@@ -25,6 +27,33 @@ router.get('/playlists/:playlistId/preview', async (req: AuthenticatedRequest, r
       pilotLimit: 2,
     });
   } catch (err) { next(err); }
+});
+
+
+
+// Admin-only experimental import. Student Add to My Courses requires private
+// enrollment/authorization and is intentionally NOT exposed in this pilot.
+router.post('/imports', requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const courseId = req.body?.courseId;
+    const playlistId = req.body?.playlistId;
+    if (!Number.isSafeInteger(courseId) || typeof playlistId !== 'string')
+      throw new AppError('courseId and playlistId are required', 400);
+    const job = await enqueueImport(courseId, playlistId, req.user!.id);
+    res.status(202).json({ success: true, message: 'Pilot import queued', data: { job } });
+    void runImport(Number(job.id));
+  } catch (e) { next(e); }
+});
+router.get('/imports/:jobId', requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try { sendSuccess(res, 'Pilot import status', await getImportJob(Number(req.params.jobId), req.user!.id)); }
+  catch(e) { next(e); }
+});
+router.post('/imports/:jobId/retry', requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const job = await retryImport(Number(req.params.jobId), req.user!.id);
+    res.status(202).json({ success: true, message: 'Pilot retry queued', data: { job } });
+    void runImport(Number(job.id));
+  } catch(e) { next(e); }
 });
 
 export default router;

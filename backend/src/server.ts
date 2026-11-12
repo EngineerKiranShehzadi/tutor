@@ -96,6 +96,16 @@ const start = async () => {
       // Continue any dataset build that was interrupted by a restart. Only
       // chunks that still have no embedding are processed; finished work is
       // never repeated. Runs in the background — startup does not wait for it.
+      // Resume pilot jobs after restart (disabled in production).
+      import('./services/youtube-import.service')
+        .then(m => {
+          void m.resumeImports().catch(err => logger.error('[YOUTUBE] resume failed', { type: err?.name }));
+          setInterval(() => {
+            void m.resumeImports().catch(err => logger.error('[YOUTUBE] periodic resume failed', { type: err?.name }));
+          }, 60_000).unref();
+        })
+        .catch(err => logger.error('[YOUTUBE] worker unavailable', { type: err?.name }));
+
       import('./services/dataset-version.service')
         .then(m => {
           void m.resumePendingVersions().catch(err => logger.error('[DATASET] resume on startup failed', err));

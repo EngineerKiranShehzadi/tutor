@@ -31,3 +31,31 @@ Base: \`feature/multi-format-ingestion\`. Work branch: \`feature/youtube-playlis
 
 ## Compliance note
 YouTube Data API v3 enables metadata search and playlist enumeration, **not** arbitrary third-party caption downloads. The official captions download API requires owner/editor authorization. Use creator-supplied captions or otherwise authorized sources for production; do not make downloading public videos via \`yt-dlp\` a default fallback.
+
+
+## Phase 2 — admin-only experimental 2-video import
+This branch now includes an opt-in, local-only import worker. It is **not**
+student Add to My Courses and is **not** a production-ready YouTube caption
+integration. Import creates normal public lectures in an existing admin course.
+
+1. Apply migration 026 on a **throwaway local database** using npm run db:migrate.
+2. Install Python dependency: python3 -m pip install -r backend/scripts/youtube_requirements.txt
+3. In backend/.env set YOUTUBE_PILOT_ENABLED=true,
+   YOUTUBE_TRANSCRIPT_EXPERIMENTAL_ENABLED=true and YOUTUBE_DATA_API_KEY.
+   The import refuses to run when NODE_ENV=production.
+4. Run npm run typecheck, npm run test:youtube-pilot,
+   npm run test:youtube-import and npm run test:document-ingestion.
+5. Login as ADMIN and call POST /api/v1/youtube/imports with JSON
+   {"courseId":<existing test course id>,"playlistId":"<valid playlist id>"}.
+   Only the first two videos are attempted.
+6. Poll GET /api/v1/youtube/imports/<jobId>. A failed/partial job can be
+   requeued with POST /api/v1/youtube/imports/<jobId>/retry.
+7. Check that successful videos created lectures with READY datasets and
+   timestamped RAG citations; missing captions should show a failed video.
+8. Verify existing lectures and admin upload flow still work. Do not merge
+   before local typecheck, tests, and smoke testing.
+
+The Python extractor uses an unofficial API and can be blocked or fail when
+captions are unavailable. It does not download audio/video or bypass access
+controls. The official YouTube Data API does not grant access to arbitrary
+third-party captions. Production needs an authorized transcript provider.
