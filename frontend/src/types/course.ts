@@ -7,4 +7,6 @@ export interface DBCourse {
   readyCount: number;
   createdAt: string;
   updatedAt: string;
+  /** Set once the course has been withdrawn from use; null while it is active. */
+  archivedAt: string | null;
 }

@@ -1,290 +1,387 @@
 'use client';
-import { useEffect, useState } from 'react';
-import { GET_COURSES } from '@/graphql/course.queries';
-import { DBCourse } from '@/types/course';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useQuery, useMutation } from '@apollo/client';
-import { GET_LECTURES, DELETE_LECTURE_MUTATION } from '@/graphql/lecture.queries';
+import { useApolloClient, useQuery, useMutation } from '@apollo/client';
+import { GET_COURSES } from '@/graphql/course.queries';
+import {
+  ARCHIVE_LECTURE_MUTATION, DELETE_LECTURE_MUTATION, GET_LECTURES, RESTORE_LECTURE_MUTATION,
+} from '@/graphql/lecture.queries';
 import { GET_LECTURE_AGENT_DETAILS } from '@/graphql/admin.queries';
+import { GET_QUESTIONS_PER_LECTURE } from '@/graphql/analytics.queries';
+import { DBCourse } from '@/types/course';
 import { DBLecture } from '@/types';
 import { AdminPageHero } from '@/components/admin/AdminPageHero';
 
-const STATUS_CONFIG: Record<string, { label: string; dot: string; text: string; bg: string; accent: string }> = {
-  READY:            { label: 'AI Ready',      dot: 'bg-emerald-400', text: 'text-emerald-700', bg: 'bg-emerald-50 border-emerald-200', accent: 'bg-emerald-500' },
-  PROCESSING:       { label: 'Processing',    dot: 'bg-blue-400',    text: 'text-blue-700',    bg: 'bg-blue-50 border-blue-200',       accent: 'bg-blue-500'    },
-  EMBEDDING:        { label: 'Embedding',     dot: 'bg-violet-400',  text: 'text-violet-700',  bg: 'bg-violet-50 border-violet-200',   accent: 'bg-violet-500'  },
-  DATASET_UPLOADED: { label: 'Dataset Ready', dot: 'bg-amber-400',   text: 'text-amber-700',   bg: 'bg-amber-50 border-amber-200',     accent: 'bg-amber-500'   },
-  NO_DATASET:       { label: 'No Dataset',    dot: 'bg-slate-400',   text: 'text-slate-500',   bg: 'bg-slate-100 border-slate-200',    accent: 'bg-slate-300'   },
-  FAILED:           { label: 'Failed',        dot: 'bg-red-400',     text: 'text-red-700',     bg: 'bg-red-50 border-red-200',         accent: 'bg-red-500'     },
+/**
+ * Lectures.
+ *
+ * The page used to open with four number cards in four different colours, then
+ * repeat those same numbers nowhere useful, and number its rows #1, #2, #3 —
+ * which read as lecture order but were row positions in a newest-first list, so
+ * Lecture 6 was #1. The status pills ran through emerald, blue, violet, amber,
+ * slate and red, and the New Lecture button was white on a white heading, so it
+ * could not be seen at all.
+ *
+ * The counts are now the filter: pressing "Processing" shows the processing
+ * lectures. Nothing on the page states a number it cannot act on.
+ */
+
+type StatusKey = 'READY' | 'PROCESSING' | 'EMBEDDING' | 'DATASET_UPLOADED' | 'NO_DATASET' | 'FAILED';
+
+// Gold marks the states an admin has to act on; everything else stays muted,
+// so the list is quiet until something actually needs doing.
+const STATUS: Record<StatusKey, { label: string; attention: boolean }> = {
+  READY:            { label: 'Tutor ready',      attention: false },
+  PROCESSING:       { label: 'Processing',       attention: false },
+  EMBEDDING:        { label: 'Embedding',        attention: false },
+  DATASET_UPLOADED: { label: 'Dataset uploaded', attention: true  },
+  NO_DATASET:       { label: 'No dataset',       attention: true  },
+  FAILED:           { label: 'Failed',           attention: true  },
 };
 
-const STAT_ICONS: Record<string, { icon: string; color: string; bg: string }> = {
-  total:      { icon: 'fas fa-layer-group',  color: 'text-indigo-600',  bg: 'bg-indigo-50'  },
-  ready:      { icon: 'fas fa-robot',        color: 'text-emerald-600', bg: 'bg-emerald-50' },
-  processing: { icon: 'fas fa-cog',          color: 'text-blue-600',    bg: 'bg-blue-50'    },
-  noDataset:  { icon: 'fas fa-database',     color: 'text-slate-500',   bg: 'bg-slate-100'  },
-};
+type Tab = 'ALL' | StatusKey | 'ARCHIVED';
+type Pending = { id: string; action: 'archive' | 'delete' } | null;
+
+const outlineBtn = 'rounded-control border border-[var(--border)] px-3.5 py-2 text-caption font-semibold text-[var(--text)] hover:bg-[var(--surface)] transition-colors disabled:opacity-50';
 
 export default function AdminLectures() {
   const router = useRouter();
-  const { data, loading, refetch } = useQuery(GET_LECTURES, { fetchPolicy: 'network-only' });
-  const [deleteLecture, { loading: deleting }] = useMutation(DELETE_LECTURE_MUTATION);
-  // Operational readiness (dataset READY + active agent profile) per lecture.
-  const { data: agentData, loading: agentLoading } = useQuery(GET_LECTURE_AGENT_DETAILS, { fetchPolicy: 'network-only' });
-  const agentById = new Map<number, { chatReady: boolean; agentProfileStatus: string; notReadyReason: string | null }>(
-    (agentData?.lectureAgentDetails ?? []).map((a: { id: number; chatReady: boolean; agentProfileStatus: string; notReadyReason: string | null }) => [a.id, a])
-  );
+  const client = useApolloClient();
 
-  const [search,      setSearch]      = useState('');
-  const [deleteId,    setDeleteId]    = useState<string | null>(null);
-  const [deleteError, setDeleteError] = useState('');
+  // Archived lectures are included here and nowhere else: this is the only
+  // page that can restore one.
+  const { data, loading, refetch } = useQuery(GET_LECTURES, {
+    variables: { includeArchived: true },
+    fetchPolicy: 'network-only',
+  });
+  const { data: agentData, loading: agentLoading } = useQuery(GET_LECTURE_AGENT_DETAILS, { fetchPolicy: 'network-only' });
+  const { data: courseData } = useQuery(GET_COURSES, { variables: { includeArchived: true } });
+  // Already fetched by Overview; reused so the delete warning can state a real
+  // number instead of a vague caution.
+  const { data: askedData } = useQuery(GET_QUESTIONS_PER_LECTURE, { fetchPolicy: 'network-only' });
+
+  const [archiveLecture, { loading: archiving }] = useMutation(ARCHIVE_LECTURE_MUTATION);
+  const [restoreLecture, { loading: restoring }] = useMutation(RESTORE_LECTURE_MUTATION);
+  const [deleteLecture,  { loading: deleting }]  = useMutation(DELETE_LECTURE_MUTATION);
+
+  const [search, setSearch] = useState('');
   const [courseFilter, setCourseFilter] = useState('');
-  const { data: courseData } = useQuery(GET_COURSES);
-  const courses: DBCourse[] = courseData?.courses ?? [];
+  const [tab, setTab] = useState<Tab>('ALL');
+  const [pending, setPending] = useState<Pending>(null);
+  const [rowError, setRowError] = useState<{ id: string; message: string } | null>(null);
+  const [notice, setNotice] = useState('');
+
   useEffect(() => {
     setCourseFilter(new URLSearchParams(window.location.search).get('courseId') ?? '');
   }, []);
+  // A status chosen for one course may not exist in the next one.
+  useEffect(() => {
+    if (tab !== 'ALL' && tab !== 'ARCHIVED' && countOf(tab as StatusKey) === 0) setTab('ALL');
+    if (tab === 'ARCHIVED' && scopedArchived.length === 0) setTab('ALL');
+  });
 
-  const allLectures: DBLecture[] = data?.lectures ?? [];
-  const lectures    = allLectures.filter(l => (!courseFilter || l.courseId === courseFilter) && (!search || l.title.toLowerCase().includes(search.toLowerCase())));
-  const readyCount  = allLectures.filter(l => agentById.get(Number(l.id))?.chatReady === true).length;
-  const activeCount = allLectures.filter(l => l.status === 'PROCESSING' || l.status === 'EMBEDDING').length;
-  const noDataCount = allLectures.filter(l => l.status === 'NO_DATASET').length;
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(''), 4000);
+    return () => clearTimeout(t);
+  }, [notice]);
 
-  const handleDelete = async (id: string) => {
-    if (deleteId !== id) { setDeleteId(id); setDeleteError(''); return; }
+  const courses: DBCourse[] = courseData?.courses ?? [];
+  const all: DBLecture[] = useMemo(() => data?.lectures ?? [], [data]);
+
+  const agentById = useMemo(() => new Map<number, { chatReady: boolean; notReadyReason: string | null }>(
+    (agentData?.lectureAgentDetails ?? []).map((a: { id: number; chatReady: boolean; notReadyReason: string | null }) => [a.id, a])
+  ), [agentData]);
+
+  const askedById = useMemo(() => new Map<number, number>(
+    (askedData?.questionsPerLecture ?? []).map((q: { lectureId: number; count: number }) => [q.lectureId, q.count])
+  ), [askedData]);
+
+  const activeOnes = all.filter(l => !l.archivedAt);
+  const archived   = all.filter(l => l.archivedAt);
+
+  // Scoped to the chosen course. Built from every lecture instead, a course
+  // whose lectures are all ready would still offer a "No dataset" button that
+  // returned nothing.
+  const inCourse = (list: DBLecture[]) => courseFilter ? list.filter(l => l.courseId === courseFilter) : list;
+  const scopedActive   = inCourse(activeOnes);
+  const scopedArchived = inCourse(archived);
+  const countOf = (key: StatusKey) => scopedActive.filter(l => l.status === key).length;
+
+  // Only states that actually occur get a tab, and the row is dropped entirely
+  // when every lecture is in the same state: filtering a list into itself is a
+  // control that does nothing.
+  const presentStates = (Object.keys(STATUS) as StatusKey[]).filter(k => countOf(k) > 0);
+  const tabs: { key: Tab; label: string }[] = [
+    { key: 'ALL', label: 'All' },
+    ...presentStates.map(k => ({ key: k as Tab, label: STATUS[k].label })),
+    ...(archived.length ? [{ key: 'ARCHIVED' as Tab, label: 'Archived' }] : []),
+  ];
+
+  const showTabs = presentStates.length > 1 || scopedArchived.length > 0;
+  // A dataset still being prepared changes status on its own, so the list is
+  // worth reloading. Nothing in progress means nothing to reload.
+  const inProgress = scopedActive.some(l =>
+    l.status === 'PROCESSING' || l.status === 'EMBEDDING' || l.status === 'DATASET_UPLOADED');
+
+  const base = tab === 'ARCHIVED' ? scopedArchived : scopedActive;
+  const lectures = base.filter(l =>
+    (tab === 'ALL' || tab === 'ARCHIVED' || l.status === tab) &&
+    (!search || l.title.toLowerCase().includes(search.toLowerCase()))
+  );
+
+  // True when a search, a course or a status is hiding part of the list.
+  const narrowed = Boolean(search) || Boolean(courseFilter) || tab !== 'ALL';
+
+  const courseName = (id?: string) => {
+    const c = courses.find(x => x.id === id);
+    if (!c) return null;
+    return c.archivedAt ? `${c.title} (archived)` : c.title;
+  };
+
+  /** Students, the chat and Overview each hold their own copy of this list. */
+  const purgeLectureLists = () => {
+    client.cache.evict({ id: 'ROOT_QUERY', fieldName: 'lectures' });
+    client.cache.gc();
+  };
+
+  const run = async (lec: DBLecture, action: 'archive' | 'restore' | 'delete') => {
+    setRowError(null); setNotice('');
     try {
-      await deleteLecture({ variables: { id } });
-      refetch();
-      setDeleteId(null);
+      if (action === 'archive') {
+        await archiveLecture({ variables: { id: lec.id } });
+        setNotice(`${lec.title} has been archived. Its dataset and question history are unchanged.`);
+      } else if (action === 'restore') {
+        await restoreLecture({ variables: { id: lec.id } });
+        setNotice(`${lec.title} is available to students again.`);
+      } else {
+        await deleteLecture({ variables: { id: lec.id } });
+        setNotice(`${lec.title} has been deleted.`);
+      }
+      setPending(null);
+      purgeLectureLists();
+      await refetch();
     } catch (err) {
-      setDeleteError((err as { graphQLErrors?: { message: string }[] })?.graphQLErrors?.[0]?.message ?? 'Delete failed.');
+      setRowError({
+        id: lec.id,
+        message: (err as { graphQLErrors?: { message: string }[] })?.graphQLErrors?.[0]?.message ?? 'That action could not be completed.',
+      });
+      setPending(null);
     }
   };
 
+  const busy = archiving || restoring || deleting;
+
   return (
-    <div className="max-w-[1500px]">
+    <div className="max-w-[1180px]">
       <AdminPageHero
-        icon="fas fa-play-circle"
-        iconGradient="from-violet-500 to-indigo-600"
         title="Lectures"
-        subtitle={`${allLectures.length} total · ${readyCount} AI-ready`}
+        subtitle="Every lecture in the system. Open one to work on its dataset or its tutor." 
         action={
           <Link
             href={courseFilter ? `/admin/lectures/create?courseId=${encodeURIComponent(courseFilter)}` : '/admin/lectures/create'}
-            className="flex items-center gap-2 px-5 py-2.5 bg-white/15 text-white border border-white/25 backdrop-blur-sm rounded-xl text-[14px] font-semibold hover:bg-white/25 active:scale-95 transition-all"
+            className="h-10 inline-flex items-center gap-2 rounded-control bg-[var(--accent)] px-5 text-label font-semibold text-white hover:bg-[var(--accent-deep)] transition-colors"
           >
-            <i className="fas fa-plus text-[11px]" /> New Lecture
+            <i className="fas fa-plus text-[12px]" aria-hidden="true" />
+            New Lecture
           </Link>
         }
       />
 
-      {/* Stats summary */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
-        {[
-          { key: 'total',      label: 'Total Lectures',  value: loading ? '—' : allLectures.length },
-          { key: 'ready',      label: 'AI Ready',        value: loading || agentLoading ? '—' : readyCount },
-          { key: 'processing', label: 'Processing',      value: loading ? '—' : activeCount         },
-          { key: 'noDataset',  label: 'No Dataset',      value: loading ? '—' : noDataCount         },
-        ].map(stat => {
-          const cfg = STAT_ICONS[stat.key];
-          return (
-            <div key={stat.key} className="bg-white rounded-2xl border border-slate-200 shadow-sm px-5 py-4 flex items-center gap-4">
-              <div className={`w-10 h-10 rounded-xl ${cfg.bg} flex items-center justify-center shrink-0`}>
-                <i className={`${cfg.icon} ${cfg.color} text-[16px]`} />
-              </div>
-              <div>
-                <p className="text-[24px] font-extrabold text-slate-900 leading-none">{stat.value}</p>
-                <p className="text-[12px] text-slate-400 font-medium mt-0.5">{stat.label}</p>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Course filter, separate from existing lecture search */}
-      <div className="mb-4 flex gap-3 items-center">
-        <label htmlFor="admin-lecture-course-filter" className="text-sm font-semibold text-slate-600">Course</label>
-        <select
-          id="admin-lecture-course-filter"
-          value={courseFilter}
-          onChange={e => setCourseFilter(e.target.value)}
-          className="bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-700"
-        >
-          <option value="">All courses</option>
-          {courses.map(c => <option key={c.id} value={c.id}>{c.title}</option>)}
-        </select>
-        <Link href="/admin/courses" className="text-sm text-indigo-600 hover:underline">Manage courses</Link>
-      </div>
-      {/* Search */}
-      <div className="relative mb-5">
-        <i className="fas fa-search absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-[13px]" />
-        <input
-          value={search}
-          onChange={e => { setSearch(e.target.value); setDeleteId(null); }}
-          placeholder="Search lectures by title…"
-          className="w-full pl-11 pr-4 py-3 bg-white border border-slate-200 rounded-xl text-[14px] text-slate-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all shadow-sm placeholder:text-slate-400"
-        />
-      </div>
-
-      {/* Delete error */}
-      {deleteError && (
-        <div className="mb-4 flex items-center gap-2.5 bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-[13px] text-red-700">
-          <i className="fas fa-circle-exclamation shrink-0" /> {deleteError}
-          <button onClick={() => setDeleteError('')} className="ml-auto text-red-400 hover:text-red-600"><i className="fas fa-xmark" /></button>
+      {notice && (
+        <div role="status" className="mb-5 flex items-center gap-2.5 rounded-card border border-[var(--border)] border-l-[3px] border-l-[var(--accent)] bg-[var(--card)] px-5 py-3.5">
+          <i className="fas fa-circle-check text-[13px] text-[var(--accent)]" aria-hidden="true" />
+          <p className="text-label text-[var(--text)]">{notice}</p>
         </div>
       )}
 
-      {/* Loading skeletons */}
+      {/* The four number cards are gone. Each count is a filter now, so the
+          figures on the page are things you can act on. */}
+      {showTabs && (
+      <div className="flex flex-wrap gap-2 mb-4">
+        {tabs.map(t => (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => { setTab(t.key); setPending(null); }}
+            className={`rounded-control px-3.5 py-2 text-caption font-semibold transition-colors ${
+              tab === t.key
+                ? 'bg-[var(--accent)] text-white'
+                : 'border border-[var(--border)] text-[var(--text)] hover:bg-[var(--surface)]'
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-3 mb-5">
+        <div className="relative flex-1 min-w-[240px]">
+          <i className="fas fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-[13px] text-[var(--muted2)]" aria-hidden="true" />
+          <input
+            value={search}
+            onChange={e => { setSearch(e.target.value); setPending(null); }}
+            placeholder="Search lectures by title"
+            className="w-full rounded-control border border-[var(--border)] bg-[var(--card)] pl-10 pr-4 py-2.5 text-label text-[var(--text)] outline-none transition-colors focus:border-[var(--muted)] placeholder:text-[var(--muted2)]"
+          />
+        </div>
+        {/* The browser's own arrow sits hard against the right edge, so it is
+            replaced with one set in from it. */}
+        <div className="relative">
+          <select
+            aria-label="Filter by course"
+            value={courseFilter}
+            onChange={e => { setCourseFilter(e.target.value); setPending(null); }}
+            className="appearance-none rounded-control border border-[var(--border)] bg-[var(--card)] pl-3.5 pr-10 py-2.5 text-label text-[var(--text)] outline-none transition-colors focus:border-[var(--muted)]"
+          >
+            <option value="">All courses</option>
+            {courses.map(c => (
+              <option key={c.id} value={c.id}>{c.archivedAt ? `${c.title} (archived)` : c.title}</option>
+            ))}
+          </select>
+          <i className="fas fa-chevron-down pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-[11px] text-[var(--muted)]" aria-hidden="true" />
+        </div>
+        <Link href="/admin/courses" className={`${outlineBtn} bg-[var(--card)] py-2.5`}>
+          Manage Courses
+        </Link>
+      </div>
+
       {loading ? (
-        <div className="flex flex-col gap-3">
+        <div className="space-y-3">
           {[1, 2, 3].map(i => (
-            <div key={i} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex animate-pulse">
-              <div className="w-1.5 bg-slate-200 shrink-0" />
-              <div className="flex-1 px-6 py-5 flex items-center gap-5">
-                <div className="w-10 h-10 rounded-xl bg-slate-100 shrink-0" />
-                <div className="flex-1 space-y-2.5">
-                  <div className="h-4 bg-slate-100 rounded w-3/4" />
-                  <div className="h-3 bg-slate-100 rounded w-1/4" />
-                </div>
-                <div className="w-24 h-7 bg-slate-100 rounded-full" />
-                <div className="w-24 h-4 bg-slate-100 rounded" />
-                <div className="flex gap-2">
-                  <div className="w-16 h-8 bg-slate-100 rounded-xl" />
-                  <div className="w-16 h-8 bg-slate-100 rounded-xl" />
-                </div>
-              </div>
-            </div>
+            <div key={i} className="h-[86px] rounded-card border border-[var(--border)] bg-[var(--card)] animate-pulse" />
           ))}
         </div>
-
-      /* Empty state */
       ) : lectures.length === 0 ? (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col items-center justify-center py-28">
-          <div className="w-20 h-20 rounded-3xl bg-gradient-to-br from-indigo-50 to-violet-100 flex items-center justify-center mb-5 shadow-inner">
-            <i className="fas fa-film text-3xl text-indigo-400" />
-          </div>
-          <p className="text-[17px] font-bold text-slate-700 mb-1">No lectures yet</p>
-          <p className="text-[13px] text-slate-400 mb-6 text-center max-w-xs">
-            Create your first lecture and upload a Q&amp;A dataset to activate the AI tutor.
+        <div className="rounded-card border border-[var(--border)] bg-[var(--card)] p-10 text-center">
+          <p className="text-label font-semibold text-[var(--text)]">
+            {all.length === 0 ? 'No lectures yet' : 'Nothing matches those filters'}
           </p>
-          <Link
-            href="/admin/lectures/create"
-            className="flex items-center gap-2 px-6 py-2.5 bg-indigo-600 text-white rounded-xl text-[13px] font-semibold hover:bg-indigo-700 transition-colors shadow-sm"
-          >
-            <i className="fas fa-plus text-[10px]" /> Create First Lecture
-          </Link>
+          <p className="text-caption text-[var(--muted)] mt-1">
+            {all.length === 0
+              ? 'Create a lecture, then upload its dataset to start its tutor.'
+              : 'Clear the search or choose a different course.'}
+          </p>
         </div>
-
-      /* Lecture cards */
       ) : (
-        <>
-          <div className="flex flex-col gap-3">
-            {lectures.map((lec, idx) => {
-              const s          = STATUS_CONFIG[lec.status] ?? STATUS_CONFIG.NO_DATASET;
-              // Dataset READY but chat can't serve it (no / inactive agent profile).
-              const agentNotReady = lec.status === 'READY' && agentById.get(Number(lec.id))?.chatReady === false;
-              const badge = agentNotReady
-                ? { bg: 'bg-amber-50 border-amber-200', text: 'text-amber-700', dot: 'bg-amber-400', label: 'Agent Not Ready' }
-                : s;
-              const confirming = deleteId === lec.id;
-              return (
-                <div
-                  key={lec.id}
-                  className={`group bg-white rounded-2xl border shadow-sm overflow-hidden flex transition-all duration-150 ${
-                    confirming ? 'border-red-200' : 'border-slate-200 hover:border-indigo-200 hover:shadow-md'
-                  }`}
-                >
-                  {/* Left accent bar */}
-                  <div className={`w-1.5 shrink-0 ${confirming ? 'bg-red-400' : s.accent} transition-colors`} />
+        <div className="space-y-3">
+          {lectures.map(lec => {
+            const isArchived = Boolean(lec.archivedAt);
+            const s = STATUS[(lec.status as StatusKey)] ?? STATUS.NO_DATASET;
+            const agent = agentById.get(Number(lec.id));
+            const tutorStuck = lec.status === 'READY' && agent?.chatReady === false;
+            const asked = askedById.get(Number(lec.id)) ?? 0;
+            const confirming = pending?.id === lec.id ? pending.action : null;
+            const failed = rowError?.id === lec.id ? rowError.message : null;
 
-                  <div className={`flex-1 px-6 py-5 flex items-center gap-5 ${confirming ? 'bg-red-50' : ''}`}>
-                    {/* Icon */}
-                    <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center shrink-0">
-                      <span className="text-[13px] font-bold text-slate-400">#{idx + 1}</span>
-                    </div>
+            return (
+              <div key={lec.id} className="rounded-card border border-[var(--border)] bg-[var(--card)] p-5">
+                <div className="flex items-start gap-4">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-label font-semibold text-[var(--text)]">{lec.title}</p>
+                    <p className="text-caption text-[var(--muted)] mt-1">
+                      {courseName(lec.courseId) ?? 'Course unknown'}
+                      {' · '}
+                      {new Date(lec.createdAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}
+                      {asked > 0 && ` · ${asked} ${asked === 1 ? 'question' : 'questions'} asked`}
+                    </p>
+                    {/* A dataset that finished while its tutor did not is the
+                        one thing on this page that needs explaining. */}
+                    {tutorStuck && agent?.notReadyReason && (
+                      <p className="text-caption text-[var(--gold)] mt-1">{agent.notReadyReason}</p>
+                    )}
+                  </div>
 
-                    {/* Title + video id */}
-                    <div className="flex-1 min-w-0">
-                      <p className="text-[15px] font-semibold text-slate-800 truncate leading-snug">{lec.title}</p>
-                      <p className="text-[11px] text-indigo-500 mt-0.5 truncate">
-                        {courses.find(c => c.id === lec.courseId)?.title ?? 'Course'}
-                      </p>
-                      {agentNotReady && agentById.get(Number(lec.id))?.notReadyReason && (
-                        <p className="text-[11px] text-amber-700 mt-0.5 truncate" title={agentById.get(Number(lec.id))?.notReadyReason ?? ''}>
-                          {agentById.get(Number(lec.id))?.notReadyReason}
-                        </p>
-                      )}
-                      {lec.youtubeVideoId && (
-                        <p className="text-[11px] text-slate-400 font-mono mt-0.5 truncate">{lec.youtubeVideoId}</p>
-                      )}
-                    </div>
+                  {/* Words, not a coloured dot: a dot beside a label reads as
+                      an unread marker. Only a state needing action is tinted. */}
+                  <span className={`shrink-0 text-caption font-medium ${
+                    tutorStuck || s.attention ? 'text-[var(--gold)]' : 'text-[var(--muted)]'
+                  }`}>
+                    {isArchived ? 'Archived' : tutorStuck ? 'Tutor not ready' : s.label}
+                  </span>
+                </div>
 
-                    {/* Status */}
-                    <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-semibold border shrink-0 ${badge.bg} ${badge.text}`}>
-                      <span className={`w-1.5 h-1.5 rounded-full ${badge.dot} ${lec.status === 'PROCESSING' || lec.status === 'EMBEDDING' ? 'animate-pulse' : ''}`} />
-                      {badge.label}
-                    </span>
+                {failed && (
+                  <p role="alert" className="mt-3 flex items-start gap-2 text-label text-[var(--text)]">
+                    <i className="fas fa-triangle-exclamation text-[13px] text-[var(--gold)] mt-1 shrink-0" aria-hidden="true" />
+                    {failed}
+                  </p>
+                )}
 
-                    {/* Date */}
-                    <div className="shrink-0 text-right w-28">
-                      <p className="text-[11px] text-slate-400 font-medium uppercase tracking-wide">Created</p>
-                      <p className="text-[13px] text-slate-600 font-semibold mt-0.5">
-                        {new Date(lec.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
-                      </p>
-                    </div>
-
-                    {/* Actions */}
-                    <div className="flex items-center gap-2 shrink-0">
-                      {confirming ? (
-                        <>
-                          <span className="text-[12px] text-red-600 font-semibold">Delete?</span>
-                          <button
-                            onClick={() => handleDelete(lec.id)}
-                            disabled={deleting}
-                            className="px-3 py-1.5 rounded-xl bg-red-600 text-white text-[12px] font-semibold hover:bg-red-700 transition-colors disabled:opacity-60"
-                          >
-                            {deleting ? <i className="fas fa-spinner animate-spin text-[10px]" /> : 'Yes, delete'}
-                          </button>
-                          <button
-                            onClick={() => setDeleteId(null)}
-                            className="px-3 py-1.5 rounded-xl bg-white text-slate-600 text-[12px] font-semibold hover:bg-slate-100 transition-colors border border-slate-200"
-                          >
-                            Cancel
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <button
-                            onClick={() => router.push(`/admin/lectures/${lec.id}`)}
-                            className="px-4 py-1.5 rounded-xl bg-indigo-50 text-indigo-700 text-[12px] font-semibold hover:bg-indigo-100 active:scale-95 transition-all border border-indigo-100"
-                          >
-                            <i className="fas fa-arrow-up-right-from-square text-[10px] mr-1.5" /> Open
-                          </button>
-                          <button
-                            onClick={() => handleDelete(lec.id)}
-                            className="px-4 py-1.5 rounded-xl bg-red-50 text-red-600 text-[12px] font-semibold hover:bg-red-100 active:scale-95 transition-all border border-red-100"
-                          >
-                            <i className="fas fa-trash text-[10px] mr-1.5" /> Delete
-                          </button>
-                        </>
-                      )}
+                {confirming ? (
+                  <div className="mt-4 pt-4 border-t border-[var(--border)]">
+                    <p className="text-label text-[var(--text)]">
+                      {/* The title is on the line above, so it is not repeated
+                          here. One short line is enough to decide. */}
+                      {confirming === 'archive'
+                        ? 'Students lose access. Nothing is deleted, and you can restore it.'
+                        : 'Removes its dataset and chat history for good. Cannot be undone.'}
+                    </p>
+                    <div className="flex flex-wrap gap-2 mt-3">
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void run(lec, confirming)}
+                        className="rounded-control bg-[var(--accent)] px-3.5 py-2 text-caption font-semibold text-white hover:bg-[var(--accent-deep)] transition-colors disabled:opacity-50"
+                      >
+                        {busy ? 'Working…' : confirming === 'archive' ? 'Archive Lecture' : 'Delete Permanently'}
+                      </button>
+                      <button type="button" onClick={() => setPending(null)} className={outlineBtn}>Cancel</button>
                     </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-2 mt-4 pt-4 border-t border-[var(--border)]">
+                    {isArchived ? (
+                      <>
+                        <button type="button" disabled={busy} onClick={() => void run(lec, 'restore')} className={outlineBtn}>
+                          Restore
+                        </button>
+                        {asked === 0 && (
+                          <button type="button" onClick={() => setPending({ id: lec.id, action: 'delete' })} className={outlineBtn}>
+                            Delete
+                          </button>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <button type="button" onClick={() => router.push(`/admin/lectures/${lec.id}`)} className={outlineBtn}>
+                          Open
+                        </button>
+                        {/* Archive is always offered: it is the safe action,
+                            and a lecture nobody has asked about may still be one
+                            you only want withdrawn. Delete is the extra, and
+                            only where there is no question history to lose. */}
+                        <button type="button" onClick={() => setPending({ id: lec.id, action: 'archive' })} className={outlineBtn}>
+                          Archive
+                        </button>
+                        {asked === 0 && (
+                          <button type="button" onClick={() => setPending({ id: lec.id, action: 'delete' })} className={outlineBtn}>
+                            Delete
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
-          {/* Footer */}
-          <div className="flex items-center justify-between px-1 pt-4">
-            <span className="text-[12px] text-slate-400">{lectures.length} lecture{lectures.length !== 1 ? 's' : ''}</span>
-            <button onClick={() => refetch()} className="text-[12px] text-slate-400 hover:text-indigo-600 font-medium transition-colors">
-              <i className="fas fa-rotate-right mr-1 text-[10px]" /> Refresh
+      {!loading && lectures.length > 0 && (narrowed || inProgress) && (
+        <div className="flex items-center justify-between pt-4">
+          <span className="text-caption text-[var(--muted)]">
+            {narrowed ? `${lectures.length} of ${scopedActive.length} shown` : ''}
+          </span>
+          {inProgress && (
+            <button onClick={() => void refetch()} className="text-caption font-semibold text-[var(--accent)] hover:underline">
+              Refresh status
             </button>
-          </div>
-        </>
+          )}
+        </div>
       )}
     </div>
   );

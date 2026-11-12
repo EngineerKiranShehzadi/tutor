@@ -1,8 +1,6 @@
 'use client';
+import Link from 'next/link';
 import { useQuery } from '@apollo/client';
-import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LabelList,
-} from 'recharts';
 import {
   GET_ANALYTICS_SUMMARY,
   GET_QUESTIONS_PER_LECTURE,
@@ -11,39 +9,28 @@ import {
 } from '@/graphql/analytics.queries';
 import { AdminPageHero } from '@/components/admin/AdminPageHero';
 
-const STAT_CARDS = [
-  {
-    key: 'totalStudents',
-    label: 'Total Students',
-    icon: 'fas fa-chalkboard-user',
-    bg: 'bg-blue-600',
-    light: 'bg-blue-50 text-blue-700',
-  },
-  {
-    key: 'totalLectures',
-    label: 'Total Lectures',
-    icon: 'fas fa-video',
-    bg: 'bg-violet-600',
-    light: 'bg-violet-50 text-violet-700',
-  },
-  {
-    key: 'totalQuestions',
-    label: 'Questions Asked',
-    icon: 'fas fa-circle-question',
-    bg: 'bg-emerald-600',
-    light: 'bg-emerald-50 text-emerald-700',
-  },
-  {
-    key: 'readyAgents',
-    label: 'Active AI Agents',
-    icon: 'fas fa-brain',
-    bg: 'bg-indigo-600',
-    light: 'bg-indigo-50 text-indigo-700',
-  },
-];
+/**
+ * Overview.
+ *
+ * This page used to open with four large number cards, then draw the
+ * questions-per-lecture figures twice — once as a vertical bar chart in six
+ * rotating colours, once as a list of bars underneath it — and state student
+ * engagement three ways in a single strip. A lot of room for four small
+ * integers, and nothing on it said whether anything needed doing.
+ *
+ * It is now ordered by what an administrator comes here to find out: the size
+ * of things, then anything that needs attention, then what students are
+ * actually asking. The per-lecture figures are drawn once, horizontally, so a
+ * full lecture title can be read instead of truncated under a bar.
+ */
+
+type LectureCount = { lectureId: number; lectureTitle: string; count: number };
+type RecentQuestion = {
+  id: number; studentName: string; lectureTitle: string; question: string; createdAt: string;
+};
 
 function Skeleton({ className }: { className?: string }) {
-  return <div className={`animate-pulse rounded-lg bg-slate-100 ${className}`} />;
+  return <div className={`animate-pulse rounded-control bg-[var(--surface)] ${className}`} />;
 }
 
 export default function AdminDashboard() {
@@ -55,229 +42,177 @@ export default function AdminDashboard() {
   const { data: studentsData } = useQuery(GET_REGISTERED_STUDENTS, { variables: { limit: 1, offset: 0 }, fetchPolicy: 'network-only' });
 
   const summary     = summaryData?.analyticsSummary;
-  const qPerLecture = perLecture?.questionsPerLecture ?? [];
-  const recent      = recentData?.recentQuestions ?? [];
+  const qPerLecture: LectureCount[] = perLecture?.questionsPerLecture ?? [];
+  const recent: RecentQuestion[]    = recentData?.recentQuestions ?? [];
+
   const studentTotals: { totalStudents: number; activeCount: number; inactiveCount: number } | undefined = studentsData?.registeredStudents;
   const totalStudents = studentTotals?.totalStudents ?? 0;
   const activeCount   = studentTotals?.activeCount ?? 0;
-  const inactiveCount = studentTotals?.inactiveCount ?? 0;
-  const activePct = totalStudents > 0 ? Math.round((activeCount / totalStudents) * 100) : 0;
+
+  const totalLectures  = summary?.totalLectures ?? 0;
+  const readyAgents    = summary?.readyAgents ?? 0;
+  const totalQuestions = summary?.totalQuestions ?? 0;
+
+  // Both derived from figures already on the page, so they cannot disagree
+  // with the numbers above them.
+  const notReady    = Math.max(totalLectures - readyAgents, 0);
+  const unasked     = Math.max(totalLectures - qPerLecture.length, 0);
+  const maxCount    = qPerLecture.reduce((m, l) => Math.max(m, l.count), 0);
+  const askedTotal  = qPerLecture.reduce((s, l) => s + l.count, 0);
+
+  // Each figure carries the same icon as the sidebar item it belongs to, so the
+  // mark is a pointer to a place in the product rather than decoration.
+  const stats = [
+    { icon: 'fas fa-user-graduate', label: 'Students',  value: totalStudents,  note: `${activeCount} have asked a question` },
+    { icon: 'fas fa-play-circle',   label: 'Lectures',  value: totalLectures,  note: `${readyAgents} with a tutor ready` },
+    { icon: 'fas fa-comments',      label: 'Questions', value: totalQuestions, note: 'asked in total' },
+  ];
 
   return (
-    <div className="max-w-[1500px]">
+    <div className="max-w-[1180px]">
       <AdminPageHero
         icon="fas fa-chart-pie"
-        iconGradient="from-blue-500 to-indigo-600"
         title="Overview"
-        subtitle="Monitor platform activity and AI agent performance."
+        subtitle="Where the course stands today, and what students are asking."
       />
 
-      {/* Stat cards */}
-      <div className="grid grid-cols-4 gap-5 mb-8">
-        {STAT_CARDS.map(({ key, label, icon, bg, light }) => (
-          <div key={key} className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm hover:shadow-md transition-shadow">
-            <div className="flex items-start justify-between mb-5">
-              <div className={`w-12 h-12 rounded-xl ${bg} flex items-center justify-center shadow-sm`}>
-                <i className={`${icon} text-white text-[16px]`} />
-              </div>
-              <span className={`text-[11px] font-bold px-2.5 py-1 rounded-full ${light}`}>Live</span>
-            </div>
+      {/* One strip, three figures, divided — rather than four cards each large
+          enough to hold a headline. The second line gives each number the
+          context that made the old "Live" pills look like information. */}
+      <section className="rounded-card border border-[var(--border)] bg-[var(--card)] divide-x divide-[var(--border)] grid grid-cols-3 mb-5">
+        {stats.map(({ icon, label, value, note }) => (
+          <div key={label} className="px-6 py-5">
+            <p className="flex items-center gap-2 text-caption font-medium text-[var(--muted)]">
+              <i className={`${icon} text-[12px] text-[var(--muted2)]`} aria-hidden="true" />
+              {label}
+            </p>
             {summaryLoading ? (
-              <Skeleton className="h-10 w-16 mb-1" />
+              <Skeleton className="h-8 w-14 mt-2" />
             ) : (
-              <p className="text-[42px] font-extrabold text-slate-900 leading-none">
-                {summary?.[key as keyof typeof summary] ?? 0}
-              </p>
+              <p className="text-h2 font-semibold text-[var(--text)] leading-none mt-2 tabular-nums">{value}</p>
             )}
-            <p className="text-[14px] text-slate-500 mt-2 font-medium">{label}</p>
+            <p className="text-caption text-[var(--muted)] mt-2">{note}</p>
           </div>
         ))}
-      </div>
+      </section>
 
-      {/* Student engagement strip */}
-      {totalStudents > 0 && (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 mb-6 flex items-center gap-8">
-          <div className="shrink-0">
-            <p className="text-[15px] font-bold text-slate-700 mb-0.5">Student Engagement</p>
-            <p className="text-[13px] text-slate-400">Based on AI tutor interactions</p>
-          </div>
-          <div className="flex-1">
-            <div className="flex items-center justify-between mb-2 text-[13px] font-semibold">
-              <span className="text-emerald-600">{activeCount} Active ({activePct}%)</span>
-              <span className="text-slate-400">{inactiveCount} Inactive ({100 - activePct}%)</span>
-            </div>
-            <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden flex">
-              <div className="h-full bg-emerald-500 rounded-l-full transition-all duration-700" style={{ width: `${activePct}%` }} />
-              <div className="h-full bg-slate-200 rounded-r-full flex-1" />
-            </div>
-          </div>
-          <div className="flex items-center gap-6 shrink-0">
-            <div className="text-center">
-              <p className="text-[28px] font-extrabold text-emerald-600 leading-none">{activeCount}</p>
-              <p className="text-[12px] text-slate-400 mt-1 font-medium">Active</p>
-            </div>
-            <div className="w-px h-10 bg-slate-200" />
-            <div className="text-center">
-              <p className="text-[28px] font-extrabold text-slate-400 leading-none">{inactiveCount}</p>
-              <p className="text-[12px] text-slate-400 mt-1 font-medium">Inactive</p>
-            </div>
-          </div>
-        </div>
+      {/* Shown only when there is something to do. An empty "all clear" panel
+          would take the same room to say nothing. */}
+      {!summaryLoading && (notReady > 0 || unasked > 0) && (
+        <section className="rounded-card border border-[var(--border)] border-l-[3px] border-l-[var(--gold)] bg-[var(--card)] px-5 py-4 mb-5">
+          <h2 className="flex items-center gap-2 text-label font-semibold text-[var(--text)]">
+            <i className="fas fa-triangle-exclamation text-[13px] text-[var(--gold)]" aria-hidden="true" />
+            Needs Attention
+          </h2>
+          <ul className="mt-2 space-y-1.5">
+            {notReady > 0 && (
+              <li className="flex flex-wrap items-center gap-x-2 text-label text-[var(--text)]">
+                <span>
+                  {notReady} {notReady === 1 ? 'lecture has' : 'lectures have'} no tutor ready, so students cannot ask about {notReady === 1 ? 'it' : 'them'}.
+                </span>
+                <Link href="/admin/lectures" className="font-semibold text-[var(--accent)] hover:underline">Open Lectures</Link>
+              </li>
+            )}
+            {unasked > 0 && (
+              <li className="flex flex-wrap items-center gap-x-2 text-label text-[var(--text)]">
+                <span>{unasked} {unasked === 1 ? 'lecture has' : 'lectures have'} had no questions yet.</span>
+                <Link href="/admin/content-gaps" className="font-semibold text-[var(--accent)] hover:underline">Open Content Gaps</Link>
+              </li>
+            )}
+          </ul>
+        </section>
       )}
 
-      <div className="grid grid-cols-5 gap-6">
-        {/* Questions per lecture — 3 cols */}
-        <div className="col-span-3 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-          {/* Card header */}
-          <div className="flex items-center justify-between px-7 pt-6 pb-4">
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_380px] gap-5 items-start">
+        {/* Drawn once, horizontally: a lecture title is a sentence, and under a
+            vertical bar it had to be cut to fourteen characters. */}
+        <section className="rounded-card border border-[var(--border)] bg-[var(--card)] p-6">
+          <div className="flex items-baseline justify-between gap-4 mb-5">
             <div>
-              <h2 className="text-[18px] font-bold text-slate-900">Engagement by Lecture</h2>
-              <p className="text-[13px] text-slate-400 mt-0.5">Questions asked per AI agent</p>
+              <h2 className="text-h3 font-semibold text-[var(--text)]">Questions per Lecture</h2>
+              <p className="text-caption text-[var(--muted)] mt-0.5">Every student, since the course opened</p>
             </div>
-            <div className="flex items-center gap-2">
-              {!perLectureLoading && qPerLecture.length > 0 && (
-                <span className="text-[12px] font-semibold px-3 py-1 rounded-full bg-indigo-50 text-indigo-600 border border-indigo-100">
-                  {qPerLecture.reduce((s: number, l: { count: number }) => s + l.count, 0)} total questions
-                </span>
-              )}
-              <div className="w-9 h-9 rounded-xl bg-indigo-50 flex items-center justify-center">
-                <i className="fas fa-chart-column text-indigo-500 text-[14px]" />
-              </div>
-            </div>
+            {!perLectureLoading && qPerLecture.length > 0 && (
+              <p className="text-caption text-[var(--muted)] shrink-0 tabular-nums">{askedTotal} in total</p>
+            )}
           </div>
 
           {perLectureLoading ? (
-            <div className="px-7 pb-7 space-y-4">
-              {[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-8 w-full" />)}
+            <div className="space-y-4">
+              {[1, 2, 3, 4, 5].map(i => <Skeleton key={i} className="h-8 w-full" />)}
             </div>
           ) : qPerLecture.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-slate-400 px-7">
-              <div className="w-16 h-16 rounded-2xl bg-slate-50 flex items-center justify-center mb-4">
-                <i className="fas fa-chart-bar text-3xl text-slate-300" />
-              </div>
-              <p className="text-[15px] font-semibold text-slate-500">No data yet</p>
-              <p className="text-[13px] mt-1">Questions will appear once students start asking.</p>
+            <div className="py-12 text-center">
+              <p className="text-label font-semibold text-[var(--text)]">No questions yet</p>
+              <p className="text-caption text-[var(--muted)] mt-1">This fills in as students use the tutor.</p>
             </div>
           ) : (
-            <>
-              <div className="px-4">
-                <ResponsiveContainer width="100%" height={280}>
-                  <BarChart
-                    data={qPerLecture.map((item: { lectureId: number; lectureTitle: string; count: number }) => ({
-                      name: item.lectureTitle.length > 16 ? item.lectureTitle.slice(0, 14) + '…' : item.lectureTitle,
-                      fullName: item.lectureTitle,
-                      Questions: item.count,
-                    }))}
-                    margin={{ top: 28, right: 16, left: -10, bottom: 8 }}
-                    barSize={42}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
-                    <XAxis
-                      dataKey="name"
-                      tick={{ fontSize: 13, fill: '#64748b', fontWeight: 600 }}
-                      axisLine={false}
-                      tickLine={false}
-                      dy={6}
+            <ol className="space-y-3.5">
+              {[...qPerLecture].sort((a, b) => b.count - a.count).map(item => (
+                <li key={item.lectureId}>
+                  <div className="flex items-baseline justify-between gap-4 mb-1.5">
+                    <p className="text-label text-[var(--text)] truncate" title={item.lectureTitle}>{item.lectureTitle}</p>
+                    <span className="text-label font-semibold text-[var(--text)] shrink-0 tabular-nums">{item.count}</span>
+                  </div>
+                  <div className="h-2 rounded-full bg-[var(--surface)] border border-[var(--border)] overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-[var(--accent)]"
+                      style={{ width: `${maxCount ? Math.max(Math.round((item.count / maxCount) * 100), 2) : 0}%` }}
                     />
-                    <YAxis
-                      allowDecimals={false}
-                      tick={{ fontSize: 13, fill: '#94a3b8', fontWeight: 500 }}
-                      axisLine={false}
-                      tickLine={false}
-                    />
-                    <Tooltip
-                      cursor={{ fill: '#f8fafc', radius: 8 }}
-                      contentStyle={{
-                        borderRadius: 12,
-                        border: '1px solid #e2e8f0',
-                        fontSize: 13,
-                        color: '#334155',
-                        padding: '10px 14px',
-                        boxShadow: '0 4px 16px rgba(0,0,0,0.08)',
-                      }}
-                      formatter={(value, _, props) => [`${value} questions`, (props as { payload: { fullName: string } }).payload.fullName]}
-                      labelFormatter={() => ''}
-                    />
-                    <Bar dataKey="Questions" radius={[8, 8, 0, 0]}>
-                      <LabelList
-                        dataKey="Questions"
-                        position="top"
-                        style={{ fontSize: 14, fontWeight: 700, fill: '#4f46e5' }}
-                      />
-                      {qPerLecture.map((_: unknown, index: number) => {
-                        const COLORS = ['#6366f1', '#8b5cf6', '#06b6d4', '#10b981', '#f59e0b', '#ef4444'];
-                        return <Cell key={index} fill={COLORS[index % COLORS.length]} />;
-                      })}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-
-              {/* Lecture legend rows */}
-              <div className="border-t border-slate-100 divide-y divide-slate-50">
-                {qPerLecture.map((item: { lectureId: number; lectureTitle: string; count: number }, index: number) => {
-                  const COLORS = ['#6366f1', '#8b5cf6', '#06b6d4', '#10b981', '#f59e0b', '#ef4444'];
-                  const maxCount = Math.max(...qPerLecture.map((l: { count: number }) => l.count));
-                  return (
-                    <div key={item.lectureId} className="flex items-center gap-4 px-7 py-3">
-                      <div className="w-3 h-3 rounded-full shrink-0" style={{ background: COLORS[index % COLORS.length] }} />
-                      <p className="flex-1 text-[13px] font-medium text-slate-700 truncate">{item.lectureTitle}</p>
-                      <div className="w-32 h-1.5 bg-slate-100 rounded-full overflow-hidden shrink-0">
-                        <div className="h-full rounded-full" style={{ width: `${Math.round((item.count / maxCount) * 100)}%`, background: COLORS[index % COLORS.length] }} />
-                      </div>
-                      <span className="text-[13px] font-bold text-slate-700 w-6 text-right shrink-0">{item.count}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </>
+                  </div>
+                </li>
+              ))}
+            </ol>
           )}
-        </div>
+        </section>
 
-        {/* Recent questions — 2 cols */}
-        <div className="col-span-2 bg-white rounded-2xl border border-slate-200 p-7 shadow-sm flex flex-col">
-          <div className="flex items-center justify-between mb-6">
+        {/* A list separated by rules, not a stack of tinted cards: ten boxes
+            inside a box was the heaviest thing on the page. */}
+        <section className="rounded-card border border-[var(--border)] bg-[var(--card)] p-6">
+          {/* The link sits beside the heading, in the same place and at the same
+              size as "in total" on the chart card, so both card headers read
+              the same way. */}
+          <div className="flex items-baseline justify-between gap-4 mb-4">
             <div>
-              <h2 className="text-[18px] font-bold text-slate-900">Recent Questions</h2>
-              <p className="text-[13px] text-slate-400 mt-0.5">Latest student interactions</p>
+              <h2 className="text-h3 font-semibold text-[var(--text)]">Recent Questions</h2>
+              <p className="text-caption text-[var(--muted)] mt-0.5">The newest first</p>
             </div>
-            <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center">
-              <i className="fas fa-bolt text-emerald-500 text-[12px]" />
-            </div>
+            <Link
+              href="/admin/questions"
+              className="shrink-0 text-caption font-semibold text-[var(--accent)] hover:underline"
+            >
+              View all
+            </Link>
           </div>
 
           {recentLoading ? (
-            <div className="space-y-3">
-              {[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-16 w-full" />)}
+            <div className="space-y-4">
+              {[1, 2, 3, 4].map(i => <Skeleton key={i} className="h-12 w-full" />)}
             </div>
           ) : recent.length === 0 ? (
-            <div className="flex flex-col items-center justify-center flex-1 text-slate-400 py-6">
-              <i className="fas fa-comments text-3xl mb-2" />
-              <p className="text-sm font-medium">No activity yet</p>
+            <div className="py-12 text-center">
+              <p className="text-label font-semibold text-[var(--text)]">Nothing asked yet</p>
+              <p className="text-caption text-[var(--muted)] mt-1">Questions appear here as they come in.</p>
             </div>
           ) : (
-            <div className="flex flex-col gap-2.5 overflow-y-auto flex-1" style={{ maxHeight: 360 }}>
-              {recent.slice(0, 10).map((q: {
-                id: number; studentName: string; lectureTitle: string; question: string; createdAt: string;
-              }) => (
-                <div key={q.id} className="p-4 rounded-xl bg-slate-50 border border-slate-100 hover:border-slate-200 transition-colors">
-                  <div className="flex items-center gap-2 mb-2">
-                    <div className="w-5 h-5 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 text-[10px] font-bold shrink-0">
-                      {q.studentName.charAt(0).toUpperCase()}
-                    </div>
-                    <span className="text-[13px] font-semibold text-slate-700">{q.studentName}</span>
-                    <span className="text-[11px] text-slate-300">·</span>
-                    <span className="text-[12px] text-slate-400 truncate">{q.lectureTitle}</span>
-                  </div>
-                  <p className="text-[13px] text-slate-600 line-clamp-2 leading-relaxed">{q.question}</p>
-                  <p className="text-[11px] text-slate-400 mt-2">
-                    {new Date(q.createdAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+            // Scrolls inside the card so its height stays level with the chart
+            // beside it. The questions are separated by space, not rules: a rule
+            // between items lands directly under the heading as soon as the list
+            // is scrolled, which reads as a border that comes and goes.
+            <ul className="space-y-4 max-h-[420px] overflow-y-auto pr-2">
+              {recent.slice(0, 10).map(q => (
+                <li key={q.id}>
+                  <p className="text-label text-[var(--text)] leading-relaxed line-clamp-2">{q.question}</p>
+                  <p className="text-caption text-[var(--muted)] mt-1.5 truncate">
+                    {q.studentName} · {q.lectureTitle} · {new Date(q.createdAt).toLocaleString(undefined, {
+                      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+                    })}
                   </p>
-                </div>
+                </li>
               ))}
-            </div>
+            </ul>
           )}
-        </div>
+        </section>
       </div>
     </div>
   );

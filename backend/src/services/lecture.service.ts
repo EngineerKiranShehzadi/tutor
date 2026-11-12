@@ -83,11 +83,20 @@ export const createLecture = async (input: {
 };
 
 // ── GET ALL ────────────────────────────────────────────────────
-export const getLectures = async (courseId?: number): Promise<Lecture[]> => {
+export const getLectures = async (courseId?: number, includeArchived = false): Promise<Lecture[]> => {
   if (courseId !== undefined) await getCourse(courseId);
-  const { rows } = courseId === undefined
-    ? await query<Lecture>('SELECT l.*, ap.agent_name FROM lectures l LEFT JOIN lecture_agent_profiles ap ON ap.lecture_id = l.id ORDER BY l.created_at DESC, l.id DESC')
-    : await query<Lecture>('SELECT l.*, ap.agent_name FROM lectures l LEFT JOIN lecture_agent_profiles ap ON ap.lecture_id = l.id WHERE l.course_id = $1 ORDER BY l.created_at DESC, l.id DESC', [courseId]);
+  // Students and the chat read this, so archived lectures are left out unless
+  // the caller is the admin list, which is where a lecture is restored.
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+  if (courseId !== undefined) { params.push(courseId); conditions.push(`l.course_id = $${params.length}`); }
+  if (!includeArchived) conditions.push('l.archived_at IS NULL');
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const { rows } = await query<Lecture>(
+    `SELECT l.*, ap.agent_name FROM lectures l
+     LEFT JOIN lecture_agent_profiles ap ON ap.lecture_id = l.id
+     ${where}
+     ORDER BY l.created_at DESC, l.id DESC`, params);
   logger.info(`[LECTURE] Fetched ${rows.length} lecture(s)`);
   return rows;
 };
@@ -111,7 +120,11 @@ export const updateLecture = async (
   const youtubeUrl  = input.youtubeUrl?.trim()   ?? existing.youtube_url;
   const videoId     = input.youtubeUrl ? validateYoutubeUrl(youtubeUrl) : existing.youtube_video_id;
   const courseId = input.courseId ?? existing.course_id;
-  await getCourse(courseId);
+  const target = await getCourse(courseId);
+  // Moving a lecture into a withdrawn course would hide it with no sign of why.
+  if (target.archived_at && courseId !== existing.course_id) {
+    throw new AppError('That course has been archived. Restore it before moving a lecture into it.', 409);
+  }
 
   const { rows } = await query<Lecture>(
     `UPDATE lectures
@@ -126,7 +139,53 @@ export const updateLecture = async (
 };
 
 // ── DELETE ─────────────────────────────────────────────────────
+/** How many questions students have asked about this lecture. */
+export const lectureQuestionCount = async (id: number): Promise<number> => {
+  const { rows } = await query<{ n: number }>(
+    'SELECT COUNT(*)::int AS n FROM student_questions WHERE lecture_id = $1', [id]);
+  return rows[0]?.n ?? 0;
+};
+
+/**
+ * Withdraw a lecture from students without destroying anything.
+ *
+ * Its dataset, its tutor profile and every question asked about it stay
+ * exactly as they are; the lecture simply stops being listed and stops being
+ * answerable. restoreLecture puts it back.
+ */
+export const archiveLecture = async (id: number): Promise<Lecture> => {
+  const existing = await getLectureById(id);
+  if (existing.archived_at) return existing;
+  await query('UPDATE lectures SET archived_at = NOW(), updated_at = NOW() WHERE id = $1', [id]);
+  logger.info(`[LECTURE] Archived lecture #${id}`);
+  return getLectureById(id);
+};
+
+export const restoreLecture = async (id: number): Promise<Lecture> => {
+  await getLectureById(id);
+  await query('UPDATE lectures SET archived_at = NULL, updated_at = NOW() WHERE id = $1', [id]);
+  logger.info(`[LECTURE] Restored lecture #${id}`);
+  return getLectureById(id);
+};
+
+/**
+ * Permanent removal.
+ *
+ * Eight tables cascade off a lecture row: its qna chunks, its dataset versions,
+ * its agent profile, its chat sessions and chat history, the student questions
+ * recorded against it, its notifications and its answer memory. Once a student
+ * has asked about the lecture that history is the record of the system being
+ * used, so deletion is refused and the lecture is archived instead. A lecture
+ * nobody has asked about can still be removed outright.
+ */
 export const deleteLecture = async (id: number): Promise<boolean> => {
+  await getLectureById(id);
+  const asked = await lectureQuestionCount(id);
+  if (asked > 0) {
+    throw new AppError(
+      `${asked} question${asked === 1 ? ' has' : 's have'} been asked about this lecture. Deleting it would remove ${asked === 1 ? 'that question' : 'them'} along with its dataset and chat history. Archive it instead.`,
+      409);
+  }
   const { rowCount } = await query('DELETE FROM lectures WHERE id = $1', [id]);
   if (!rowCount) throw new AppError(`Lecture #${id} not found`, 404);
   logger.info(`[LECTURE] 🗑️  Deleted lecture #${id}`);

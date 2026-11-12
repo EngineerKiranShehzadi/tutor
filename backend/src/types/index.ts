@@ -87,6 +87,8 @@ export interface Lecture {
   // The dataset version chat reads from (dataset_versions.id); null until a
   // first dataset has been published.
   active_version_id?: number | null;
+  // Set once the lecture has been withdrawn from students; null while active.
+  archived_at: Date | null;
   created_at: Date;
   updated_at: Date;
 }

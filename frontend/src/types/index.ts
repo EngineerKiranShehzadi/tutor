@@ -35,13 +35,14 @@ export interface ApiResponse<T = undefined> {
 // ── DB Lecture (from GraphQL) ─────────────────────────
 export interface DBLecture {
   id:              string;
-  courseId:        string;
-  agentName?:      string | null;
   title:           string;
   description?:    string;
   youtubeUrl:      string;
   youtubeVideoId?: string;
   status:          'NO_DATASET' | 'DATASET_UPLOADED' | 'PROCESSING' | 'EMBEDDING' | 'READY' | 'FAILED';
+  /** Set once the lecture has been withdrawn from students; null while active. */
+  archivedAt?:     string | null;
+  courseId?:       string;
   progressCurrent: number;
   progressTotal:   number;
   createdAt:       string;

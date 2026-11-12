@@ -33,6 +33,8 @@ export const typeDefs = `#graphql
     readyCount: Int!
     createdAt: String!
     updatedAt: String!
+    # Set when the course has been withdrawn from use; null while it is active.
+    archivedAt: String
   }
   input CreateCourseInput {
     title: String!
@@ -55,6 +57,8 @@ export const typeDefs = `#graphql
     youtubeUrl:      String!
     youtubeVideoId:  String
     status:          String!
+    # Set when the lecture has been withdrawn; null while it is active.
+    archivedAt:      String
     progressCurrent: Int!
     progressTotal:   Int!
     createdAt:       String!
@@ -436,9 +440,13 @@ export const typeDefs = `#graphql
     # The signed-in student's own questions, newest first.
     # limit defaults to 10 and is capped at 50.
     myRecentQuestions(limit: Int, offset: Int): MyQuestionPage!
-    courses:                         [Course!]!
+    # includeArchived is honoured for admins only.
+    courses(includeArchived: Boolean):  [Course!]!
     course(id: String!):              Course!
-    lectures(courseId: Int):          [Lecture!]!
+    # includeArchived is honoured for admins only.
+    lectures(courseId: Int, includeArchived: Boolean): [Lecture!]!
+    # How many questions students have asked about a lecture (admin only).
+    lectureQuestionCount(id: String!): Int!
     lecture(id: String!):            Lecture!
     chatSessions(lectureId: Int!):                                            [ChatSession!]!
     sessionHistory(sessionId: Int!):                                          [ChatHistoryEntry!]!
@@ -474,8 +482,16 @@ export const typeDefs = `#graphql
     verifySignupOtp(input: VerifySignupOtpInput!):                SignupVerifyPayload!
     createCourse(input: CreateCourseInput!):                     Course!
     updateCourse(id: String!, input: UpdateCourseInput!):         Course!
+    # Withdraw a course from use, keeping its lectures and question history.
+    archiveCourse(id: String!):                                   Course!
+    restoreCourse(id: String!):                                   Course!
+    # Permanent; refused for a course that has any lectures.
+    deleteCourse(id: String!):                                    Boolean!
     createLecture(input: CreateLectureInput!):                    Lecture!
     updateLecture(id: String!, input: UpdateLectureInput!):       Lecture!
+    # Withdraw a lecture from students, keeping its dataset and history.
+    archiveLecture(id: String!):                                  Lecture!
+    restoreLecture(id: String!):                                  Lecture!
     deleteLecture(id: String!):                                   Boolean!
     askLectureAgent(input: AskLectureAgentInput!):                ChatAnswerResponse!
     clearChat(lectureId: Int!):                                   SuccessResponse!

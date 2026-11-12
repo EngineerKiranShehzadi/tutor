@@ -6,6 +6,9 @@ import {
   getLectureById,
   updateLecture,
   deleteLecture,
+  archiveLecture,
+  restoreLecture,
+  lectureQuestionCount,
 } from '../../services/lecture.service';
 import { AppError } from '../../middleware/errorHandler';
 import { logger } from '../../utils/logger';
@@ -36,6 +39,7 @@ function toGql(lecture: import('../../types').Lecture) {
     youtubeUrl: lecture.youtube_url,
     youtubeVideoId: lecture.youtube_video_id ?? null,
     status: lecture.status,
+    archivedAt: lecture.archived_at ? lecture.archived_at.toISOString() : null,
     progressCurrent: lecture.progress_current ?? 0,
     progressTotal: lecture.progress_total ?? 0,
     createdAt: lecture.created_at.toISOString(),
@@ -54,13 +58,21 @@ function wrap(fn: () => Promise<unknown>) {
 
 export const lectureResolvers = {
   Query: {
-    lectures: (_: unknown, args: { courseId?: number }, ctx: GraphQLContext) =>
+    // includeArchived is honoured for admins only: a student asking for it
+    // would otherwise list lectures that have been withdrawn.
+    lectures: (_: unknown, args: { courseId?: number; includeArchived?: boolean }, ctx: GraphQLContext) =>
       wrap(async () => {
         const user = requireAuth(ctx);
         logger.info(`[GRAPHQL] lectures query by "${user.email}" (${user.role})`);
-        const list = await getLectures(args.courseId);
+        const list = await getLectures(args.courseId, args.includeArchived === true && user.role === 'ADMIN');
         logger.info(`[GRAPHQL] ✅ lectures: returned ${list.length} lecture(s) to "${user.email}"`);
         return list.map(toGql);
+      }),
+
+    lectureQuestionCount: (_: unknown, { id }: { id: string }, ctx: GraphQLContext) =>
+      wrap(async () => {
+        requireAdmin(ctx);
+        return lectureQuestionCount(Number(id));
       }),
 
     lecture: (_: unknown, { id }: { id: string }, ctx: GraphQLContext) =>
@@ -97,6 +109,20 @@ export const lectureResolvers = {
         const l = await updateLecture(Number(id), input);
         logger.info(`[GRAPHQL] ✅ updateLecture: lecture #${id} updated by "${admin.email}"`);
         return toGql(l);
+      }),
+
+    archiveLecture: (_: unknown, { id }: { id: string }, ctx: GraphQLContext) =>
+      wrap(async () => {
+        const admin = requireAdmin(ctx);
+        logger.info(`[GRAPHQL] archiveLecture: admin "${admin.email}" → lecture #${id}`);
+        return toGql(await archiveLecture(Number(id)));
+      }),
+
+    restoreLecture: (_: unknown, { id }: { id: string }, ctx: GraphQLContext) =>
+      wrap(async () => {
+        const admin = requireAdmin(ctx);
+        logger.info(`[GRAPHQL] restoreLecture: admin "${admin.email}" → lecture #${id}`);
+        return toGql(await restoreLecture(Number(id)));
       }),
 
     deleteLecture: (_: unknown, { id }: { id: string }, ctx: GraphQLContext) =>

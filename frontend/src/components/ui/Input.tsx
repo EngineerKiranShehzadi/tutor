@@ -35,12 +35,12 @@ export const Input = forwardRef<HTMLInputElement, Props>(
             className={cn(
               'w-full px-3.5 py-3 text-label border-[1.5px] rounded-lg outline-none transition-all',
               'bg-[var(--surface)] text-[var(--text)] placeholder:text-[var(--muted2)]',
-              /* Consistency: same focus ring as other inputs across the app */
-              'focus:ring-2 focus:ring-[var(--accent-soft)]',
+              /* One focus edge. The border turning navy AND a pale ring sitting
+                 outside it read as two borders stacked on the same field. */
               iconInField && 'pl-10',
               showPasswordToggle && 'pr-10',
               error
-                ? 'border-red-400 focus:border-red-400 focus:ring-red-100'
+                ? 'border-red-400 focus:border-red-400'
                 : 'border-[var(--border)] focus:border-[var(--accent)]',
               className
             )}

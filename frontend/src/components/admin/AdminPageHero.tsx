@@ -1,48 +1,52 @@
 'use client';
-import { cn } from '@/lib/cn';
 
 interface AdminPageHeroProps {
-  icon: string;
-  iconGradient: string;
+  /** Kept so existing callers compile; the hero no longer shows an icon. */
+  icon?: string;
+  /** Kept so existing callers compile; the hero no longer tints its icon. */
+  iconGradient?: string;
   title: string;
   subtitle: string;
   action?: React.ReactNode;
   badge?: string;
 }
 
-export function AdminPageHero({ icon, iconGradient, title, subtitle, action, badge }: AdminPageHeroProps) {
+/**
+ * The heading band every admin page opens with.
+ *
+ * It used to be a slate-to-indigo gradient carrying three translucent circles,
+ * a 64px gradient icon tile with a white border and shadow, and an extra-bold
+ * 24px title in white — none of which exist anywhere else in the product.
+ *
+ * The student side opens a page with a heading and one line under it, so this
+ * does the same. The band is the same width as the content under it rather
+ * than bleeding to the edges of the page. The title is set at the top of the scale, well clear of the
+ * 17px section headings beneath it: at 20px the two were close enough that
+ * nothing on the page read as a level above anything else.
+ */
+export function AdminPageHero({ title, subtitle, action, badge }: AdminPageHeroProps) {
   return (
-    <div className="relative bg-gradient-to-r from-slate-800 via-slate-700 to-indigo-800 overflow-hidden -mx-8 -mt-8 mb-8">
-      <div className="absolute -top-10 -right-10 w-56 h-56 rounded-full bg-white/5 pointer-events-none" />
-      <div className="absolute bottom-0 left-1/3 w-40 h-40 rounded-full bg-white/5 pointer-events-none" />
-      <div className="absolute top-0 right-1/4 w-24 h-24 rounded-full bg-indigo-500/10 pointer-events-none" />
-
-      {/* Breadcrumb */}
-      <div className="relative px-8 pt-5 pb-0 flex items-center gap-1.5 text-[13px] text-white/50">
-        <i className="fas fa-shield-halved text-[11px]" />
+    <div className="mb-7 border-b border-[var(--border)] pb-5">
+      <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-caption text-[var(--muted)]">
         <span>Admin</span>
-        <i className="fas fa-chevron-right text-[9px]" />
-        <span className="text-white/80 font-medium">{title}</span>
-      </div>
+        <i className="fas fa-chevron-right text-[9px]" aria-hidden="true" />
+        <span className="font-medium text-[var(--text)]">{title}</span>
+      </nav>
 
-      <div className="relative px-8 py-6 flex items-center gap-5">
-        <div className={cn(
-          'w-16 h-16 rounded-2xl bg-gradient-to-br flex items-center justify-center shrink-0 shadow-xl border-2 border-white/20',
-          iconGradient
-        )}>
-          <i className={cn(icon, 'text-white text-[22px]')} />
-        </div>
-
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2.5 flex-wrap">
-            <h1 className="text-2xl font-extrabold text-white">{title}</h1>
+      {/* No icon beside the title. A tinted square holding a pictogram is the
+          house style of every generated admin template, and it says nothing the
+          heading does not: the breadcrumb already places you. */}
+      <div className="mt-3 flex items-start gap-4">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <h1 className="text-h1 font-semibold text-[var(--text)]">{title}</h1>
             {badge && (
-              <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-white/15 text-white/80 border border-white/20 uppercase tracking-widest">
+              <span className="rounded-full border border-[var(--border)] bg-[var(--surface)] px-2.5 py-0.5 text-caption font-medium text-[var(--muted)]">
                 {badge}
               </span>
             )}
           </div>
-          <p className="text-slate-300 text-sm mt-1">{subtitle}</p>
+          <p className="mt-1 text-label text-[var(--muted)]">{subtitle}</p>
         </div>
 
         {action && <div className="shrink-0">{action}</div>}
