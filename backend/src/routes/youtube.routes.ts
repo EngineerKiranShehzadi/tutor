@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { listSavedPlaylists, savePlaylist, removeSavedPlaylist } from '../services/saved-playlists.service';
 import { enqueueImport, getImportJob, retryImport, runImport } from '../services/youtube-import.service';
 import { AppError } from '../middleware/errorHandler';
 import type { Response, NextFunction } from 'express';
@@ -56,4 +57,21 @@ router.post('/imports/:jobId/retry', requireRole('ADMIN'), async (req: Authentic
   } catch(e) { next(e); }
 });
 
+
+router.get('/saved', requireRole('STUDENT'), async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try { sendSuccess(res, 'My saved playlists', { playlists: await listSavedPlaylists(req.user!.id) }); }
+  catch (e) { next(e); }
+});
+router.post('/saved', requireRole('STUDENT'), async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    if (typeof req.body?.playlistId !== 'string') throw new AppError('playlistId required', 400);
+    sendSuccess(res, 'Playlist saved', { playlist: await savePlaylist(req.user!.id, req.body.playlistId) }, 201);
+  } catch (e) { next(e); }
+});
+router.delete('/saved/:playlistId', requireRole('STUDENT'), async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    await removeSavedPlaylist(req.user!.id, req.params.playlistId);
+    sendSuccess(res, 'Playlist removed');
+  } catch (e) { next(e); }
+});
 export default router;

@@ -72,3 +72,16 @@ export async function previewPlaylist(playlistId: string): Promise<PreviewVideo[
     thumbnail: thumb(x),
   }));
 }
+
+export async function getPlaylistMetadata(playlistId: string): Promise<PlaylistMatch> {
+  if (!validPlaylistId(playlistId)) throw new AppError('Invalid playlist ID', 400);
+  const data = await youtubeGet('playlists', { part: 'snippet', id: playlistId, maxResults: '1' });
+  const item = data.items?.[0];
+  if (!item) throw new AppError('Playlist not found or not public', 404);
+  return {
+    playlistId,
+    title: String(item.snippet?.title ?? '').slice(0, 200) || 'Untitled playlist',
+    channelTitle: String(item.snippet?.channelTitle ?? '').slice(0, 150),
+    thumbnail: thumb(item),
+  };
+}

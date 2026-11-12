@@ -63,13 +63,14 @@ test('Courses renders cached cards during refresh, with navigable links',()=>{
   const {default:Page}=load('app/(dashboard)/courses/page.tsx',{
     '@apollo/client':{useQuery:()=>({loading:true,data:{courses:[{id:'1',title:'Saved course',subtitle:'',description:'',lectureCount:2,readyCount:2}]},refetch:async()=>{}})},
     '@/graphql/course.queries':{GET_COURSES:{}},
+    '@/components/course/YouTubePilotSearch':{__esModule:true,default:()=>null},
     'next/link':{__esModule:true,default:({children,...props})=>React.createElement('a',props,children)},
   });
   const html=renderToStaticMarkup(React.createElement(Page));assert.match(html,/Saved course/);assert.match(html,/href="\/lectures\?courseId=1"/);assert.doesNotMatch(html,/aria-label="Loading courses"/);
 });
 test('Courses keeps failure separate from genuine empty results',()=>{
   const React=require('react');const {renderToStaticMarkup}=require('react-dom/server');
-  function render(result){const {default:Page}=load('app/(dashboard)/courses/page.tsx',{'@apollo/client':{useQuery:()=>({...result,refetch:async()=>{}})},'@/graphql/course.queries':{GET_COURSES:{}},'next/link':{__esModule:true,default:({children,...props})=>React.createElement('a',props,children)}});return renderToStaticMarkup(React.createElement(Page));}
+  function render(result){const {default:Page}=load('app/(dashboard)/courses/page.tsx',{'@apollo/client':{useQuery:()=>({...result,refetch:async()=>{}})},'@/graphql/course.queries':{GET_COURSES:{}},'@/components/course/YouTubePilotSearch':{__esModule:true,default:()=>null},'next/link':{__esModule:true,default:({children,...props})=>React.createElement('a',props,children)}});return renderToStaticMarkup(React.createElement(Page));}
   assert.match(render({loading:false,error:Error('offline')}),/Courses could not be loaded/);
   assert.doesNotMatch(render({loading:false,error:Error('offline')}),/No courses available/);
   assert.match(render({loading:false,data:{courses:[]}}),/No courses available/);

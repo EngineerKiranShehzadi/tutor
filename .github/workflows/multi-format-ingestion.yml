@@ -95,6 +95,8 @@ jobs:
         run: |
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/022_courses.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/scripts/test-courses-rerun.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/024_course_archive.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/025_lecture_archive.sql
       - uses: actions/setup-node@v4
         with:
           node-version: '20'

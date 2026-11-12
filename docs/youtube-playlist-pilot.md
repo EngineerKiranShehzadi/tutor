@@ -59,3 +59,15 @@ The Python extractor uses an unofficial API and can be blocked or fail when
 captions are unavailable. It does not download audio/video or bypass access
 controls. The official YouTube Data API does not grant access to arbitrary
 third-party captions. Production needs an authorized transcript provider.
+
+## Phase 3 — student-owned bookmarks
+- Student can explicitly save a verified public playlist into a private
+  bookmark list. No ingestion is triggered; this is not a ready course.
+- REST endpoints: GET/POST /api/v1/youtube/saved and
+  DELETE /api/v1/youtube/saved/:playlistId (STUDENT only).
+- Migration 027 stores bookmarks with (user_id, playlist_id) primary key.
+- Existing globally visible courses and their RAG permissions are unchanged.
+- Saved list requires clicking "Load My Saved Playlists"; it is not automatically
+  preloaded. The UI labels entries "AI tutor not ready".
+- Next: do not connect student imports to existing shared courses until the
+  authorization model covers all GraphQL/REST/chat/retrieval paths.
