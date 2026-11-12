@@ -2,7 +2,7 @@ import { GraphQLError } from 'graphql';
 import { GraphQLContext } from '../context';
 import { AuthenticatedRequest } from '../../types';
 import { AppError } from '../../middleware/errorHandler';
-import { createPracticeQuiz, loadPracticeQuiz, submitPracticeQuiz, myPracticeQuizzes, myPracticeProgress } from '../../services/practice-quiz.service';
+import { createPracticeQuiz, retakePracticeQuiz, loadPracticeQuiz, submitPracticeQuiz, myPracticeQuizzes, myPracticeProgress } from '../../services/practice-quiz.service';
 
 function studentId(ctx: GraphQLContext): string {
   const user=(ctx.req as AuthenticatedRequest).user;
@@ -24,6 +24,7 @@ export const practiceQuizResolvers={
   },
   Mutation:{
     createPracticeQuiz:(_:unknown,{courseId,lectureIds}:{courseId:number;lectureIds:number[]},ctx:GraphQLContext)=>wrap(()=>createPracticeQuiz(studentId(ctx),courseId,lectureIds)),
+    retakePracticeQuiz:(_:unknown,{id}:{id:number},ctx:GraphQLContext)=>wrap(()=>retakePracticeQuiz(studentId(ctx),id)),
     submitPracticeQuiz:(_:unknown,{id,answers}:{id:number;answers:{questionId:number;selectedIndex:number}[]},ctx:GraphQLContext)=>wrap(()=>submitPracticeQuiz(studentId(ctx),id,answers)),
   }
 };

@@ -6,6 +6,7 @@ import { unwrapResolverError } from '@apollo/server/errors';
 import { AppError, describeError } from '../middleware/errorHandler';
 import { logSafeText } from '../observability/sanitize';
 import { typeDefs } from './typeDefs';
+import { practiceQuizRetakeTypeDefs } from './practice-quiz.schema';
 import { resolvers as authResolvers } from './resolvers/auth.resolver';
 import { chatResolvers } from './resolvers/chat.resolver';
 import { lectureResolvers } from './resolvers/lecture.resolver';
@@ -63,7 +64,7 @@ export function formatGraphQLError(err: GraphQLFormattedError, originalError: un
 
 export const setupApollo = async (app: Express): Promise<void> => {
   const server = new ApolloServer<GraphQLContext>({
-    typeDefs,
+    typeDefs: [typeDefs, practiceQuizRetakeTypeDefs],
     resolvers: mergedResolvers,
     // Apollo Server 4 leaves introspection on regardless of NODE_ENV; the
     // schema is not published in production (GRAPHQL_INTROSPECTION overrides).
