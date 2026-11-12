@@ -1,0 +1,60 @@
+name: Quiz latency and cancellation checks
+
+on:
+  push:
+    branches: [feature/multi-format-ingestion, feature/student-self-assessment]
+  pull_request:
+    paths:
+      - 'backend/src/services/practice-quiz.service.ts'
+      - 'backend/src/services/quiz-*.ts'
+      - 'backend/src/llm/**'
+      - 'backend/src/utils/abortable.ts'
+      - 'backend/tests/quiz-performance.test.cjs'
+      - '.github/workflows/quiz-performance.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: offline-test
+          POSTGRES_DB: quiz_latency_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d quiz_latency_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DB_PASSWORD: offline-test
+      JWT_SECRET: offline-test-access-secret-at-least-32-bytes
+      JWT_REFRESH_SECRET: offline-test-refresh-secret-at-least-32-bytes
+      QUIZ_TEST_DATABASE_URL: postgresql://postgres:offline-test@127.0.0.1:5432/quiz_latency_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci --ignore-scripts
+      - name: Test quiz orchestration, deadlines, queue and source cache
+        working-directory: backend
+        run: node --test tests/quiz-performance.test.cjs
+      - name: Existing quiz validation tests
+        working-directory: backend
+        run: npm run test:practice-quiz
+      - name: Existing Gemini provider tests
+        working-directory: backend
+        run: npm run test:gemini-quiz
+      - name: Full backend typecheck
+        working-directory: backend
+        run: npm run typecheck
