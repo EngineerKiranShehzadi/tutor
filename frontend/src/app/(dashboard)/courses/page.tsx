@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { useQuery } from '@apollo/client';
 import { GET_COURSES } from '@/graphql/course.queries';
 import { DBCourse } from '@/types/course';
+import YouTubePilotSearch from '@/components/course/YouTubePilotSearch';
 
 export default function CoursesPage() {
   const { data, loading, error, refetch } = useQuery(GET_COURSES, { fetchPolicy: 'cache-and-network' });
@@ -10,6 +11,7 @@ export default function CoursesPage() {
   return (
     <div className="px-6 py-8 max-w-[1400px] mx-auto">
       <div className="mb-7"><h1 className="text-h2 font-semibold text-[var(--text)]">Courses</h1><p className="text-label text-[var(--muted)] mt-1">Choose a course to explore its lectures and AI tutors.</p></div>
+      <YouTubePilotSearch />
       {error&&data&&<p role="status" className="mb-4 text-caption text-[var(--muted)]">Showing previously loaded courses. <button className="underline" onClick={()=>void refetch().catch(()=>undefined)}>Retry refresh</button></p>}
       {loading && !data ? (
         <div role="status" aria-label="Loading courses" className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">{[0,1,2].map(i=><div key={i} className="h-48 rounded-card border border-[var(--border)] bg-white animate-pulse"/>)}</div>

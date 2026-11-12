@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import authRoutes    from './auth.routes';
 import datasetRoutes from './dataset.routes';
+import youtubeRoutes from './youtube.routes';
 import observabilityRoutes from './observability.routes';
 import monitorRoutes from './monitor.routes';
 import chatRoutes    from './chat.routes';
@@ -12,6 +13,7 @@ const router = Router();
 
 router.use('/auth',     authRoutes);
 router.use('/datasets', datasetRoutes);
+router.use('/youtube', youtubeRoutes);
 router.use('/observability/monitor', monitorRoutes);
 router.use('/observability', observabilityRoutes);
 router.use('/chat/retrieval-warmup', retrievalWarmupRoutes);

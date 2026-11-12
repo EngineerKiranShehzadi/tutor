@@ -10,6 +10,7 @@ import { uploadRawDataset, isS3Configured } from '../services/s3-storage.service
 import { sendSuccess, sendError } from '../utils/response';
 import { logger } from '../utils/logger';
 import { supportedDatasetExtension, runDocumentExtractor, documentToRows } from '../services/document-ingestion.service';
+import { isSubtitleExtension, subtitleToRows } from '../services/subtitle-ingestion.service';
 
 const parseLectureId = (req: AuthenticatedRequest): number => parseInt(req.params['lectureId'] ?? '', 10);
 
@@ -33,13 +34,13 @@ export const uploadDataset = async (
   }
 
   if (!req.file) {
-    sendError(res, 'No file uploaded. Attach an .xlsx, .pdf, .docx, .ppt, .pptx, .txt or .html file.', 400);
+    sendError(res, 'No file uploaded. Attach an .xlsx, .pdf, .docx, .ppt, .pptx, .txt, .html, .srt or .vtt file.', 400);
     return;
   }
 
   const extension = supportedDatasetExtension(req.file.originalname);
   if (!extension) {
-    sendError(res, 'Supported formats: .xlsx, .pdf, .docx, .ppt, .pptx, .txt, .html, .htm', 400);
+    sendError(res, 'Supported formats: .xlsx, .pdf, .docx, .ppt, .pptx, .txt, .html, .htm, .srt, .vtt', 400);
     return;
   }
 
@@ -68,7 +69,9 @@ export const uploadDataset = async (
 
     const document = extension === '.xlsx'
       ? null
-      : await documentToRows(file.originalname, await runDocumentExtractor(file.buffer, extension));
+      : isSubtitleExtension(extension)
+        ? subtitleToRows(file.originalname, file.buffer, extension)
+        : await documentToRows(file.originalname, await runDocumentExtractor(file.buffer, extension));
     const result = await prepareDatasetVersion(lectureId, file.buffer, {
       mode, dryRun, confirmRemovals, filename: file.originalname,
       ...(document ? { rawRows: document.rows } : {}),

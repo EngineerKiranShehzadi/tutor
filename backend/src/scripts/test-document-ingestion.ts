@@ -16,6 +16,8 @@ async function run() {
   assert.equal(supportedDatasetExtension('explanation.txt'), '.txt');
   assert.equal(supportedDatasetExtension('lesson.html'), '.html');
   assert.equal(supportedDatasetExtension('qa.xlsx'), '.xlsx');
+  assert.equal(supportedDatasetExtension('lesson.srt'), '.srt');
+  assert.equal(supportedDatasetExtension('lesson.vtt'), '.vtt');
   assert.equal(supportedDatasetExtension('virus.exe'), null);
 
   const rows = await documentToRows('chapter-one.pdf', {
