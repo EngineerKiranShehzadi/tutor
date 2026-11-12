@@ -112,6 +112,7 @@ jobs:
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/027_student_saved_playlists.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/028_student_youtube_courses.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/029_personal_youtube_rag.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/scripts/test-personal-youtube-isolation.sql
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
