@@ -67,3 +67,18 @@ Run backend/frontend typechecks and offline tests. Then on a throwaway local DB:
 4. Test captions missing, unavailable embeddings, partial success, retry,
    and deleting a course while an import is in progress.
 5. Keep the pull request draft until a real integration smoke test passes.
+
+
+## Phase 8 — real PostgreSQL pipeline integration (deterministic adapters)
+- CI now creates an ephemeral PostgreSQL + pgvector instance, applies the
+  private course migrations, and runs \`test:personal-youtube-pipeline-db\`.
+- The test creates one private course with two videos, feeds synthetic Hindi/
+  English timestamped caption cues through the real chunk converter and
+  actual \`student_youtube_course_chunks\` INSERT transactions.
+- Embeddings are deterministic 1024-dimensional test vectors, not API calls.
+- Checks real vector dimensions, caption timestamps, reindex idempotency,
+  failed reindex preserving prior chunks, cross-student isolation, and absence
+  from the shared lecture Q&A table.
+- No live YouTube API, unofficial transcript provider, LLM, reranker, or real
+  embeddings are called. Their behavior still requires a separate manual E2E
+  smoke test with explicit credentials and permissioned content.

@@ -4,6 +4,7 @@ import { logger } from '../utils/logger';
 import { getPlaylistMetadata } from './youtube-discovery.service';
 import { pilotEnabled, fetchPilotCaptions } from './youtube-import.service';
 import { captionCuesToRows } from './subtitle-ingestion.service';
+import type { CaptionCue } from './subtitle-ingestion.service';
 import { buildChunkPiecesReport } from './chunk.service';
 import { generateEmbedding, generateEmbeddingsBatch, EMBEDDING_MODEL_VERSION } from './embedding.service';
 import { rerankChunks, dedupeAndSelect } from './rerank.service';
@@ -70,8 +71,15 @@ interface Video { video_id:string;title:string;ingest_status:string }
 interface IndexedChunk {
   question:string; answer:string; chunkText:string; start:string; end:string; vector:string;
 }
-async function indexVideo(courseId: number, video: Video): Promise<void> {
-  const captions = await fetchPilotCaptions(video.video_id);
+// Injectable caption and embedding adapters allow a real PostgreSQL integration
+// test without network calls or model credentials. Production uses the existing
+// adapters unchanged; this function is never exposed as a public API.
+export interface PersonalIndexDeps {
+  fetchCaptions?: (videoId: string) => Promise<{ language: string; cues: CaptionCue[] }>;
+  embedBatch?: (texts: string[]) => Promise<number[][]>;
+}
+export async function indexPersonalVideo(courseId: number, video: Video, deps: PersonalIndexDeps = {}): Promise<void> {
+  const captions = await (deps.fetchCaptions ?? fetchPilotCaptions)(video.video_id);
   const sourceRows = captionCuesToRows(video.video_id + '.vtt',captions.cues).rows;
   const prepared: Array<Omit<IndexedChunk,'vector'>> = [];
   for (const row of sourceRows) {
@@ -91,7 +99,7 @@ async function indexVideo(courseId: number, video: Video): Promise<void> {
   if (!prepared.length) throw new AppError('No usable transcript segments',422);
   const vectors: string[] = [];
   for (let i=0;i<prepared.length;i+=8) {
-    const batch = await generateEmbeddingsBatch(prepared.slice(i,i+8).map(c=>c.chunkText));
+    const batch = await (deps.embedBatch ?? generateEmbeddingsBatch)(prepared.slice(i,i+8).map(c=>c.chunkText));
     if (batch.length !== Math.min(8,prepared.length-i)) throw new AppError('Incomplete embedding batch',503);
     for (const v of batch) vectors.push(vectorLiteral(v));
     await query('UPDATE student_youtube_courses SET updated_at=NOW() WHERE id=$1',[courseId]);
@@ -139,7 +147,7 @@ export async function runPersonalRagJob(courseId: number): Promise<void> {
         await query(
           "UPDATE student_youtube_course_videos SET ingest_status='PROCESSING',last_error=NULL WHERE course_id=$1 AND video_id=$2",
           [courseId,video.video_id]);
-        await indexVideo(courseId,video);
+        await indexPersonalVideo(courseId,video);
         success++;
       } catch(e) {
         failure=safeFailure(e);
