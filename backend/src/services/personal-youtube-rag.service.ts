@@ -200,7 +200,17 @@ async function reservePersonalAsk(studentId:string,courseId:number):Promise<stri
   finally { client.release(); }
 }
 
-export async function askPersonalRag(studentId:string,courseId:number,rawQuestion:string):Promise<{
+// Test-only dependency seam; REST calls pass no overrides and use the real
+// providers, guardrails and per-student quota. Keep the SQL owner check live.
+export interface PersonalAskDeps {
+  embedQuery?: typeof generateEmbedding;
+  rerank?: typeof rerankChunks;
+  generate?: typeof generateAnswer;
+  inputGuard?: typeof runInputGuardrails;
+  outputGuard?: typeof runOutputGuardrail;
+  quota?: typeof enforceAskQuota;
+}
+export async function askPersonalRag(studentId:string,courseId:number,rawQuestion:string,deps:PersonalAskDeps={}):Promise<{
   answer:string;sources:PrivateCitation[];
 }> {
   if (!personalRagEnabled()) throw new AppError('Personal AI tutor pilot is disabled',503);
@@ -209,17 +219,17 @@ export async function askPersonalRag(studentId:string,courseId:number,rawQuestio
     throw new AppError('AI tutor is not ready. Import the captions first.',409);
   if (typeof rawQuestion!=='string' || rawQuestion.trim().length<3 || rawQuestion.length>500)
     throw new AppError('Question must be 3-500 characters',400);
-  const guard=await runInputGuardrails(rawQuestion);
+  const guard=await (deps.inputGuard ?? runInputGuardrails)(rawQuestion);
   if (guard.action==='REJECT')
     throw new AppError(REJECTION_MESSAGE_BY_REASON[guard.reason!] || 'Question rejected',400);
   const question=(guard.sanitizedInput || rawQuestion).trim();
-  await enforceAskQuota(studentId);
+  await (deps.quota ?? enforceAskQuota)(studentId);
   const reservation=await reservePersonalAsk(studentId,courseId);
   try {
-    const embedding=vectorLiteral(await generateEmbedding(question,true));
+    const embedding=vectorLiteral(await (deps.embedQuery ?? generateEmbedding)(question,true));
     // Both owner and course ID are enforced at the actual evidence SELECT.
     const { rows }=await query<PrivateChunk>(
-      'SELECT k.id,k.question,k.answer,k.chunk_text,k.start_time,k.end_time,k.video_id, ' +
+      'SELECT k.id,k.chunk_index,k.question,k.answer,k.chunk_text,k.start_time,k.end_time,k.video_id, ' +
       'v.title AS video_title,v.title AS topic,NULL::text AS keywords ' +
       'FROM student_youtube_course_chunks k ' +
       'JOIN student_youtube_course_videos v ON v.course_id=k.course_id AND v.video_id=k.video_id ' +
@@ -229,11 +239,11 @@ export async function askPersonalRag(studentId:string,courseId:number,rawQuestio
       [embedding,studentId,courseId,EMBEDDING_MODEL_VERSION]
     );
     if (!rows.length) return {answer:'I could not find this information in this course.',sources:[]};
-    const ranked=await rerankChunks(question,rows,5);
+    const ranked=await (deps.rerank ?? rerankChunks)(question,rows,5);
     const selected=dedupeAndSelect(ranked,5).selected as PrivateChunk[];
     if (!selected.length) return {answer:'I could not find this information in this course.',sources:[]};
-    const draft=await generateAnswer(question,selected,course.title);
-    const outcome=await runOutputGuardrail({
+    const draft=await (deps.generate ?? generateAnswer)(question,selected,course.title);
+    const outcome=await (deps.outputGuard ?? runOutputGuardrail)({
       question,effectiveQuery:question,uncoveredAspects:[],
       evidenceTexts:selected.map(s=>s.chunk_text),
       draftAnswer:draft,notFoundMessage:'I could not find this information in this course.',

@@ -131,6 +131,18 @@ jobs:
           JWT_SECRET: offline-test-access-secret-at-least-32-bytes
           JWT_REFRESH_SECRET: offline-test-refresh-secret-at-least-32-bytes
         run: npm run test:personal-youtube-pipeline-db
+      - name: Verify private YouTube Q&A against real pgvector with deterministic providers
+        working-directory: backend
+        env:
+          NODE_ENV: test
+          DB_HOST: 127.0.0.1
+          DB_PORT: '5432'
+          DB_USER: postgres
+          DB_PASSWORD: offline-test
+          DB_NAME: courses_test
+          JWT_SECRET: offline-test-access-secret-at-least-32-bytes
+          JWT_REFRESH_SECRET: offline-test-refresh-secret-at-least-32-bytes
+        run: npm run test:personal-youtube-qa-db
       - name: Verify course creation, lecture assignment and agent profile
         working-directory: backend
         env:

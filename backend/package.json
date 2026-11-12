@@ -52,6 +52,7 @@
     "test:record-trace": "ts-node --transpile-only src/scripts/test-record-trace.ts",
     "test:auth-hardening": "ts-node --transpile-only src/scripts/test-auth-hardening.ts",
     "test:dataset-pipeline": "ts-node --transpile-only src/scripts/test-dataset-pipeline.ts",
+    "test:personal-youtube-qa-db": "ts-node --transpile-only src/scripts/test-personal-youtube-qa-db.ts",
     "test:personal-youtube-pipeline-db": "ts-node --transpile-only src/scripts/test-personal-youtube-pipeline-db.ts",
     "test:personal-youtube-rag": "ts-node --transpile-only src/scripts/test-personal-youtube-rag.ts",
     "test:student-youtube-courses": "ts-node --transpile-only src/scripts/test-student-youtube-courses.ts",
