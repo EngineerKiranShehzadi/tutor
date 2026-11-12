@@ -82,3 +82,47 @@ Run backend/frontend typechecks and offline tests. Then on a throwaway local DB:
 - No live YouTube API, unofficial transcript provider, LLM, reranker, or real
   embeddings are called. Their behavior still requires a separate manual E2E
   smoke test with explicit credentials and permissioned content.
+
+
+## Phase 11 — optional live local acceptance smoke
+
+**Never run on production.** Use a throwaway local PostgreSQL database and
+a fresh STUDENT account. This script creates one personal course and leaves
+it for manual inspection; it never deletes it automatically.
+
+Requirements:
+- Apply migrations 026–029 to the throwaway DB and start the backend on
+  localhost/127.0.0.1, with all three YouTube pilot flags set to \`true\`.
+- Configure a valid **server-side** YouTube Data API v3 key, an authorized
+  caption source accessible to the experimental local adapter, and working
+  embedding/rerank/LLM providers.
+- Obtain a fresh student access token via your normal local login workflow.
+  Keep tokens in environment variables; never paste them into issues or logs.
+- Choose a playlist containing **at least one captioned video**. The pilot
+  imports no more than the first two videos.
+
+Run in the backend directory:
+
+\`\`\`bash
+export YOUTUBE_SMOKE_CONFIRM=LOCAL_THROWAWAY_DB
+export YOUTUBE_SMOKE_BASE_URL=http://127.0.0.1:5000/api/v1
+export YOUTUBE_SMOKE_STUDENT_TOKEN='<local-student-access-token>'
+export YOUTUBE_SMOKE_PLAYLIST_ID='<public-playlist-id>'
+export YOUTUBE_SMOKE_QUESTION='What concept is explained in the introduction?'
+# Optional: a different student's token for owner-isolation HTTP tests
+export YOUTUBE_SMOKE_OTHER_STUDENT_TOKEN='<second-local-student-token>'
+npm run smoke:youtube-personal-live
+\`\`\`
+
+The script refuses non-loopback HTTP targets and requires explicit
+confirmation. It verifies the pilot is enabled, creates a new personal
+course, checks the 1–2 video cap, queues ingestion, polls for up to six
+minutes, asks a grounded question, validates video IDs and timestamp URLs,
+and optionally checks that another student receives 404 on ask/ingest/delete.
+It does **not** print access tokens or the answer text.
+
+A live smoke pass still requires human review of answer correctness and
+caption rights; it is not a replacement for security review. The script is
+**not** included in CI because live network credentials are intentionally
+absent. Do not mark the feature production-ready until this run succeeds
+and its result is reviewed.
