@@ -3,6 +3,7 @@ import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { Navbar } from '@/components/layout/Navbar';
+import { LectureRetrievalWarmup } from '@/components/chat/LectureRetrievalWarmup';
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth();
@@ -30,6 +31,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   return (
     <div className="min-h-screen bg-[var(--bg)]">
       <Navbar />
+      <LectureRetrievalWarmup userId={String(user.id)} />
       {children}
     </div>
   );

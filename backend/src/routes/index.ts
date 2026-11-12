@@ -4,6 +4,7 @@ import datasetRoutes from './dataset.routes';
 import observabilityRoutes from './observability.routes';
 import monitorRoutes from './monitor.routes';
 import chatRoutes    from './chat.routes';
+import retrievalWarmupRoutes from './retrieval-warmup.routes';
 import { logger }    from '../utils/logger';
 import { checkLiveness, checkReadiness } from '../observability/health.service';
 
@@ -13,6 +14,7 @@ router.use('/auth',     authRoutes);
 router.use('/datasets', datasetRoutes);
 router.use('/observability/monitor', monitorRoutes);
 router.use('/observability', observabilityRoutes);
+router.use('/chat/retrieval-warmup', retrievalWarmupRoutes);
 router.use('/chat',     chatRoutes);
 
 // Preserved unchanged for backward compatibility — existing callers
