@@ -135,6 +135,11 @@ jobs:
         working-directory: backend
         env:
           NODE_ENV: test
+          # These flags are scoped to this isolated test job; all model and
+          # transcript calls use deterministic test adapters, never the network.
+          YOUTUBE_PILOT_ENABLED: 'true'
+          YOUTUBE_TRANSCRIPT_EXPERIMENTAL_ENABLED: 'true'
+          YOUTUBE_STUDENT_RAG_PILOT_ENABLED: 'true'
           DB_HOST: 127.0.0.1
           DB_PORT: '5432'
           DB_USER: postgres
