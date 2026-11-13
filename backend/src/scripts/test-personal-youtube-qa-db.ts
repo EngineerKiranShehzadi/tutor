@@ -112,7 +112,7 @@ async function main() {
     assert.ok(onlyThisVideo.sources.length>0);
     assert.ok(onlyThisVideo.sources.every(s=>s.videoId===videoId));
     await assert.rejects(askPersonalRag(users[0],courseId,'Explain neural networks',deps as any,
-      'not-a-video'),/Invalid video ID/);
+      'bad!'),/Invalid video ID/);
 
     const db=await query<{n:number}>(
       'SELECT COUNT(*)::int AS n FROM student_youtube_course_chunks WHERE course_id=$1 AND embedding_model_version=$2',
