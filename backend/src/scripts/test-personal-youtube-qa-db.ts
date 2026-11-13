@@ -88,10 +88,36 @@ async function main() {
       /could not be processed/);
     assert.equal(generated,1,'Rejected input must not trigger generation');
 
+    // Scoped lecture retrieval must never mix evidence from another video
+    // even when both are in the same student's private course.
+    const otherVideo='lmnopqrstuv';
+    await query(
+      "INSERT INTO student_youtube_course_videos(course_id,video_id,title,position,ingest_status) VALUES($1,$2,$3,2,'PREVIEW_ONLY')",
+      [courseId,otherVideo,'Unrelated Lecture']
+    );
+    await indexPersonalVideo(courseId,{video_id:otherVideo,title:'Unrelated Lecture',ingest_status:'PREVIEW_ONLY'},{
+      ...indexDeps,
+      fetchCaptions: async()=>({language:'en',cues:[
+        {startMs:1000,endMs:2500,text:'This is an unrelated optimization lecture.'}
+      ]})
+    });
+    const onlyThisVideo=await askPersonalRag(users[0],courseId,
+      'How does a neural network learn?',{
+        ...deps,
+        generate: async(_q:string,chunks:QnaChunk[])=>{
+          assert.ok(chunks.every(c=>(c as any).video_id===videoId),'Other video leaked into evidence');
+          return 'A neural network learns from examples.';
+        },
+      } as any,videoId);
+    assert.ok(onlyThisVideo.sources.length>0);
+    assert.ok(onlyThisVideo.sources.every(s=>s.videoId===videoId));
+    await assert.rejects(askPersonalRag(users[0],courseId,'Explain neural networks',deps as any,
+      'not-a-video'),/Invalid video ID/);
+
     const db=await query<{n:number}>(
       'SELECT COUNT(*)::int AS n FROM student_youtube_course_chunks WHERE course_id=$1 AND embedding_model_version=$2',
       [courseId,EMBEDDING_MODEL_VERSION]);
-    assert.equal(db.rows[0].n,1);
+    assert.equal(db.rows[0].n,2);
     console.log('Personal YouTube Q&A DB integration passed (grounding, citations, owner isolation, no-evidence, input guard)');
   } finally {
     for(const id of users) await query('DELETE FROM users WHERE id=$1',[id]).catch(()=>undefined);
