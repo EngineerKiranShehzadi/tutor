@@ -54,15 +54,17 @@ export default function YouTubePilotSearch() {
   const [query, setQuery] = useState('Deep Learning');
   const [language, setLanguage] = useState<'hi' | 'en'>('hi');
   const [results, setResults] = useState<Playlist[]>([]);
+  const [searched, setSearched] = useState(false);
   const [selected, setSelected] = useState<Playlist | null>(null);
   const [videos, setVideos] = useState<Video[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const search = async () => {
-    setLoading(true); setError(''); setSelected(null); setVideos([]);
+    setLoading(true); setSearched(false); setError(''); setSelected(null); setVideos([]);
     try {
       const response = await api.get('/youtube/playlists/search', { params: { q: query, language } });
       setResults(response.data.data.playlists);
+      setSearched(true);
     } catch { setError('Playlist search unavailable. Ask the admin to enable the YouTube pilot and configure its API key.'); }
     finally { setLoading(false); }
   };
@@ -82,7 +84,7 @@ export default function YouTubePilotSearch() {
         <select aria-label="Lecture language" value={language} onChange={e => setLanguage(e.target.value as 'hi' | 'en')} className="border rounded-control p-2">
           <option value="hi">Hindi</option><option value="en">English</option>
         </select>
-        <button disabled={loading} className="bg-[var(--accent)] text-white px-4 py-2 rounded-control disabled:opacity-50">{loading ? 'Searching...' : 'Search playlists'}</button>
+        <button disabled={loading} className="bg-[var(--accent)] text-white px-4 py-2 rounded-control disabled:opacity-50">{loading ? 'Checking captioned playlists...' : 'Search playlists'}</button>
       </form>
       {user?.role === 'STUDENT' && <PersonalYouTubeCourses refreshKey={coursesRefresh} />}
       {user?.role === 'STUDENT' && <div className="mb-4">
@@ -96,6 +98,7 @@ export default function YouTubePilotSearch() {
       </div>}
       {message && <p role="status" className="text-label mb-3">{message}</p>}
       {error && <p role="alert" className="text-red-600 text-label mb-3">{error}</p>}
+      {searched && results.length===0 && <p role="status" className="text-label text-[var(--muted)] mb-3">No playlists with usable Hindi, Urdu or English captions in the first two videos. Try another topic or language.</p>}
       {results.length > 0 && <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{results.map(p =>
         <button type="button" onClick={() => void preview(p)} key={p.playlistId} className="text-left border rounded-control p-3 hover:border-[var(--accent)]">
           {p.thumbnail && <img src={p.thumbnail} alt="" className="w-full aspect-video object-cover rounded-control mb-2" />}
