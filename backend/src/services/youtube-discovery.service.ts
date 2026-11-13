@@ -1,4 +1,4 @@
-import { hasUsableCaptions } from './youtube-caption-eligibility.service';
+import { checkCaptionEligibility } from './youtube-caption-eligibility.service';
 import { AppError } from '../middleware/errorHandler';
 
 // YouTube metadata only: public discovery is NOT permission to download captions.
@@ -60,13 +60,19 @@ export async function searchPlaylists(query: string, language = 'hi'): Promise<P
   // Search shows only playlists with at least one verified, usable caption
   // among the first two videos. Two concurrent probes bound resource usage.
   const checked: PlaylistMatch[]=[];
+  let unverified=0;
   for(let i=0;i<candidates.length;i+=2) {
     const batch=await Promise.all(candidates.slice(i,i+2).map(async(p:PlaylistMatch)=>{
       try {return (await previewPlaylist(p.playlistId)).length?p:null;}
-      catch{return null;}
+      catch(error) {
+        if(error instanceof AppError && error.statusCode===503)unverified++;
+        return null;
+      }
     }));
     for(const p of batch)if(p)checked.push(p);
   }
+  if(!checked.length && unverified>0)
+    throw new AppError('YouTube caption verification is temporarily unavailable. Please retry.',503);
   return checked;
 }
 
@@ -83,8 +89,11 @@ export async function previewPlaylist(playlistId: string): Promise<PreviewVideo[
     title:String(x.snippet?.title??'').slice(0,200),
     thumbnail:thumb(x),
   }));
-  const eligible=await Promise.all(candidates.map(async v=>(await hasUsableCaptions(v.videoId))?v:null));
-  return eligible.filter((v):v is PreviewVideo=>v!==null);
+  const checks=await Promise.all(candidates.map(async v=>({video:v,state:await checkCaptionEligibility(v.videoId)})));
+  const eligible=checks.filter(x=>x.state==='available').map(x=>x.video);
+  if(!eligible.length && checks.some(x=>x.state==='unknown'))
+    throw new AppError('YouTube caption verification is temporarily unavailable. Please retry.',503);
+  return eligible;
 }
 
 export async function getPlaylistMetadata(playlistId: string): Promise<PlaylistMatch> {
