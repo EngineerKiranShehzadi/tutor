@@ -11,7 +11,13 @@ export default function CoursesPage() {
   return (
     <div className="px-6 py-8 max-w-[1400px] mx-auto">
       <div className="mb-7"><h1 className="text-h2 font-semibold text-[var(--text)]">Courses</h1><p className="text-label text-[var(--muted)] mt-1">Choose a course to explore its lectures and AI tutors.</p></div>
-      <YouTubePilotSearch />
+      <div className="flex flex-wrap items-end justify-between gap-3 mb-4">
+        <div>
+          <h2 className="text-h2 font-semibold text-[var(--text)]">Institute Courses</h2>
+          <p className="text-label text-[var(--muted)] mt-1">Courses provided by your institute, available to every student.</p>
+        </div>
+        <Link href="/practice" className="text-label font-semibold text-[var(--accent)] hover:underline">Practice Quiz <i className="fas fa-arrow-right text-[11px] ml-1" /></Link>
+      </div>
       {error&&data&&<p role="status" className="mb-4 text-caption text-[var(--muted)]">Showing previously loaded courses. <button className="underline" onClick={()=>void refetch().catch(()=>undefined)}>Retry refresh</button></p>}
       {loading && !data ? (
         <div role="status" aria-label="Loading courses" className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">{[0,1,2].map(i=><div key={i} className="h-48 rounded-card border border-[var(--border)] bg-white animate-pulse"/>)}</div>
@@ -32,6 +38,9 @@ export default function CoursesPage() {
           ))}
         </div>
       )}
+      <div className="mt-10 pt-8 border-t border-[var(--border)]">
+        <YouTubePilotSearch />
+      </div>
     </div>
   );
 }

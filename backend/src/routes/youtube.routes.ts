@@ -11,6 +11,7 @@ import { sendSuccess } from '../utils/response';
 import { previewPlaylist, searchPlaylists } from '../services/youtube-discovery.service';
 
 import { getStudentStorageUsage, getStorageStats } from '../services/youtube-storage-policy.service';
+import { createPrivateYoutubeQuiz, loadPrivateYoutubeQuiz, listPrivateYoutubeQuizzes, submitPrivateYoutubeQuiz } from '../services/personal-youtube-quiz.service';
 import { listYoutubeSessions, createYoutubeSession, readYoutubeSession, renameYoutubeSession, removeYoutubeSession, askYoutubeSession } from '../services/personal-youtube-chat.service';
 
 const router = Router();
@@ -148,6 +149,24 @@ router.post('/my-courses/:id/sessions/:sid/ask',requireRole('STUDENT'),async(req
   try { if(typeof req.body?.question!=='string') throw new AppError('Question required',400);
     sendSuccess(res,'Private lecture answer',await askYoutubeSession(req.user!.id,validatePersonalCourseId(req.params.id),Number(req.params.sid),req.body.question));
   }catch(e){next(e);}
+});
+// Personal quizzes share the existing /practice UI but never enter the
+// admin-course quiz tables. Ownership checks are inside every service call.
+router.get('/my-quizzes',requireRole('STUDENT'),async(req:AuthenticatedRequest,res:Response,next:NextFunction)=>{
+  try{sendSuccess(res,'Your private YouTube quizzes',{quizzes:await listPrivateYoutubeQuizzes(req.user!.id)});}
+  catch(e){next(e);}
+});
+router.post('/my-quizzes',requireRole('STUDENT'),async(req:AuthenticatedRequest,res:Response,next:NextFunction)=>{
+  try{sendSuccess(res,'Private YouTube quiz', {quiz:await createPrivateYoutubeQuiz(req.user!.id,req.body?.courseId,req.body?.videoIds)},201);}
+  catch(e){next(e);}
+});
+router.get('/my-quizzes/:quizId',requireRole('STUDENT'),async(req:AuthenticatedRequest,res:Response,next:NextFunction)=>{
+  try{sendSuccess(res,'Your private YouTube quiz',{quiz:await loadPrivateYoutubeQuiz(req.user!.id,req.params.quizId)});}
+  catch(e){next(e);}
+});
+router.post('/my-quizzes/:quizId/submit',requireRole('STUDENT'),async(req:AuthenticatedRequest,res:Response,next:NextFunction)=>{
+  try{sendSuccess(res,'Private quiz graded',{quiz:await submitPrivateYoutubeQuiz(req.user!.id,req.params.quizId,req.body?.answers)});}
+  catch(e){next(e);}
 });
 export default router;
 

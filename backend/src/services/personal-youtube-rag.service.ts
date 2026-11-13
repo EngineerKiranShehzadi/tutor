@@ -70,30 +70,12 @@ interface IndexedChunk {
 export interface PersonalIndexDeps {
   fetchCaptions?: (videoId: string) => Promise<{ language: string; cues: CaptionCue[] }>;
   embedBatch?: (texts: string[]) => Promise<number[][]>;
+  /** Test adapter only: exercise the shared persistence/reuse branch with deterministic providers. */
+  allowSharedReuse?: boolean;
 }
 export async function indexPersonalVideo(courseId: number, video: Video, deps: PersonalIndexDeps = {}): Promise<void> {
-  // A reusable public video's verified indexed content can be attached without
-  // another embedding request. Private student ownership remains on the mapping.
-  // Injectable test adapters must always exercise the original indexing path.
-  if (!deps.fetchCaptions && !deps.embedBatch) {
-    const {rows: hits}=await query<{id:string}>(
-      `SELECT sc.id FROM youtube_shared_content sc
-       JOIN youtube_shared_chunks ch ON ch.content_id=sc.id
-       WHERE sc.video_id=$1 AND sc.embedding_model_version=$2
-         AND sc.created_at>NOW()-INTERVAL '14 days'
-       GROUP BY sc.id ORDER BY MAX(sc.created_at) DESC LIMIT 1`,
-      [video.video_id,EMBEDDING_MODEL_VERSION]);
-    if(hits[0]){
-      const attached=await query(
-        `UPDATE student_youtube_course_videos v
-         SET shared_content_id=$3,ingest_status='READY',last_error=NULL
-         WHERE v.course_id=$1 AND v.video_id=$2
-           AND EXISTS(SELECT 1 FROM student_youtube_courses c WHERE c.id=v.course_id)`,
-        [courseId,video.video_id,hits[0].id]);
-      if(attached.rowCount)return;
-    }
-  }
-  await checkGlobalStorageLimit();
+  // Always compare a fresh, normalized transcript fingerprint before reuse.
+  // This prevents a changed public transcript from silently reusing old vectors.
   const captions = await (deps.fetchCaptions ?? fetchPilotCaptions)(video.video_id);
   const sourceRows = captionCuesToRows(video.video_id + '.vtt',captions.cues).rows;
   const prepared: Array<Omit<IndexedChunk,'vector'>> = [];
@@ -115,6 +97,39 @@ export async function indexPersonalVideo(courseId: number, video: Video, deps: P
   const transcriptHash=createHash('sha256')
     .update(JSON.stringify({cues:captions.cues,pieces:prepared.map(p=>[p.start,p.end,p.chunkText]),model:EMBEDDING_MODEL_VERSION}))
     .digest('hex');
+  // Reuse a matching public transcript before calling the paid embedding API.
+  // Student ownership remains on the course/video mapping. A key-share lock
+  // prevents the optional retention sweeper from deleting this version
+  // between finding it and creating the new reference.
+  if ((!deps.fetchCaptions && !deps.embedBatch) || deps.allowSharedReuse === true) {
+    const sharedClient=await pool.connect();
+    try {
+      await sharedClient.query('BEGIN');
+      const {rows: matches}=await sharedClient.query<{id:string}>(
+        `SELECT id FROM youtube_shared_content
+         WHERE video_id=$1 AND embedding_model_version=$2 AND transcript_sha256=$3
+         FOR KEY SHARE`,
+        [video.video_id,EMBEDDING_MODEL_VERSION,transcriptHash]);
+      if(matches[0]){
+        const mapped=await sharedClient.query(
+          `UPDATE student_youtube_course_videos v
+           SET shared_content_id=$3,ingest_status='READY',last_error=NULL
+           WHERE v.course_id=$1 AND v.video_id=$2
+             AND EXISTS(SELECT 1 FROM youtube_shared_chunks ch WHERE ch.content_id=$3)`,
+          [courseId,video.video_id,matches[0].id]);
+        if(mapped.rowCount){
+          await sharedClient.query(
+            'DELETE FROM student_youtube_course_chunks WHERE course_id=$1 AND video_id=$2',
+            [courseId,video.video_id]);
+          await sharedClient.query('COMMIT');
+          return;
+        }
+      }
+      await sharedClient.query('ROLLBACK');
+    }catch(err){await sharedClient.query('ROLLBACK').catch(()=>undefined);throw err;}
+    finally{sharedClient.release();}
+  }
+  await checkGlobalStorageLimit();
   const vectors: string[] = [];
   for (let i=0;i<prepared.length;i+=8) {
     const batch = await (deps.embedBatch ?? generateEmbeddingsBatch)(prepared.slice(i,i+8).map(c=>c.chunkText));
@@ -129,7 +144,7 @@ export async function indexPersonalVideo(courseId: number, video: Video, deps: P
     if(!owned.rows.length)throw new AppError('Course deleted during ingestion',409);
     // Offline deterministic DB tests deliberately preserve the legacy private
     // storage path to verify backward-compatible reads.
-    if (deps.fetchCaptions || deps.embedBatch) {
+    if ((deps.fetchCaptions || deps.embedBatch) && deps.allowSharedReuse !== true) {
       await client.query('DELETE FROM student_youtube_course_chunks WHERE course_id=$1 AND video_id=$2',[courseId,video.video_id]);
       for(let i=0;i<prepared.length;i++){
         const piece=prepared[i];
