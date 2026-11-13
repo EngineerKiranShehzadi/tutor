@@ -1,3 +1,4 @@
+import { hasUsableCaptions } from './youtube-caption-eligibility.service';
 import { AppError } from '../middleware/errorHandler';
 
 // YouTube metadata only: public discovery is NOT permission to download captions.
@@ -50,27 +51,40 @@ export async function searchPlaylists(query: string, language = 'hi'): Promise<P
     part: 'snippet', type: 'playlist', order: 'relevance',
     maxResults: '5', q: q + (language === 'hi' ? ' Hindi course playlist' : ' English course playlist'),
   });
-  return (data.items ?? []).filter((x: any) => validPlaylistId(String(x.id?.playlistId ?? ''))).map((x: any) => ({
+  const candidates = (data.items ?? []).filter((x: any) => validPlaylistId(String(x.id?.playlistId ?? ''))).map((x: any) => ({
     playlistId: x.id.playlistId,
     title: String(x.snippet?.title ?? '').slice(0, 200),
     channelTitle: String(x.snippet?.channelTitle ?? '').slice(0, 150),
     thumbnail: thumb(x),
   }));
+  // Search shows only playlists with at least one verified, usable caption
+  // among the first two videos. Two concurrent probes bound resource usage.
+  const checked: PlaylistMatch[]=[];
+  for(let i=0;i<candidates.length;i+=2) {
+    const batch=await Promise.all(candidates.slice(i,i+2).map(async(p:PlaylistMatch)=>{
+      try {return (await previewPlaylist(p.playlistId)).length?p:null;}
+      catch{return null;}
+    }));
+    for(const p of batch)if(p)checked.push(p);
+  }
+  return checked;
 }
 
 export async function previewPlaylist(playlistId: string): Promise<PreviewVideo[]> {
   if (!validPlaylistId(playlistId)) throw new AppError('Invalid playlist ID', 400);
-  // Pilot safety cap: fetch at most two videos. No transcripts or embeddings yet.
+  // Pilot safety cap: verify only the first two videos; no embeddings or persistence.
   const data = await youtubeGet('playlistItems', {
     part: 'snippet', playlistId, maxResults: '2',
   });
-  return (data.items ?? []).filter((x: any) =>
-    /^[a-zA-Z0-9_-]{11}$/.test(String(x.snippet?.resourceId?.videoId ?? ''))
-  ).map((x: any) => ({
-    videoId: x.snippet.resourceId.videoId,
-    title: String(x.snippet?.title ?? '').slice(0, 200),
-    thumbnail: thumb(x),
+  const candidates: PreviewVideo[]=(data.items??[]).filter((x:any)=>
+    /^[a-zA-Z0-9_-]{11}$/.test(String(x.snippet?.resourceId?.videoId??''))
+  ).map((x:any)=>({
+    videoId:x.snippet.resourceId.videoId,
+    title:String(x.snippet?.title??'').slice(0,200),
+    thumbnail:thumb(x),
   }));
+  const eligible=await Promise.all(candidates.map(async v=>(await hasUsableCaptions(v.videoId))?v:null));
+  return eligible.filter((v):v is PreviewVideo=>v!==null);
 }
 
 export async function getPlaylistMetadata(playlistId: string): Promise<PlaylistMatch> {

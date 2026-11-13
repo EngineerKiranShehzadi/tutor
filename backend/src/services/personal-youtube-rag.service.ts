@@ -210,7 +210,7 @@ export interface PersonalAskDeps {
   outputGuard?: typeof runOutputGuardrail;
   quota?: typeof enforceAskQuota;
 }
-export async function askPersonalRag(studentId:string,courseId:number,rawQuestion:string,deps:PersonalAskDeps={}):Promise<{
+export async function askPersonalRag(studentId:string,courseId:number,rawQuestion:string,deps:PersonalAskDeps={},videoId?:string):Promise<{
   answer:string;sources:PrivateCitation[];
 }> {
   if (!personalRagEnabled()) throw new AppError('Personal AI tutor pilot is disabled',503);
@@ -219,6 +219,14 @@ export async function askPersonalRag(studentId:string,courseId:number,rawQuestio
     throw new AppError('AI tutor is not ready. Import the captions first.',409);
   if (typeof rawQuestion!=='string' || rawQuestion.trim().length<3 || rawQuestion.length>500)
     throw new AppError('Question must be 3-500 characters',400);
+  if (videoId !== undefined) {
+    if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) throw new AppError('Invalid video ID',400);
+    const video = await query(
+      "SELECT 1 FROM student_youtube_course_videos WHERE course_id=$1 AND video_id=$2 AND ingest_status='READY'",
+      [courseId,videoId]
+    );
+    if (!video.rows.length) throw new AppError('Lecture is not ready for tutoring',409);
+  }
   const guard=await (deps.inputGuard ?? runInputGuardrails)(rawQuestion);
   if (guard.action==='REJECT')
     throw new AppError(REJECTION_MESSAGE_BY_REASON[guard.reason!] || 'Question rejected',400);
@@ -234,9 +242,9 @@ export async function askPersonalRag(studentId:string,courseId:number,rawQuestio
       'FROM student_youtube_course_chunks k ' +
       'JOIN student_youtube_course_videos v ON v.course_id=k.course_id AND v.video_id=k.video_id ' +
       'JOIN student_youtube_courses c ON c.id=k.course_id ' +
-      'WHERE c.student_id=$2 AND c.id=$3 AND k.embedding_model_version=$4 ' +
+      'WHERE c.student_id=$2 AND c.id=$3 AND k.embedding_model_version=$4 AND ($5::text IS NULL OR k.video_id=$5) ' +
       'ORDER BY k.local_embedding <=> $1::vector LIMIT 12',
-      [embedding,studentId,courseId,EMBEDDING_MODEL_VERSION]
+      [embedding,studentId,courseId,EMBEDDING_MODEL_VERSION,videoId ?? null]
     );
     if (!rows.length) return {answer:'I could not find this information in this course.',sources:[]};
     const ranked=await (deps.rerank ?? rerankChunks)(question,rows,5);

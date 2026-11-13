@@ -10,6 +10,8 @@ import type { AuthenticatedRequest } from '../types';
 import { sendSuccess } from '../utils/response';
 import { previewPlaylist, searchPlaylists } from '../services/youtube-discovery.service';
 
+import { listYoutubeSessions, createYoutubeSession, readYoutubeSession, renameYoutubeSession, removeYoutubeSession, askYoutubeSession } from '../services/personal-youtube-chat.service';
+
 const router = Router();
 router.use(protect, requireRole('STUDENT', 'ADMIN'));
 
@@ -112,6 +114,31 @@ router.post('/my-courses/:id/ask', requireRole('STUDENT'), async (req: Authentic
 });
 router.get('/my-courses/pilot-status', requireRole('STUDENT'), (_req: AuthenticatedRequest, res: Response) => {
   sendSuccess(res,'Personal AI tutor pilot status',{enabled:personalRagEnabled()});
+});
+router.get('/my-courses/:id/sessions',requireRole('STUDENT'),async(req:AuthenticatedRequest,res:Response,next:NextFunction)=>{
+  try { sendSuccess(res,'Private lecture chats',{sessions:await listYoutubeSessions(req.user!.id,validatePersonalCourseId(req.params.id),String(req.query.videoId||''))}); }
+  catch(e){next(e);}
+});
+router.post('/my-courses/:id/sessions',requireRole('STUDENT'),async(req:AuthenticatedRequest,res:Response,next:NextFunction)=>{
+  try { sendSuccess(res,'Private chat created',{session:await createYoutubeSession(req.user!.id,validatePersonalCourseId(req.params.id),req.body?.videoId)},201); }
+  catch(e){next(e);}
+});
+router.get('/my-courses/:id/sessions/:sid',requireRole('STUDENT'),async(req:AuthenticatedRequest,res:Response,next:NextFunction)=>{
+  try { sendSuccess(res,'Private chat',await readYoutubeSession(req.user!.id,validatePersonalCourseId(req.params.id),Number(req.params.sid))); }
+  catch(e){next(e);}
+});
+router.patch('/my-courses/:id/sessions/:sid',requireRole('STUDENT'),async(req:AuthenticatedRequest,res:Response,next:NextFunction)=>{
+  try { await renameYoutubeSession(req.user!.id,validatePersonalCourseId(req.params.id),Number(req.params.sid),String(req.body?.title??''));sendSuccess(res,'Renamed'); }
+  catch(e){next(e);}
+});
+router.delete('/my-courses/:id/sessions/:sid',requireRole('STUDENT'),async(req:AuthenticatedRequest,res:Response,next:NextFunction)=>{
+  try { await removeYoutubeSession(req.user!.id,validatePersonalCourseId(req.params.id),Number(req.params.sid));sendSuccess(res,'Deleted'); }
+  catch(e){next(e);}
+});
+router.post('/my-courses/:id/sessions/:sid/ask',requireRole('STUDENT'),async(req:AuthenticatedRequest,res:Response,next:NextFunction)=>{
+  try { if(typeof req.body?.question!=='string') throw new AppError('Question required',400);
+    sendSuccess(res,'Private lecture answer',await askYoutubeSession(req.user!.id,validatePersonalCourseId(req.params.id),Number(req.params.sid),req.body.question));
+  }catch(e){next(e);}
 });
 export default router;
 

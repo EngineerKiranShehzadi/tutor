@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import api from '@/lib/api';
+import Link from 'next/link';
 
 export type PersonalCourseStatus = 'PREVIEW_ONLY' | 'QUEUED' | 'PROCESSING' | 'PARTIAL' | 'READY' | 'FAILED';
 interface PersonalVideo {
@@ -149,29 +150,16 @@ export default function PersonalYouTubeCourses({ refreshKey = 0 }: { refreshKey?
             </div>
             {CAN_ASK.includes(course.status) && enabled && (
               <div className="mt-4 pt-4 border-t">
-                <label htmlFor={'question-' + course.id} className="block text-label font-semibold mb-2">Ask your course AI tutor</label>
-                <form onSubmit={e => { e.preventDefault(); void ask(course); }} className="flex flex-wrap gap-2">
-                  <input id={'question-' + course.id} value={question[course.id] ?? ''}
-                    onChange={e => setQuestion(prev => ({ ...prev, [course.id]: e.target.value }))}
-                    minLength={3} maxLength={500} required placeholder="What is a neural network?"
-                    className="flex-1 min-w-[200px] border rounded-control p-2" />
-                  <button type="submit" disabled={busyId === course.id}
-                    className="bg-[var(--accent)] text-white px-4 py-2 rounded-control disabled:opacity-50">Ask</button>
-                </form>
-                {answers[course.id] && <div aria-live="polite" className="mt-4 rounded-control bg-[var(--surface)] p-4">
-                  <p className="whitespace-pre-wrap text-label">{answers[course.id].answer}</p>
-                  {answers[course.id].sources.length > 0 && (
-                    <div className="mt-3 border-t pt-3">
-                      <h4 className="font-semibold text-label mb-2">Video sources</h4>
-                      <ul className="space-y-1">{answers[course.id].sources.map((source, i) =>
-                        <li key={source.videoId + source.startTime + i}>
-                          <a className="text-label text-[var(--accent)] underline" href={source.url}
-                            target="_blank" rel="noopener noreferrer">
-                            {source.videoTitle} · {source.startTime}–{source.endTime}
-                          </a>
-                        </li>)}</ul>
-                    </div>)}
-                </div>}
+                <p className="text-label text-[var(--muted)] mb-3">Open a lecture to study with the existing video player, tutor, history and teacher avatar.</p>
+                <div className="flex flex-wrap gap-2">
+                  {course.videos.filter(v => v.ingest_status === 'READY').map(v => (
+                    <Link key={v.video_id}
+                      href={`/youtube/course/${encodeURIComponent(course.id)}/${encodeURIComponent(v.video_id)}`}
+                      className="px-4 py-2 rounded-control bg-[var(--accent)] text-white text-label hover:opacity-90">
+                      Open Tutor · Lecture {v.position}
+                    </Link>
+                  ))}
+                </div>
               </div>
             )}
             {!enabled && <p className="text-caption text-[var(--muted)] mt-3">AI import is disabled until the local testing pilot is configured.</p>}

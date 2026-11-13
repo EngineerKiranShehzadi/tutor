@@ -39,7 +39,7 @@ export async function addPersonalCourse(studentId: string, playlistId: string): 
   // Both metadata calls are bounded and happen before holding any DB locks.
   const metadata = await getPlaylistMetadata(playlistId);
   const videos = (await previewPlaylist(playlistId)).slice(0, 2);
-  if (!videos.length) throw new AppError('Playlist has no available preview videos', 422);
+  if (!videos.length) throw new AppError('No videos with usable captions found in the first two playlist items', 422);
 
   const client = await pool.connect();
   try {
