@@ -1,9 +1,10 @@
 'use client';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import api from '@/lib/api';
 import { ChatInput } from '@/components/chat/ChatInput';
 import { MessageBubble } from '@/components/chat/MessageBubble';
+import { ChatSidebar, type PersonalChatAdapter, type Session as SidebarSession } from '@/components/chat/ChatSidebar';
 import { TypingIndicator } from '@/components/chat/TypingIndicator';
 import { TeacherAvatarPanel } from '@/components/avatar/TeacherAvatarPanel';
 import { useAvatarSpeech } from '@/hooks/useAvatarSpeech';
@@ -23,6 +24,7 @@ export default function PersonalYoutubeLecturePage({params}:Props) {
   const [course,setCourse]=useState<Course|null>(null);
   const [loading,setLoading]=useState(true);
   const [sessions,setSessions]=useState<Session[]>([]);
+  const [sidebarRefresh,setSidebarRefresh]=useState(0);
   const [sessionId,setSessionId]=useState<string|null>(null);
   const [messages,setMessages]=useState<StoredMessage[]>([]);
   const [input,setInput]=useState('');
@@ -40,6 +42,7 @@ export default function PersonalYoutubeLecturePage({params}:Props) {
   const refreshSessions=useCallback(async()=>{
     const res=await api.get(base(id)+'/sessions',{params:{videoId}});
     setSessions(res.data.data.sessions??[]);
+    setSidebarRefresh(n=>n+1);
     return (res.data.data.sessions??[]) as Session[];
   },[id,videoId]);
   const selectSession=useCallback(async(sid:string)=>{
@@ -125,6 +128,25 @@ export default function PersonalYoutubeLecturePage({params}:Props) {
       }
     }finally {if(requestVersion.current===epoch)setPending(false);}
   };
+  // The existing ChatSidebar is used unchanged visually; this scoped adapter
+  // routes all session operations to owner-checked YouTube REST APIs.
+  const personalAdapter=useMemo<PersonalChatAdapter>(()=>({
+    list:async()=>{
+      const response=await api.get(base(id)+'/sessions',{params:{videoId}});
+      return (response.data.data.sessions as Session[]).map((s):SidebarSession=>({
+        id:Number(s.id),title:s.title,firstQuestion:null,messageCount:0,
+        createdAt:s.updated_at,updatedAt:s.updated_at,
+      }));
+    },
+    rename:async(sid,title)=>{await api.patch(base(id)+'/sessions/'+sid,{title});},
+    delete:async(sid)=>{
+      await api.delete(base(id)+'/sessions/'+sid);
+      if(currentRef.current===String(sid)){
+        requestVersion.current++;
+        currentRef.current=null;setSessionId(null);setMessages([]);
+      }
+    },
+  }),[id,videoId]);
   const lastAnswer=[...messages].reverse().find(m=>m.role==='ai')?.content||'';
   const avatarState=deriveAvatarState({isAnswerPending:pending,isSpeaking:speech.isSpeaking&&!speech.isPaused,isUserInputActive:!!input||voice.isListening,hasError:!!error});
   if(loading)return <div className="p-10">Loading private lecture…</div>;
@@ -179,21 +201,15 @@ export default function PersonalYoutubeLecturePage({params}:Props) {
           recSeconds={recSeconds} isAnswerPending={pending}
           voiceError={voice.error} onDismissVoiceError={voice.clearError}/>
       </div>
-      {showHistory && <aside className="w-[240px] shrink-0 border-l flex flex-col">
-        <div className="p-3 border-b font-semibold flex justify-between">Chats
-          <button type="button" aria-label="Hide history" onClick={()=>setShowHistory(false)}>×</button>
-        </div>
-        <button type="button" onClick={()=>void newChat()} className="m-3 rounded-control border p-2 text-label">+ New Chat</button>
-        <div className="overflow-y-auto flex-1 px-2">
-          {sessions.map(s=><div key={s.id} className={'rounded-control p-2 text-label mb-1 '+(String(s.id)===sessionId?'bg-[var(--accent-soft)]':'')}>
-            <button type="button" className="w-full text-left break-words" onClick={()=>void selectSession(String(s.id))}>{s.title}</button>
-            <div className="flex gap-3 text-caption mt-1">
-              <button type="button" className="underline" onClick={async()=>{const title=prompt('Rename chat',s.title);if(!title?.trim())return;await api.patch(base(id)+'/sessions/'+s.id,{title});await refreshSessions();}}>Rename</button>
-              <button type="button" className="underline" onClick={async()=>{if(!confirm('Delete this chat?'))return;await api.delete(base(id)+'/sessions/'+s.id);await newChat();}}>Delete</button>
-            </div>
-          </div>)}
-        </div>
-      </aside>}
+      {showHistory && <ChatSidebar
+        lectureId={-(Number(id)*4+playable.position)}
+        activeSessionId={sessionId?Number(sessionId):null}
+        refreshKey={sidebarRefresh}
+        onNewChat={()=>void newChat()}
+        onSelectSession={sid=>{if(!pending)void selectSession(String(sid));}}
+        onClose={()=>setShowHistory(false)}
+        personalAdapter={personalAdapter}
+      />}
       {!showHistory&&<button type="button" className="p-2 self-start" onClick={()=>setShowHistory(true)} aria-label="Show chat history">☰</button>}
     </div>
   </div>;
