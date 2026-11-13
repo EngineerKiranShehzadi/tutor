@@ -102,10 +102,10 @@ function MonitorContent() {
   const cardsLoading = loading || !cur || !prev;
 
   return (
-    <div className="max-w-[1500px] min-w-0">
+    <div className="max-w-[1180px] min-w-0">
       <AdminPageHero
         icon="fas fa-heart-pulse"
-        iconGradient="from-emerald-500 to-teal-600"
+        iconGradient=" "
         title="AI Tutor Monitor"
         subtitle="How the AI tutor is doing, at a glance."
         action={
@@ -115,9 +115,9 @@ function MonitorContent() {
               type="button"
               onClick={refresh}
               aria-label="Refresh now"
-              className="w-9 h-9 rounded-xl bg-white/10 border border-white/20 text-white/80 hover:text-white"
+              className="w-9 h-9 rounded-card bg-white/10 border border-white/20 text-white/80 hover:text-white"
             >
-              <i className={`fas fa-rotate text-[13px] ${loading ? 'animate-spin' : ''}`} />
+              <i className={`fas fa-rotate text-caption ${loading ? 'animate-spin' : ''}`} />
             </button>
           </div>
         }
@@ -126,15 +126,15 @@ function MonitorContent() {
       <StatusBanner health={health} loading={healthLoading} />
 
       {error && !summary ? (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm py-16 flex flex-col items-center text-center px-8">
-          <i className="fas fa-triangle-exclamation text-2xl text-red-400 mb-3" />
-          <p className="text-[15px] font-semibold text-slate-700">Could not load the numbers</p>
-          <p className="text-[13px] text-slate-400 mt-1">Please try again in a moment.</p>
-          <button type="button" onClick={refresh} className="mt-4 px-4 py-2 rounded-lg bg-slate-900 text-white text-[13px] font-semibold">Try again</button>
+        <div className="bg-[var(--card)] rounded-card border border-[var(--border)] py-16 flex flex-col items-center text-center px-8">
+          <i className="fas fa-triangle-exclamation text-h1 text-[var(--gold)] mb-3" />
+          <p className="text-label font-semibold text-[var(--text)]">Could not load the numbers</p>
+          <p className="text-caption text-[var(--muted2)] mt-1">Please try again in a moment.</p>
+          <button type="button" onClick={refresh} className="mt-4 px-4 py-2 rounded-card bg-[var(--ink)] text-white text-caption font-semibold">Try again</button>
         </div>
       ) : (
         <>
-          {error && <p className="text-[12px] text-amber-600 mb-3">Couldn't fetch the latest numbers — showing the previous ones.</p>}
+          {error && <p className="text-caption text-[var(--gold)] mb-3">Couldn't fetch the latest numbers — showing the previous ones.</p>}
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5">
             <SummaryCard
               loading={cardsLoading}
@@ -214,7 +214,7 @@ function MonitorContent() {
             />
           </div>
           {lastRefreshedAt && (
-            <p className="text-[12px] text-slate-400 mt-4">
+            <p className="text-caption text-[var(--muted2)] mt-4">
               Last updated: {lastRefreshedAt.toLocaleTimeString()} · refreshes automatically every 60 seconds
             </p>
           )}

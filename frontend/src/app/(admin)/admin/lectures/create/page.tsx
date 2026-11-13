@@ -8,7 +8,7 @@ import Link from 'next/link';
 import { useMutation } from '@apollo/client';
 import { CREATE_LECTURE_MUTATION } from '@/graphql/lecture.queries';
 
-const FIELD_CLASS = 'w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-800 outline-none focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-100 transition-all placeholder:text-slate-400';
+const FIELD_CLASS = 'w-full px-4 py-2.5 bg-[var(--surface)] border border-[var(--border)] rounded-card text-label text-[var(--text)] outline-none focus:border-[var(--accent)] focus:bg-[var(--card)] transition-colors placeholder:text-[var(--muted2)]';
 
 export default function CreateLecturePage() {
   const router = useRouter();
@@ -68,30 +68,30 @@ export default function CreateLecturePage() {
       <div className="flex items-center gap-3 mb-7">
         <Link
           href="/admin/lectures"
-          className="w-8 h-8 rounded-lg bg-white border border-slate-200 shadow-sm flex items-center justify-center text-slate-500 hover:text-slate-800 hover:border-slate-300 transition-colors"
+          className="w-8 h-8 rounded-card bg-[var(--card)] border border-[var(--border)] flex items-center justify-center text-[var(--muted)] hover:text-[var(--text)] hover:border-[var(--muted2)] transition-colors"
         >
-          <i className="fas fa-arrow-left text-[12px]" />
+          <i className="fas fa-arrow-left text-caption" />
         </Link>
         <div>
-          <h1 className="text-[22px] font-bold text-slate-900">New Lecture</h1>
-          <p className="text-sm text-slate-500">Add a lecture and upload a dataset to activate AI tutoring.</p>
+          <h1 className="text-h2 font-semibold text-[var(--text)]">New Lecture</h1>
+          <p className="text-label text-[var(--muted)]">Add a lecture and upload a dataset to activate AI tutoring.</p>
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+      <div className="bg-[var(--card)] rounded-card border border-[var(--border)] overflow-hidden">
         {/* Form header */}
-        <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/60 flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center">
+        <div className="px-6 py-4 border-b border-[var(--border)] bg-[var(--surface)] flex items-center gap-2.5">
+          <div className="w-7 h-7 rounded-card bg-[var(--accent)] flex items-center justify-center">
             <i className="fas fa-film text-white text-[11px]" />
           </div>
-          <span className="text-[14px] font-semibold text-slate-700">Lecture Details</span>
+          <span className="text-label font-semibold text-[var(--text)]">Lecture Details</span>
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 flex flex-col gap-5">
           {/* Course */}
           <div>
-            <label className="block text-[12px] font-semibold text-slate-600 uppercase tracking-wide mb-2">
-              Course <span className="text-red-500 normal-case">*</span>
+            <label className="block text-caption font-semibold text-[var(--muted)] mb-2">
+              Course <span className="text-[var(--gold)] normal-case">*</span>
             </label>
             <select
               value={courseId}
@@ -103,13 +103,13 @@ export default function CreateLecturePage() {
               <option value="">Select course</option>
               {courses.map(course => <option key={course.id} value={course.id}>{course.title}</option>)}
             </select>
-            {coursesError && <p className="text-red-600 text-xs mt-1">Could not load courses.</p>}
-            <Link href="/admin/courses" className="text-xs text-indigo-600 hover:underline inline-block mt-2">Create or manage courses</Link>
+            {coursesError && <p className="text-[var(--gold)] text-caption mt-1">Could not load courses.</p>}
+            <Link href="/admin/courses" className="text-caption text-[var(--accent)] hover:underline inline-block mt-2">Create or manage courses</Link>
           </div>
           {/* Title */}
           <div>
-            <label className="block text-[12px] font-semibold text-slate-600 uppercase tracking-wide mb-2">
-              Title <span className="text-red-500 normal-case">*</span>
+            <label className="block text-caption font-semibold text-[var(--muted)] mb-2">
+              Title <span className="text-[var(--gold)] normal-case">*</span>
             </label>
             <input
               type="text"
@@ -122,12 +122,12 @@ export default function CreateLecturePage() {
 
           {/* YouTube URL */}
           <div>
-            <label className="block text-[12px] font-semibold text-slate-600 uppercase tracking-wide mb-2">
-              YouTube URL <span className="text-slate-400 normal-case font-normal">(optional for document-only lectures)</span>
+            <label className="block text-caption font-semibold text-[var(--muted)] mb-2">
+              YouTube URL <span className="text-[var(--muted2)] normal-case font-normal">(optional for document-only lectures)</span>
             </label>
             <div className="relative">
-              <div className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">
-                <i className="fab fa-youtube text-red-500 text-[14px]" />
+              <div className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--muted2)]">
+                <i className="fab fa-youtube text-[var(--gold)] text-label" />
               </div>
               <input
                 type="url"
@@ -137,15 +137,15 @@ export default function CreateLecturePage() {
                 className={`${FIELD_CLASS} pl-10`}
               />
             </div>
-            <p className="text-[11px] text-slate-400 mt-1.5">
+            <p className="text-[11px] text-[var(--muted2)] mt-1.5">
               Optional. Add a YouTube video or create a lecture using PDF, Word, PowerPoint, TXT or HTML materials.
             </p>
           </div>
 
           {/* Description */}
           <div>
-            <label className="block text-[12px] font-semibold text-slate-600 uppercase tracking-wide mb-2">
-              Description <span className="text-slate-400 normal-case font-normal">(optional)</span>
+            <label className="block text-caption font-semibold text-[var(--muted)] mb-2">
+              Description <span className="text-[var(--muted2)] normal-case font-normal">(optional)</span>
             </label>
             <textarea
               value={form.description}
@@ -157,12 +157,12 @@ export default function CreateLecturePage() {
           </div>
 
           {/* AI agent */}
-          <div className="pt-2 border-t border-slate-100">
-            <p className="text-[12px] font-semibold text-slate-600 uppercase tracking-wide mb-4">AI Agent for this lecture</p>
+          <div className="pt-2 border-t border-[var(--border)]">
+            <p className="text-caption font-semibold text-[var(--muted)] mb-4">AI Agent for this lecture</p>
             <div className="flex flex-col gap-5">
               <div>
-                <label className="block text-[12px] font-semibold text-slate-600 uppercase tracking-wide mb-2">
-                  Agent Name <span className="text-red-500 normal-case">*</span>
+                <label className="block text-caption font-semibold text-[var(--muted)] mb-2">
+                  Agent Name <span className="text-[var(--gold)] normal-case">*</span>
                 </label>
                 <input
                   type="text"
@@ -173,8 +173,8 @@ export default function CreateLecturePage() {
                 />
               </div>
               <div>
-                <label className="block text-[12px] font-semibold text-slate-600 uppercase tracking-wide mb-2">
-                  Agent Instructions <span className="text-red-500 normal-case">*</span>
+                <label className="block text-caption font-semibold text-[var(--muted)] mb-2">
+                  Agent Instructions <span className="text-[var(--gold)] normal-case">*</span>
                 </label>
                 <textarea
                   value={form.agentInstructions}
@@ -184,7 +184,7 @@ export default function CreateLecturePage() {
                   maxLength={4000}
                   className={`${FIELD_CLASS} resize-none`}
                 />
-                <p className="text-[11px] text-slate-400 mt-1.5">
+                <p className="text-[11px] text-[var(--muted2)] mt-1.5">
                   {form.agentInstructions.length} / 4000 · The agent goes live once the dataset is uploaded and READY.
                 </p>
               </div>
@@ -193,18 +193,18 @@ export default function CreateLecturePage() {
 
           {/* Error */}
           {error && (
-            <div className="flex items-start gap-2.5 bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700">
+            <div className="flex items-start gap-2.5 bg-[var(--gold-soft)] border border-[var(--border)] rounded-card px-4 py-3 text-label text-[var(--gold)]">
               <i className="fas fa-circle-exclamation mt-0.5 shrink-0" />
               <span>{error}</span>
             </div>
           )}
 
           {/* Actions */}
-          <div className="flex gap-3 pt-2 border-t border-slate-100">
+          <div className="flex gap-3 pt-2 border-t border-[var(--border)]">
             <button
               type="submit"
               disabled={loading || coursesLoading || !courseId}
-              className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-[13px] font-semibold hover:bg-indigo-700 disabled:opacity-60 transition-colors shadow-sm"
+              className="flex items-center gap-2 px-5 py-2.5 bg-[var(--accent)] text-white rounded-card text-caption font-semibold hover:bg-[var(--accent-deep)] disabled:opacity-60 transition-colors"
             >
               {loading ? (
                 <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Creating…</>
@@ -214,7 +214,7 @@ export default function CreateLecturePage() {
             </button>
             <Link
               href="/admin/lectures"
-              className="px-5 py-2.5 border border-slate-200 rounded-xl text-[13px] font-semibold text-slate-600 hover:bg-slate-50 transition-colors"
+              className="px-5 py-2.5 border border-[var(--border)] rounded-card text-caption font-semibold text-[var(--muted)] hover:bg-[var(--surface)] transition-colors"
             >
               Cancel
             </Link>
@@ -223,9 +223,9 @@ export default function CreateLecturePage() {
       </div>
 
       {/* Info note */}
-      <div className="mt-4 flex items-start gap-2.5 px-4 py-3 bg-indigo-50 border border-indigo-100 rounded-xl">
-        <i className="fas fa-circle-info text-indigo-500 mt-0.5 shrink-0" />
-        <p className="text-[12px] text-indigo-700 leading-relaxed">
+      <div className="mt-4 flex items-start gap-2.5 px-4 py-3 bg-[var(--accent-soft)] border border-[var(--border)] rounded-card">
+        <i className="fas fa-circle-info text-[var(--accent)] mt-0.5 shrink-0" />
+        <p className="text-caption text-[var(--accent)] leading-relaxed">
           After creating the lecture, you&apos;ll be taken to the detail page where you can upload Excel, PDF, DOCX, PPTX, TXT or HTML learning material to activate the AI tutor.
         </p>
       </div>

@@ -114,67 +114,67 @@ export default function TracesExplorerPage() {
   const activeFilterCount = [filters.status, filters.route, filters.lectureId, filters.sessionId, filters.model, filters.memoryResult, filters.errorOnly ? '1' : ''].filter(Boolean).length;
 
   return (
-    <div className="max-w-[1500px]">
+    <div className="max-w-[1180px]">
       <ObservabilityHeader subtitle="Filter, search, and inspect individual RAG requests." />
       <ObservabilityTabs />
 
       {/* Filter bar */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 mb-5 flex flex-wrap items-center gap-3">
+      <div className="bg-[var(--card)] rounded-card border border-[var(--border)] p-4 mb-5 flex flex-wrap items-center gap-3">
         <div className="relative flex-1 min-w-[220px]">
-          <i className="fas fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-300 text-[13px]" />
+          <i className="fas fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--muted2)] text-caption" />
           <input
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
             placeholder="Search trace ID…"
-            className="w-full pl-9 pr-3 py-2.5 text-[13px] rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400"
+            className="w-full pl-9 pr-3 py-2.5 text-caption rounded-card border border-[var(--border)] focus:outline-none focus:border-[var(--accent)]"
           />
         </div>
-        <select value={filters.status} onChange={(e) => updateFilter('status', e.target.value)} className="text-[13px] rounded-lg border border-slate-200 px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-200">
+        <select value={filters.status} onChange={(e) => updateFilter('status', e.target.value)} className="text-caption rounded-card border border-[var(--border)] px-3 py-2.5 focus:outline-none">
           <option value="">All statuses</option>
           <option value="SUCCESS">Success</option>
           <option value="ERROR">Error</option>
         </select>
-        <select value={filters.route} onChange={(e) => updateFilter('route', e.target.value)} className="text-[13px] rounded-lg border border-slate-200 px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-200">
+        <select value={filters.route} onChange={(e) => updateFilter('route', e.target.value)} className="text-caption rounded-card border border-[var(--border)] px-3 py-2.5 focus:outline-none">
           <option value="">All routes</option>
           <option value="FACT_QUESTION">Fact question</option>
           <option value="CONTEXTUAL_FOLLOW_UP">Contextual follow-up</option>
           <option value="LECTURE_SUMMARY">Lecture summary</option>
           <option value="GREETING">Greeting</option>
         </select>
-        <select value={filters.memoryResult} onChange={(e) => updateFilter('memoryResult', e.target.value)} className="text-[13px] rounded-lg border border-slate-200 px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-200">
+        <select value={filters.memoryResult} onChange={(e) => updateFilter('memoryResult', e.target.value)} className="text-caption rounded-card border border-[var(--border)] px-3 py-2.5 focus:outline-none">
           <option value="">Any memory result</option>
           <option value="EXACT_HIT">Exact hit</option>
           <option value="SEMANTIC_HIT">Semantic hit</option>
           <option value="MISS">Miss</option>
           <option value="NOT_ATTEMPTED">Not attempted</option>
         </select>
-        <select value={filters.sortOrder} onChange={(e) => updateFilter('sortOrder', e.target.value)} className="text-[13px] rounded-lg border border-slate-200 px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-200">
+        <select value={filters.sortOrder} onChange={(e) => updateFilter('sortOrder', e.target.value)} className="text-caption rounded-card border border-[var(--border)] px-3 py-2.5 focus:outline-none">
           {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
-        <label className="flex items-center gap-2 text-[13px] font-medium text-slate-600 px-1">
-          <input type="checkbox" checked={filters.errorOnly} onChange={(e) => updateFilter('errorOnly', e.target.checked)} className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-400" />
+        <label className="flex items-center gap-2 text-caption font-medium text-[var(--muted)] px-1">
+          <input type="checkbox" checked={filters.errorOnly} onChange={(e) => updateFilter('errorOnly', e.target.checked)} className="rounded border-[var(--border)] text-[var(--accent)]" />
           Errors only
         </label>
         {activeFilterCount > 0 && (
-          <button onClick={clearFilters} className="text-[13px] font-semibold text-slate-500 hover:text-red-600 transition-colors px-2">
+          <button onClick={clearFilters} className="text-caption font-semibold text-[var(--muted)] hover:text-[var(--gold)] transition-colors px-2">
             <i className="fas fa-xmark mr-1" /> Clear ({activeFilterCount})
           </button>
         )}
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+      <div className="bg-[var(--card)] rounded-card border border-[var(--border)] overflow-hidden">
         {unavailable ? (
           <PhoenixUnavailablePanel status={null} />
         ) : error ? (
           <ErrorState message={error} onRetry={() => load(cursorStack[pageIndex] ?? null)} />
         ) : loading ? (
           <div className="p-6 space-y-3">
-            {[1, 2, 3, 4, 5, 6].map(i => <div key={i} className="h-10 bg-slate-100 rounded-lg animate-pulse" />)}
+            {[1, 2, 3, 4, 5, 6].map(i => <div key={i} className="h-10 bg-[var(--surface)] rounded-card animate-pulse" />)}
           </div>
         ) : traces.length === 0 && scanned.limitReached && nextCursor ? (
           <div>
             <EmptyState icon="fa-magnifying-glass" title="No match in the latest traces" message={`None of the ${scanned.count} traces checked matches these filters. Older traces may.`} />
-            <div className="pb-6 text-center"><button onClick={goNext} className="text-[13px] font-semibold text-indigo-600 hover:text-indigo-800">Search older traces <i className="fas fa-arrow-right ml-1 text-[11px]" /></button></div>
+            <div className="pb-6 text-center"><button onClick={goNext} className="text-caption font-semibold text-[var(--accent)] hover:text-[var(--accent-deep)]">Search older traces <i className="fas fa-arrow-right ml-1 text-[11px]" /></button></div>
           </div>
         ) : traces.length === 0 ? (
           <EmptyState icon="fa-inbox" title="No traces match these filters" message="Try widening your filters, or ask the tutor a question to generate a new trace." />
@@ -183,35 +183,35 @@ export default function TracesExplorerPage() {
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
-                  <tr className="border-b border-slate-200 bg-slate-50/80">
-                    <th className="text-left px-5 py-3.5 text-[11px] font-semibold text-slate-500 uppercase tracking-widest">Time</th>
-                    <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-slate-500 uppercase tracking-widest">Question</th>
-                    <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-slate-500 uppercase tracking-widest">Route</th>
-                    <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-slate-500 uppercase tracking-widest">Status</th>
-                    <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-slate-500 uppercase tracking-widest">Duration</th>
-                    <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-slate-500 uppercase tracking-widest">Model</th>
-                    <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-slate-500 uppercase tracking-widest">Tokens</th>
-                    <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-slate-500 uppercase tracking-widest">Memory</th>
-                    <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-slate-500 uppercase tracking-widest">Trace ID</th>
+                  <tr className="border-b border-[var(--border)] bg-[var(--surface)]">
+                    <th className="text-left px-5 py-3.5 text-[11px] font-semibold text-[var(--muted)]">Time</th>
+                    <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-[var(--muted)]">Question</th>
+                    <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-[var(--muted)]">Route</th>
+                    <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-[var(--muted)]">Status</th>
+                    <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-[var(--muted)]">Duration</th>
+                    <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-[var(--muted)]">Model</th>
+                    <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-[var(--muted)]">Tokens</th>
+                    <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-[var(--muted)]">Memory</th>
+                    <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-[var(--muted)]">Trace ID</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
+                <tbody className="divide-y divide-[var(--border)]">
                   {traces.map(t => (
-                    <tr key={t.traceId} onClick={() => router.push(`/admin/rag-traces/traces/${encodeURIComponent(t.traceId)}`)} className="hover:bg-slate-50/60 transition-colors cursor-pointer group">
-                      <td className="px-5 py-3.5 text-[12px] text-slate-500 whitespace-nowrap">{fmtTime(t.timestamp)}</td>
-                      <td className="px-4 py-3.5 text-[13px] text-slate-700 max-w-[280px] truncate">{t.questionPreview ?? <span className="text-slate-300 italic" title="The list is read from the request log, which holds no question text. With content capture on, the trace view shows it.">Open the trace</span>}</td>
-                      <td className="px-4 py-3.5 text-[12px] font-medium text-slate-600">{t.route ?? '—'}</td>
+                    <tr key={t.traceId} onClick={() => router.push(`/admin/rag-traces/traces/${encodeURIComponent(t.traceId)}`)} className="hover:bg-[var(--surface)] transition-colors cursor-pointer group">
+                      <td className="px-5 py-3.5 text-caption text-[var(--muted)] whitespace-nowrap">{fmtTime(t.timestamp)}</td>
+                      <td className="px-4 py-3.5 text-caption text-[var(--text)] max-w-[280px] truncate">{t.questionPreview ?? <span className="text-[var(--muted2)] italic" title="The list is read from the request log, which holds no question text. With content capture on, the trace view shows it.">Open the trace</span>}</td>
+                      <td className="px-4 py-3.5 text-caption font-medium text-[var(--muted)]">{t.route ?? '—'}</td>
                       <td className="px-4 py-3.5"><TraceStatusBadge status={t.status} /></td>
-                      <td className="px-4 py-3.5 text-[13px] text-slate-500 tabular-nums">{fmtMs(t.durationMs)}</td>
-                      <td className="px-4 py-3.5 text-[12px] text-slate-500 truncate max-w-[140px]">{t.model ?? '—'}</td>
-                      <td className="px-4 py-3.5 text-[12px] text-slate-500 tabular-nums">{t.totalTokens ?? '—'}</td>
-                      <td className="px-4 py-3.5 text-[12px] text-slate-500">{t.memoryResult ?? '—'}</td>
+                      <td className="px-4 py-3.5 text-caption text-[var(--muted)] tabular-nums">{fmtMs(t.durationMs)}</td>
+                      <td className="px-4 py-3.5 text-caption text-[var(--muted)] truncate max-w-[140px]">{t.model ?? '—'}</td>
+                      <td className="px-4 py-3.5 text-caption text-[var(--muted)] tabular-nums">{t.totalTokens ?? '—'}</td>
+                      <td className="px-4 py-3.5 text-caption text-[var(--muted)]">{t.memoryResult ?? '—'}</td>
                       <td className="px-4 py-3.5">
                         <div className="flex items-center gap-1.5">
-                          <span className="text-[11px] text-slate-400 font-mono truncate max-w-[120px]">{t.traceId}</span>
+                          <span className="text-[11px] text-[var(--muted2)] font-mono truncate max-w-[120px]">{t.traceId}</span>
                           <button
                             onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(t.traceId); }}
-                            className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-indigo-600 transition-all"
+                            className="opacity-0 group-hover:opacity-100 text-[var(--muted2)] hover:text-[var(--accent-deep)] transition-colors"
                             aria-label="Copy trace ID"
                           >
                             <i className="far fa-copy text-[11px]" />

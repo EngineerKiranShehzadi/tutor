@@ -1,10 +1,17 @@
 'use client';
+import { useRouter } from 'next/navigation';
 import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
-import { useQuery, useMutation } from '@apollo/client';
-import { GET_LECTURE, UPDATE_LECTURE_MUTATION } from '@/graphql/lecture.queries';
+import { useApolloClient, useQuery, useMutation } from '@apollo/client';
+import {
+  ARCHIVE_LECTURE_MUTATION, DELETE_LECTURE_MUTATION, GET_LECTURE,
+  RESTORE_LECTURE_MUTATION, UPDATE_LECTURE_MUTATION,
+} from '@/graphql/lecture.queries';
+import { GET_COURSES } from '@/graphql/course.queries';
 import { GET_LECTURE_CHUNKS } from '@/graphql/admin.queries';
+import { GET_QUESTIONS_PER_LECTURE } from '@/graphql/analytics.queries';
 import { DBLecture } from '@/types';
+import { DBCourse } from '@/types/course';
 import { AdminPageHero } from '@/components/admin/AdminPageHero';
 import { DatasetManager } from '@/components/admin/DatasetManager';
 
@@ -12,25 +19,32 @@ interface QnaChunk { id: number; topic: string | null; question: string; answer:
 
 const POLLING_STATUSES = new Set(['DATASET_UPLOADED', 'PROCESSING', 'EMBEDDING']);
 
-const STATUS_CONFIG: Record<string, { label: string; icon: string; dot: string; bg: string; border: string; text: string; desc: string }> = {
-  NO_DATASET:       { label: 'No Dataset',    icon: 'fas fa-database',     dot: 'bg-slate-400',   bg: 'bg-slate-50',    border: 'border-slate-200',  text: 'text-slate-700',   desc: 'Upload Excel, PDF, DOCX, PPTX, TXT or HTML learning material to activate the AI tutor.' },
-  DATASET_UPLOADED: { label: 'Dataset Ready', icon: 'fas fa-file-check',   dot: 'bg-amber-400',   bg: 'bg-amber-50',    border: 'border-amber-200',  text: 'text-amber-800',   desc: 'Dataset uploaded — processing will begin shortly.' },
-  PROCESSING:       { label: 'Processing',    icon: 'fas fa-cog',          dot: 'bg-blue-400',    bg: 'bg-blue-50',     border: 'border-blue-200',   text: 'text-blue-800',    desc: 'Parsing dataset and preparing chunks — auto-refreshing every 3 s.' },
-  EMBEDDING:        { label: 'Embedding',     icon: 'fas fa-brain',        dot: 'bg-violet-400',  bg: 'bg-violet-50',   border: 'border-violet-200', text: 'text-violet-800',  desc: 'Generating AI embeddings — this may take a few minutes.' },
-  READY:            { label: 'AI Ready',      icon: 'fas fa-robot',        dot: 'bg-emerald-400', bg: 'bg-emerald-50',  border: 'border-emerald-200',text: 'text-emerald-800', desc: 'AI tutor is live and ready for students.' },
-  FAILED:           { label: 'Failed',        icon: 'fas fa-circle-xmark', dot: 'bg-red-400',     bg: 'bg-red-50',      border: 'border-red-200',    text: 'text-red-800',     desc: 'Processing failed. Re-upload the dataset to try again.' },
+/**
+ * One lecture.
+ *
+ * Every piece of text on this page was set to 17px — labels, values, buttons,
+ * badges and pagination alike — so nothing read as a heading and nothing read
+ * as a caption. It also stated the lecture's status twice, printed the internal
+ * database row number as "Lecture ID", drew a four-step progress list whose
+ * first two steps were hardcoded as finished, and put "Back to Lectures" in
+ * white on a white heading.
+ *
+ * The dataset section below is DatasetManager, which is not touched here.
+ */
+
+// What each state means, in the same words the Lectures list uses. Gold marks
+// the states an admin has to act on.
+const STATUS: Record<string, { label: string; note: string; attention: boolean }> = {
+  NO_DATASET:       { label: 'No dataset',       note: 'Upload Excel, PDF, DOCX, PPTX, TXT or HTML material to start the tutor.', attention: true  },
+  DATASET_UPLOADED: { label: 'Dataset uploaded', note: 'Waiting to be processed.',                                               attention: true  },
+  PROCESSING:       { label: 'Processing',       note: 'Reading the dataset and preparing its chunks.',                          attention: false },
+  EMBEDDING:        { label: 'Embedding',        note: 'Building the search index. This can take a few minutes.',                attention: false },
+  READY:            { label: 'Tutor ready',      note: 'Students can ask about this lecture.',                                   attention: false },
+  FAILED:           { label: 'Failed',           note: 'Processing did not finish. Upload the dataset again.',                   attention: true  },
 };
 
-const FIELD_CLASS = 'w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-base text-slate-800 outline-none focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-100 transition-all placeholder:text-slate-400';
-
-const STATUS_GRADIENT: Record<string, string> = {
-  READY:            'from-emerald-500 to-teal-600',
-  FAILED:           'from-red-500 to-rose-600',
-  EMBEDDING:        'from-violet-500 to-purple-600',
-  PROCESSING:       'from-blue-500 to-indigo-600',
-  DATASET_UPLOADED: 'from-amber-500 to-orange-600',
-  NO_DATASET:       'from-slate-500 to-slate-600',
-};
+const fieldClass = 'w-full rounded-control border border-[var(--border)] bg-[var(--card)] px-3.5 py-2.5 text-label text-[var(--text)] outline-none transition-colors focus:border-[var(--muted)] placeholder:text-[var(--muted2)]';
+const outlineBtn = 'rounded-control border border-[var(--border)] px-3.5 py-2 text-caption font-semibold text-[var(--text)] hover:bg-[var(--surface)] transition-colors disabled:opacity-50';
 
 interface Props { params: { id: string } }
 
@@ -39,7 +53,14 @@ export default function LectureDetailPage({ params }: Props) {
     variables: { id: params.id },
     fetchPolicy: 'network-only',
   });
-  const [updateLecture, { loading: updating }] = useMutation(UPDATE_LECTURE_MUTATION);
+  const { data: courseData } = useQuery(GET_COURSES, { variables: { includeArchived: true } });
+  const [updateLecture,  { loading: updating }]  = useMutation(UPDATE_LECTURE_MUTATION);
+  const [archiveLecture, { loading: archiving }] = useMutation(ARCHIVE_LECTURE_MUTATION);
+  const [restoreLecture, { loading: restoring }] = useMutation(RESTORE_LECTURE_MUTATION);
+  const [deleteLecture,  { loading: deleting }]  = useMutation(DELETE_LECTURE_MUTATION);
+  const { data: askedData } = useQuery(GET_QUESTIONS_PER_LECTURE, { fetchPolicy: 'network-only' });
+  const router = useRouter();
+  const client = useApolloClient();
 
   const lecture: DBLecture | undefined = data?.lecture;
 
@@ -71,14 +92,22 @@ export default function LectureDetailPage({ params }: Props) {
   const chunkTotal = chunksData?.lectureChunks.total ?? 0;
   const chunkPages = Math.max(1, Math.ceil(chunkTotal / CHUNK_PAGE_SIZE));
 
-  const [editMode,    setEditMode]    = useState(false);
-  const [editForm,    setEditForm]    = useState({ title: '', description: '', youtubeUrl: '' });
-  const [editError,   setEditError]   = useState('');
-  const [savedNotif,  setSavedNotif]  = useState(false);
+  const [editMode,   setEditMode]   = useState(false);
+  const [editForm,   setEditForm]   = useState({ title: '', description: '', youtubeUrl: '' });
+  const [editError,  setEditError]  = useState('');
+  const [notice,     setNotice]     = useState('');
+  const [removeError, setRemoveError] = useState('');
+  const [pending,    setPending]    = useState<'archive' | 'delete' | null>(null);
 
   // Track actual embedding rate across polls: { count, timestamp }
   const prevProgressRef = useRef<{ count: number; ts: number } | null>(null);
   const [chunksPerSec, setChunksPerSec] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(''), 4000);
+    return () => clearTimeout(t);
+  }, [notice]);
 
   useEffect(() => {
     if (!lecture || !POLLING_STATUSES.has(lecture.status)) return;
@@ -113,6 +142,36 @@ export default function LectureDetailPage({ params }: Props) {
     setEditMode(true);
   };
 
+  /** Students, the chat and the lecture list each hold their own copy. */
+  const purgeLectureLists = () => {
+    client.cache.evict({ id: 'ROOT_QUERY', fieldName: 'lectures' });
+    client.cache.gc();
+  };
+
+  const runRemoval = async (action: 'archive' | 'restore' | 'delete') => {
+    setRemoveError(''); setNotice('');
+    try {
+      if (action === 'archive') {
+        await archiveLecture({ variables: { id: params.id } });
+        setNotice('Archived. Students can no longer see this lecture.');
+      } else if (action === 'restore') {
+        await restoreLecture({ variables: { id: params.id } });
+        setNotice('Restored. Students can see this lecture again.');
+      } else {
+        await deleteLecture({ variables: { id: params.id } });
+        purgeLectureLists();
+        router.push('/admin/lectures');
+        return;
+      }
+      setPending(null);
+      purgeLectureLists();
+      await refetch();
+    } catch (err) {
+      setRemoveError((err as { graphQLErrors?: { message: string }[] })?.graphQLErrors?.[0]?.message ?? 'That action could not be completed.');
+      setPending(null);
+    }
+  };
+
   const handleUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
     setEditError('');
@@ -129,8 +188,7 @@ export default function LectureDetailPage({ params }: Props) {
       });
       setEditMode(false);
       refetch();
-      setSavedNotif(true);
-      setTimeout(() => setSavedNotif(false), 3000);
+      setNotice('Lecture details updated.');
     } catch (err: unknown) {
       setEditError((err as { graphQLErrors?: { message: string }[] })?.graphQLErrors?.[0]?.message ?? 'Update failed.');
     }
@@ -138,388 +196,305 @@ export default function LectureDetailPage({ params }: Props) {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="w-7 h-7 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+      <div className="max-w-[1180px]">
+        <div className="h-24 rounded-card bg-[var(--card)] border border-[var(--border)] animate-pulse mb-5" />
+        <div className="h-64 rounded-card bg-[var(--card)] border border-[var(--border)] animate-pulse" />
       </div>
     );
   }
 
   if (!lecture) {
     return (
-      <div className="flex flex-col items-center justify-center py-24 text-slate-400">
-        <i className="fas fa-file-circle-xmark text-4xl mb-3" />
-        <p className="text-base font-semibold text-slate-600">Lecture not found</p>
-        <Link href="/admin/lectures" className="mt-3 text-sm text-indigo-600 hover:underline">← Back to lectures</Link>
+      <div className="max-w-[1180px]">
+        <div className="rounded-card border border-[var(--border)] bg-[var(--card)] p-10 text-center">
+          <p className="text-label font-semibold text-[var(--text)]">Lecture not found</p>
+          <p className="text-caption text-[var(--muted)] mt-1">It may have been deleted.</p>
+          <Link href="/admin/lectures" className="mt-4 inline-block text-label font-semibold text-[var(--accent)] hover:underline">
+            Back to Lectures
+          </Link>
+        </div>
       </div>
     );
   }
 
-  const s = STATUS_CONFIG[lecture.status] ?? STATUS_CONFIG.NO_DATASET;
+  const s = STATUS[lecture.status] ?? STATUS.NO_DATASET;
   const isPolling = POLLING_STATUSES.has(lecture.status);
+  // Reused from Overview's query so the page can say how much history exists.
+  const asked = (askedData?.questionsPerLecture ?? [])
+    .find((q: { lectureId: number }) => q.lectureId === Number(lecture.id))?.count ?? 0;
+  const removalBusy = archiving || restoring || deleting;
+  const courses: DBCourse[] = courseData?.courses ?? [];
+  const course = courses.find(c => c.id === lecture.courseId);
+
+  // Real progress only. The old card drew four steps and marked the first two
+  // finished without checking anything.
+  const showProgress = lecture.status === 'EMBEDDING' && lecture.progressTotal > 0;
+  const pct       = showProgress ? Math.round((lecture.progressCurrent / lecture.progressTotal) * 100) : 0;
+  const remaining = showProgress ? lecture.progressTotal - lecture.progressCurrent : 0;
+  const estSecs   = (lecture.status === 'EMBEDDING' && chunksPerSec && chunksPerSec > 0)
+    ? Math.ceil(remaining / chunksPerSec) : null;
+  const estLabel  = estSecs === null ? null
+    : estSecs < 60 ? `about ${estSecs} seconds left`
+    : `about ${Math.ceil(estSecs / 60)} minutes left`;
 
   return (
-    <div>
-
-      {/* Hero — outside max-w so it spans the full content area */}
+    <div className="max-w-[1180px]">
+      {/* No Back button. That slot holds a page's main action on every other
+          admin page, and the breadcrumb above already goes back. */}
       <AdminPageHero
-        icon={s.icon}
-        iconGradient={STATUS_GRADIENT[lecture.status] ?? 'from-slate-500 to-slate-600'}
+        parent={{ label: 'Lectures', href: '/admin/lectures' }}
         title={lecture.title}
-        subtitle={`Lecture #${lecture.id} · ${s.desc}`}
-        badge={s.label}
-        action={
-          <Link
-            href="/admin/lectures"
-            className="flex items-center gap-2 px-4 py-2 bg-white/15 text-white border border-white/25 backdrop-blur-sm rounded-xl text-[17px] font-semibold hover:bg-white/25 transition-all"
-          >
-            <i className="fas fa-arrow-left text-[17px]" /> Back to Lectures
-          </Link>
-        }
+        subtitle={[
+          course ? (course.archivedAt ? `${course.title} (archived)` : course.title) : 'Course unknown',
+          new Date(lecture.createdAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }),
+        ].join(' · ')}
       />
 
-      {/* Centered content */}
-      <div className="max-w-[1100px] mx-auto">
-
-      {/* Status banner */}
-      <div className={`flex items-center gap-4 rounded-2xl px-5 py-4 mb-6 border ${s.bg} ${s.border}`}>
-        <div className={`w-10 h-10 rounded-xl bg-white/60 border ${s.border} flex items-center justify-center shrink-0`}>
-          <i className={`${s.icon} ${s.text} ${lecture.status === 'PROCESSING' || lecture.status === 'EMBEDDING' ? 'fa-spin' : ''} text-[17px]`} />
+      {notice && (
+        <div role="status" className="mb-5 flex items-center gap-2.5 rounded-card border border-[var(--border)] border-l-[3px] border-l-[var(--accent)] bg-[var(--card)] px-5 py-3.5">
+          <i className="fas fa-circle-check text-[13px] text-[var(--accent)]" aria-hidden="true" />
+          <p className="text-label text-[var(--text)]">{notice}</p>
         </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-0.5">
-            <span className={`text-[17px] font-bold ${s.text}`}>{s.label}</span>
-            {isPolling && (
-              <span className="flex items-center gap-1 text-[17px] font-medium text-slate-500 bg-white/70 px-2 py-0.5 rounded-full border border-slate-200">
-                <span className={`w-1.5 h-1.5 rounded-full ${s.dot} animate-pulse`} />
-                Auto-refreshing
+      )}
+
+      {/* State of the lecture, said once. The heading above no longer repeats
+          it, and there is no coloured banner. */}
+      <section className={`rounded-card border border-[var(--border)] bg-[var(--card)] px-5 py-4 mb-5 ${
+        s.attention ? 'border-l-[3px] border-l-[var(--gold)]' : ''
+      }`}>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className={`text-label font-semibold ${s.attention ? 'text-[var(--gold)]' : 'text-[var(--text)]'}`}>
+              {lecture.archivedAt ? 'Archived' : s.label}
+            </p>
+            <p className="text-caption text-[var(--muted)] mt-0.5">
+              {lecture.archivedAt ? 'Withdrawn from students. Restore it from the Lectures list.' : s.note}
+            </p>
+          </div>
+          {/* No Refresh button. While anything is being built the page reloads
+              itself every 3 seconds, and in every other state nothing can
+              change on its own, so pressing it would do nothing. */}
+          {isPolling && (
+            <span className="shrink-0 text-caption text-[var(--muted)]">Updating automatically</span>
+          )}
+        </div>
+
+        {showProgress && (
+          <div className="mt-4">
+            <div className="flex items-baseline justify-between gap-4 mb-1.5">
+              <span className="text-caption text-[var(--muted)] tabular-nums">
+                {lecture.progressCurrent} of {lecture.progressTotal} chunks
+              </span>
+              <span className="text-caption text-[var(--muted)] tabular-nums">
+                {pct}%{estLabel ? ` · ${estLabel}` : ''}
+              </span>
+            </div>
+            <div className="h-2 rounded-full bg-[var(--surface)] border border-[var(--border)] overflow-hidden">
+              <div className="h-full rounded-full bg-[var(--accent)] transition-[width]" style={{ width: `${Math.max(pct, 2)}%` }} />
+            </div>
+          </div>
+        )}
+      </section>
+
+      <section className="rounded-card border border-[var(--border)] bg-[var(--card)] p-6 mb-5">
+        <div className="flex items-center justify-between gap-4 mb-5">
+          <h2 className="text-h3 font-semibold text-[var(--text)]">Lecture Details</h2>
+          {!editMode && <button onClick={startEdit} className={outlineBtn}>Edit Details</button>}
+        </div>
+
+        {editMode ? (
+          <form onSubmit={handleUpdate} className="space-y-4">
+            <label className="block text-caption font-semibold text-[var(--muted)]">
+              Title
+              <input value={editForm.title} onChange={e => setEditForm(f => ({ ...f, title: e.target.value }))} className={fieldClass + ' mt-2'} />
+            </label>
+            <label className="block text-caption font-semibold text-[var(--muted)]">
+              YouTube URL
+              <input value={editForm.youtubeUrl} onChange={e => setEditForm(f => ({ ...f, youtubeUrl: e.target.value }))} className={fieldClass + ' mt-2'} placeholder="Leave empty for a document-only lecture" />
+            </label>
+            <label className="block text-caption font-semibold text-[var(--muted)]">
+              Description
+              <textarea value={editForm.description} onChange={e => setEditForm(f => ({ ...f, description: e.target.value }))} rows={3} className={fieldClass + ' mt-2 resize-none'} />
+            </label>
+
+            {editError && <p role="alert" className="text-caption text-red-700">{editError}</p>}
+
+            <div className="flex gap-2 pt-1">
+              <button type="submit" disabled={updating} className="h-10 rounded-control bg-[var(--accent)] px-5 text-label font-semibold text-white hover:bg-[var(--accent-deep)] transition-colors disabled:opacity-50">
+                {updating ? 'Saving…' : 'Save Changes'}
+              </button>
+              <button type="button" onClick={() => setEditMode(false)} className="h-10 rounded-control border border-[var(--border)] px-4 text-label font-semibold text-[var(--text)] hover:bg-[var(--surface)] transition-colors">
+                Cancel
+              </button>
+            </div>
+          </form>
+        ) : (
+          /* "Lecture ID #2" is gone: that was the database row number, which
+             says nothing to the person reading it. */
+          <dl className="space-y-4">
+            <div>
+              <dt className="text-caption text-[var(--muted)]">Course</dt>
+              <dd className="text-label text-[var(--text)] mt-0.5">
+                {course ? (
+                  <Link href={`/admin/lectures?courseId=${encodeURIComponent(course.id)}`} className="font-medium text-[var(--accent)] hover:underline">
+                    {course.title}
+                  </Link>
+                ) : 'Unknown'}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-caption text-[var(--muted)]">Added</dt>
+              <dd className="text-label text-[var(--text)] mt-0.5">
+                {new Date(lecture.createdAt).toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-caption text-[var(--muted)]">Video</dt>
+              <dd className="text-label mt-0.5 break-all">
+                {lecture.youtubeUrl
+                  ? <a href={lecture.youtubeUrl} target="_blank" rel="noreferrer" className="font-medium text-[var(--accent)] hover:underline">{lecture.youtubeUrl}</a>
+                  : <span className="text-[var(--muted)]">No video. This lecture is built from documents only.</span>}
+              </dd>
+            </div>
+            {lecture.description && (
+              <div>
+                <dt className="text-caption text-[var(--muted)]">Description</dt>
+                <dd className="text-label text-[var(--text)] mt-0.5 leading-relaxed max-w-[70ch]">{lecture.description}</dd>
+              </div>
+            )}
+          </dl>
+        )}
+      </section>
+
+      {/* Upload, preview, build progress, export, versions and rollback.
+          Kiran's component; left as it is. */}
+      <DatasetManager
+        lectureId={parseInt(params.id, 10)}
+        lectureStatus={lecture.status}
+        onChanged={() => { void refetch(); void refetchChunks(); }}
+      />
+
+      {lecture.status === 'READY' && (
+        <section className="rounded-card border border-[var(--border)] bg-[var(--card)] p-6 mt-5">
+          <div className="flex flex-wrap items-baseline justify-between gap-3 mb-4">
+            <div>
+              <h2 className="text-h3 font-semibold text-[var(--text)]">Dataset Contents</h2>
+              <p className="text-caption text-[var(--muted)] mt-0.5">
+                The question and answer pairs the tutor answers from.
+              </p>
+            </div>
+            {chunkTotal > 0 && (
+              <span className="text-caption text-[var(--muted)] tabular-nums shrink-0">
+                {chunkTotal} {chunkTotal === 1 ? 'pair' : 'pairs'}{chunkSearch ? ' matching' : ''}
               </span>
             )}
           </div>
-          <p className={`text-[17px] ${s.text} opacity-75`}>{s.desc}</p>
-        </div>
-        {!isPolling && (
-          <button
-            onClick={() => refetch()}
-            className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/60 border border-current/20 text-[17px] font-semibold hover:bg-white/90 transition-colors"
-          >
-            <i className="fas fa-rotate-right text-[17px]" /> Refresh
-          </button>
-        )}
-      </div>
 
-      {/* Layout: during active processing show left cards + right progress card; otherwise normal 2-col */}
-      {(() => {
-        // Only a first-ever dataset shows a processing state, and the build
-        // sets EMBEDDING directly (PROCESSING is a legacy value nothing writes).
-        const showProgress = lecture.status === 'EMBEDDING' && lecture.progressTotal > 0;
-        const pct       = showProgress ? Math.round((lecture.progressCurrent / lecture.progressTotal) * 100) : 0;
-        const remaining = showProgress ? lecture.progressTotal - lecture.progressCurrent : 0;
-        // Use measured rate if available, else no estimate
-        const estSecs   = (lecture.status === 'EMBEDDING' && chunksPerSec && chunksPerSec > 0)
-          ? Math.ceil(remaining / chunksPerSec)
-          : null;
-        const estLabel  = estSecs === null ? null
-          : estSecs < 60  ? `~${estSecs}s`
-          : `~${Math.ceil(estSecs / 60)} min`;
-
-        const STEPS = [
-          { key: 'parse',   label: 'Parse & Validate',      icon: 'fas fa-file-check',  done: true },
-          { key: 'insert',  label: 'Insert Chunks',         icon: 'fas fa-database',    done: true },
-          { key: 'embed',   label: 'Generate Embeddings',   icon: 'fas fa-brain',       done: false, active: true },
-          { key: 'ready',   label: 'AI Tutor Ready',        icon: 'fas fa-robot',       done: false },
-        ];
-
-        const detailsCard = (
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/60">
-              <div className="flex items-center gap-2.5">
-                <div className="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center">
-                  <i className="fas fa-film text-white text-[17px]" />
-                </div>
-                <span className="text-[16px] font-semibold text-slate-700">Lecture Details</span>
-              </div>
-              {!editMode && (
-                <button onClick={startEdit} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 text-[17px] font-semibold hover:bg-slate-100 transition-colors">
-                  <i className="fas fa-pen text-[17px]" /> Edit
-                </button>
-              )}
-            </div>
-            <div className="p-6">
-              {editMode ? (
-                <form onSubmit={handleUpdate} className="flex flex-col gap-4">
-                  <div>
-                    <label className="block text-[17px] font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Title</label>
-                    <input value={editForm.title} onChange={(e) => setEditForm((f) => ({ ...f, title: e.target.value }))} className={FIELD_CLASS} />
-                  </div>
-                  <div>
-                    <label className="block text-[17px] font-semibold text-slate-500 uppercase tracking-wide mb-1.5">YouTube URL</label>
-                    <input value={editForm.youtubeUrl} onChange={(e) => setEditForm((f) => ({ ...f, youtubeUrl: e.target.value }))} className={FIELD_CLASS} />
-                  </div>
-                  <div>
-                    <label className="block text-[17px] font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Description</label>
-                    <textarea value={editForm.description} onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))} rows={2} className={`${FIELD_CLASS} resize-none`} />
-                  </div>
-                  {editError && (
-                    <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-xl px-4 py-2.5 text-base text-red-700">
-                      <i className="fas fa-circle-exclamation shrink-0" /> {editError}
-                    </div>
-                  )}
-                  <div className="flex gap-2.5 pt-1 border-t border-slate-100">
-                    <button type="submit" disabled={updating} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-[17px] font-semibold hover:bg-indigo-700 disabled:opacity-60 transition-colors">
-                      {updating ? <><div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" /> Saving…</> : <><i className="fas fa-check text-[17px]" /> Save Changes</>}
-                    </button>
-                    <button type="button" onClick={() => setEditMode(false)} className="px-4 py-2 border border-slate-200 rounded-xl text-[17px] font-semibold text-slate-600 hover:bg-slate-50 transition-colors">
-                      Cancel
-                    </button>
-                  </div>
-                </form>
-              ) : (
-                <dl className="grid grid-cols-2 gap-x-8 gap-y-5">
-                  <div>
-                    <dt className="text-[17px] font-semibold text-slate-400 uppercase tracking-wide mb-1">Lecture ID</dt>
-                    <dd className="text-[17px] font-mono text-slate-700">#{lecture.id}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-[17px] font-semibold text-slate-400 uppercase tracking-wide mb-1">Created</dt>
-                    <dd className="text-[17px] text-slate-700">{new Date(lecture.createdAt).toLocaleString()}</dd>
-                  </div>
-                  <div className="col-span-2">
-                    <dt className="text-[17px] font-semibold text-slate-400 uppercase tracking-wide mb-1">YouTube URL</dt>
-                    <dd>
-                      {lecture.youtubeUrl ? (
-                        <a href={lecture.youtubeUrl} target="_blank" rel="noreferrer" className="text-[17px] text-indigo-600 hover:underline break-all">
-                          {lecture.youtubeUrl}
-                        </a>
-                      ) : <span className="text-[17px] text-slate-500">Document-only lecture</span>}
-                    </dd>
-                  </div>
-                  {lecture.description && (
-                    <div className="col-span-2">
-                      <dt className="text-[17px] font-semibold text-slate-400 uppercase tracking-wide mb-1">Description</dt>
-                      <dd className="text-[17px] text-slate-700 leading-relaxed">{lecture.description}</dd>
-                    </div>
-                  )}
-                </dl>
-              )}
-            </div>
-          </div>
-        );
-
-        // Upload, preview/confirm, build progress, export, versions and rollback.
-        const uploadCard = (
-          <DatasetManager
-            lectureId={parseInt(params.id, 10)}
-            lectureStatus={lecture.status}
-            onChanged={() => { void refetch(); void refetchChunks(); }}
-          />
-        );
-
-        if (showProgress) {
-          const activeStep = 2;
-          return (
-            <div className="grid grid-cols-[1fr_1.1fr] gap-5 mb-5">
-              {/* Left: stacked cards */}
-              <div className="flex flex-col gap-5">
-                {detailsCard}
-                {uploadCard}
-              </div>
-
-              {/* Right: professional progress card */}
-              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-                {/* Card header */}
-                <div className="flex items-center gap-2.5 px-6 py-4 border-b border-slate-100 bg-slate-50/60">
-                  <div className="w-7 h-7 rounded-lg flex items-center justify-center bg-violet-600">
-                    <i className="fas fa-brain fa-spin text-white text-[14px]" />
-                  </div>
-                  <span className="text-[16px] font-semibold text-slate-700">Processing Progress</span>
-                  <span className="ml-auto text-[13px] font-bold px-2.5 py-1 rounded-full bg-violet-50 text-violet-700 border border-violet-200">
-                    Step 2 of 2
-                  </span>
-                </div>
-
-                <div className="p-6 flex flex-col gap-6 flex-1">
-
-                  {/* Big progress percentage */}
-                  <div className="flex items-end gap-3">
-                    <span className="text-5xl font-black tabular-nums text-violet-600">{pct}%</span>
-                    <div className="mb-1.5">
-                      <p className="text-[15px] font-semibold text-slate-700">
-                        Generating Embeddings
-                      </p>
-                      <p className="text-[13px] text-slate-400">
-                        {lecture.progressCurrent.toLocaleString()} of {lecture.progressTotal.toLocaleString()} chunks
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Progress bar */}
-                  <div>
-                    <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden">
-                      <div
-                        className="h-3 rounded-full transition-all duration-700 bg-gradient-to-r from-violet-400 to-violet-600"
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                    <div className="flex justify-between mt-1.5">
-                      <span className="text-[12px] text-slate-400">0</span>
-                      <span className="text-[12px] text-slate-400">{lecture.progressTotal.toLocaleString()} chunks</span>
-                    </div>
-                  </div>
-
-                  {/* Pipeline steps */}
-                  <div className="border border-slate-100 rounded-xl overflow-hidden">
-                    <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-100">
-                      <span className="text-[12px] font-bold text-slate-400 uppercase tracking-wider">Pipeline Steps</span>
-                    </div>
-                    <div className="divide-y divide-slate-100">
-                      {STEPS.map((step, idx) => {
-                        const isDone   = idx < activeStep;
-                        const isActive = idx === activeStep;
-                        return (
-                          <div key={step.key} className={`flex items-center gap-3 px-4 py-3 ${isActive ? 'bg-violet-50' : ''}`}>
-                            <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 text-[13px]
-                              ${isDone   ? 'bg-emerald-100 text-emerald-600' :
-                                isActive ? 'bg-violet-100 text-violet-600' :
-                                           'bg-slate-100 text-slate-400'}`}>
-                              {isDone   ? <i className="fas fa-check" /> :
-                               isActive ? <i className={`${step.icon} animate-pulse`} /> :
-                                          <i className={step.icon} />}
-                            </div>
-                            <span className={`text-[14px] font-medium flex-1 ${isDone ? 'text-slate-500 line-through decoration-slate-300' : isActive ? 'text-slate-800' : 'text-slate-400'}`}>
-                              {step.label}
-                            </span>
-                            <span className={`text-[12px] font-semibold px-2 py-0.5 rounded-full
-                              ${isDone   ? 'bg-emerald-50 text-emerald-600' :
-                                isActive ? 'bg-violet-50 text-violet-600' :
-                                           'bg-slate-50 text-slate-400'}`}>
-                              {isDone ? 'Done' : isActive ? 'Active' : 'Pending'}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Estimated time (only for embedding) */}
-                  {lecture.status === 'EMBEDDING' && (
-                    <div className="flex items-center gap-3 bg-violet-50 border border-violet-100 rounded-xl px-4 py-3">
-                      <i className="fas fa-clock text-violet-500 text-[16px]" />
-                      <div>
-                        <p className="text-[13px] font-semibold text-violet-800">Estimated time remaining</p>
-                        <p className="text-[20px] font-black text-violet-700">
-                          {estLabel ?? 'Calculating…'}
-                        </p>
-                        {chunksPerSec && (
-                          <p className="text-[11px] text-violet-400 mt-0.5">{Math.round(chunksPerSec)} chunks/sec</p>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          );
-        }
-
-        return (
-          <div className="flex flex-col gap-5 mb-5">
-            {detailsCard}
-            {uploadCard}
-          </div>
-        );
-      })()}
-
-      {/* Dataset preview — only shown when READY */}
-      {lecture.status === 'READY' && (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden mt-5">
-          <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/60">
-            <div className="flex items-center gap-2.5">
-              <div className="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center">
-                <i className="fas fa-list-check text-white text-[17px]" />
-              </div>
-              <span className="text-[16px] font-semibold text-slate-700">Dataset Preview</span>
-              {chunkTotal > 0 && (
-                <span className="text-[17px] font-semibold text-indigo-600 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-full">
-                  {chunkTotal} Q&A pairs{chunkSearch ? ' match' : ''}
-                </span>
-              )}
-            </div>
-          </div>
-
-          <div className="px-6 pt-4 pb-2">
-            <div className="relative">
-              <i className="fas fa-search absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-[17px]" />
-              <input
-                value={chunkSearchInput}
-                onChange={e => setChunkSearchInput(e.target.value)}
-                placeholder="Search questions, answers or topics…"
-                className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-[17px] text-slate-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all"
-              />
-            </div>
+          <div className="relative mb-4">
+            <i className="fas fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-[13px] text-[var(--muted2)]" aria-hidden="true" />
+            <input
+              value={chunkSearchInput}
+              onChange={e => setChunkSearchInput(e.target.value)}
+              placeholder="Search questions, answers or topics"
+              className="w-full rounded-control border border-[var(--border)] bg-[var(--card)] pl-10 pr-4 py-2.5 text-label text-[var(--text)] outline-none transition-colors focus:border-[var(--muted)] placeholder:text-[var(--muted2)]"
+            />
           </div>
 
           {chunksLoading && !chunksData ? (
-            <div className="px-6 py-4 space-y-3">
-              {[1,2,3].map(i => <div key={i} className="h-16 bg-slate-100 rounded-xl animate-pulse" />)}
+            <div className="space-y-3">
+              {[1, 2, 3].map(i => <div key={i} className="h-16 rounded-control bg-[var(--surface)] animate-pulse" />)}
             </div>
           ) : pagedChunks.length === 0 ? (
-            <div className="px-6 py-8 text-center text-slate-400 text-[17px]">No Q&A pairs found.</div>
+            <p className="py-10 text-center text-label text-[var(--muted)]">
+              {chunkSearch ? 'Nothing matches that search.' : 'This dataset has no pairs.'}
+            </p>
           ) : (
-            <div className="divide-y divide-slate-100 px-6 py-2">
-              {pagedChunks.map((chunk) => (
-                <div key={chunk.id} className="py-4">
-                  <div className="flex items-start gap-3">
-                    <div className="w-5 h-5 rounded-lg bg-blue-100 flex items-center justify-center shrink-0 mt-0.5">
-                      <i className="fas fa-circle-question text-blue-600 text-[17px]" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      {chunk.topic && (
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="text-[17px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">{chunk.topic}</span>
-                          {chunk.startTime && (
-                            <span className="text-[17px] text-slate-400 font-mono">{chunk.startTime}{chunk.endTime ? ` – ${chunk.endTime}` : ''}</span>
-                          )}
-                        </div>
-                      )}
-                      <p className="text-[17px] font-semibold text-slate-800 mb-1.5">{chunk.question}</p>
-                      <p className="text-[17px] text-slate-500 leading-relaxed line-clamp-3">{chunk.answer}</p>
-                    </div>
-                  </div>
-                </div>
+            <ul className="space-y-5">
+              {pagedChunks.map(chunk => (
+                <li key={chunk.id}>
+                  {chunk.topic && (
+                    <p className="text-caption text-[var(--muted)] mb-1">{chunk.topic}</p>
+                  )}
+                  <p className="text-label font-semibold text-[var(--text)]">{chunk.question}</p>
+                  <p className="text-label text-[var(--muted)] mt-1 leading-relaxed line-clamp-3">{chunk.answer}</p>
+                </li>
               ))}
-            </div>
+            </ul>
           )}
 
           {chunkPages > 1 && (
-            <div className="px-6 py-3 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between">
-              <span className="text-[17px] text-slate-400">{chunkTotal} pair{chunkTotal !== 1 ? 's' : ''}</span>
-              <div className="flex items-center gap-1.5">
-                <button onClick={() => setChunkPage(p => Math.max(1, p - 1))} disabled={chunkPage === 1}
-                  className="w-7 h-7 rounded-lg border border-slate-200 flex items-center justify-center text-slate-500 hover:bg-slate-100 disabled:opacity-30 text-[17px]">
-                  <i className="fas fa-chevron-left" />
+            <div className="flex items-center justify-between gap-4 mt-5 pt-4 border-t border-[var(--border)]">
+              <span className="text-caption text-[var(--muted)] tabular-nums">Page {chunkPage} of {chunkPages}</span>
+              <div className="flex gap-2">
+                <button onClick={() => setChunkPage(p => Math.max(1, p - 1))} disabled={chunkPage === 1} className={outlineBtn}>
+                  Previous
                 </button>
-                <span className="text-[17px] text-slate-600 font-medium">{chunkPage} / {chunkPages}</span>
-                <button onClick={() => setChunkPage(p => Math.min(chunkPages, p + 1))} disabled={chunkPage === chunkPages}
-                  className="w-7 h-7 rounded-lg border border-slate-200 flex items-center justify-center text-slate-500 hover:bg-slate-100 disabled:opacity-30 text-[17px]">
-                  <i className="fas fa-chevron-right" />
+                <button onClick={() => setChunkPage(p => Math.min(chunkPages, p + 1))} disabled={chunkPage === chunkPages} className={outlineBtn}>
+                  Next
                 </button>
               </div>
             </div>
           )}
-        </div>
+        </section>
       )}
-      </div>{/* end centered content */}
 
-      {/* Save success toast */}
-      {savedNotif && (
-        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-3 bg-emerald-600 text-white px-5 py-3.5 rounded-2xl shadow-xl animate-fade-in">
-          <i className="fas fa-circle-check text-[18px]" />
-          <div>
-            <p className="text-[15px] font-bold leading-none">Changes saved</p>
-            <p className="text-[13px] text-emerald-100 mt-0.5">Lecture details updated successfully.</p>
+      {/* Withdrawing a lecture was only possible from the list page. An admin
+          looking at the lecture had no way to act on it. */}
+      <section className="rounded-card border border-[var(--border)] bg-[var(--card)] p-6 mt-5">
+        <h2 className="text-h3 font-semibold text-[var(--text)]">Availability</h2>
+        <p className="text-caption text-[var(--muted)] mt-0.5">
+          {lecture.archivedAt
+            ? 'This lecture is withdrawn from students.'
+            : asked > 0
+              ? `Students have asked ${asked} ${asked === 1 ? 'question' : 'questions'} about this lecture.`
+              : 'No questions have been asked about this lecture yet.'}
+        </p>
+
+        {removeError && (
+          <p role="alert" className="mt-3 flex items-start gap-2 text-label text-[var(--text)]">
+            <i className="fas fa-triangle-exclamation text-[13px] text-[var(--gold)] mt-1 shrink-0" aria-hidden="true" />
+            {removeError}
+          </p>
+        )}
+
+        {pending ? (
+          <div className="mt-4">
+            <p className="text-label text-[var(--text)]">
+              {pending === 'archive'
+                ? 'Students lose access. Nothing is deleted, and you can restore it.'
+                : 'Removes its dataset and chat history for good. Cannot be undone.'}
+            </p>
+            <div className="flex flex-wrap gap-2 mt-3">
+              <button
+                type="button"
+                disabled={removalBusy}
+                onClick={() => void runRemoval(pending)}
+                className="rounded-control bg-[var(--accent)] px-3.5 py-2 text-caption font-semibold text-white hover:bg-[var(--accent-deep)] transition-colors disabled:opacity-50"
+              >
+                {removalBusy ? 'Working…' : pending === 'archive' ? 'Archive Lecture' : 'Delete Permanently'}
+              </button>
+              <button type="button" onClick={() => setPending(null)} className={outlineBtn}>Cancel</button>
+            </div>
           </div>
-        </div>
-      )}
+        ) : (
+          <div className="flex flex-wrap gap-2 mt-4">
+            {lecture.archivedAt ? (
+              <button type="button" disabled={removalBusy} onClick={() => void runRemoval('restore')} className={outlineBtn}>
+                Restore
+              </button>
+            ) : (
+              <button type="button" onClick={() => setPending('archive')} className={outlineBtn}>
+                Archive
+              </button>
+            )}
+            {asked === 0 && (
+              <button type="button" onClick={() => setPending('delete')} className={outlineBtn}>
+                Delete
+              </button>
+            )}
+          </div>
+        )}
+      </section>
     </div>
   );
 }

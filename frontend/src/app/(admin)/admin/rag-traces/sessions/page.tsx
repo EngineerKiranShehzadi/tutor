@@ -46,11 +46,11 @@ export default function SessionsListPage() {
   const unsupported = errorCode === 'PHOENIX_UNSUPPORTED_FEATURE';
 
   return (
-    <div className="max-w-[1500px]">
+    <div className="max-w-[1180px]">
       <ObservabilityHeader subtitle="Multi-turn conversations grouped by chat session — reconstructed from Phoenix session data." />
       <ObservabilityTabs />
 
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+      <div className="bg-[var(--card)] rounded-card border border-[var(--border)] overflow-hidden">
         {unsupported ? (
           <EmptyState icon="fa-comments" title="Sessions unsupported by this Phoenix server" message="This capability requires a newer Phoenix server version. Check the System Health tab for details." />
         ) : errorCode === 'PHOENIX_DISABLED' || errorCode === 'PHOENIX_UNREACHABLE' ? (
@@ -58,29 +58,29 @@ export default function SessionsListPage() {
         ) : error ? (
           <ErrorState message={error} onRetry={() => load(cursorStack[pageIndex] ?? null)} />
         ) : loading ? (
-          <div className="p-6 space-y-3">{[1, 2, 3, 4].map(i => <div key={i} className="h-14 bg-slate-100 rounded-lg animate-pulse" />)}</div>
+          <div className="p-6 space-y-3">{[1, 2, 3, 4].map(i => <div key={i} className="h-14 bg-[var(--surface)] rounded-card animate-pulse" />)}</div>
         ) : sessions.length === 0 ? (
           <EmptyState icon="fa-comments" title="No sessions yet" message="Sessions appear once students start multi-turn conversations with the tutor." />
         ) : (
           <>
             <table className="w-full">
               <thead>
-                <tr className="border-b border-slate-200 bg-slate-50/80">
-                  <th className="text-left px-5 py-3.5 text-[11px] font-semibold text-slate-500 uppercase tracking-widest">Session</th>
-                  <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-slate-500 uppercase tracking-widest">First activity</th>
-                  <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-slate-500 uppercase tracking-widest">Last activity</th>
-                  <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-slate-500 uppercase tracking-widest">Traces</th>
-                  <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-slate-500 uppercase tracking-widest">Duration</th>
+                <tr className="border-b border-[var(--border)] bg-[var(--surface)]">
+                  <th className="text-left px-5 py-3.5 text-[11px] font-semibold text-[var(--muted)]">Session</th>
+                  <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-[var(--muted)]">First activity</th>
+                  <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-[var(--muted)]">Last activity</th>
+                  <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-[var(--muted)]">Traces</th>
+                  <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-[var(--muted)]">Duration</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-[var(--border)]">
                 {sessions.map(s => (
-                  <tr key={s.sessionId} onClick={() => router.push(`/admin/rag-traces/sessions/${encodeURIComponent(s.sessionId)}`)} className="hover:bg-slate-50/60 cursor-pointer transition-colors">
-                    <td className="px-5 py-3.5 text-[13px] font-mono text-slate-700">{s.sessionId}</td>
-                    <td className="px-4 py-3.5 text-[12px] text-slate-500">{new Date(s.firstActivity).toLocaleString()}</td>
-                    <td className="px-4 py-3.5 text-[12px] text-slate-500">{new Date(s.lastActivity).toLocaleString()}</td>
-                    <td className="px-4 py-3.5 text-[13px] font-semibold text-slate-700">{s.traceCount}</td>
-                    <td className="px-4 py-3.5 text-[13px] text-slate-500 tabular-nums">{fmtMs(s.totalDurationMs)}</td>
+                  <tr key={s.sessionId} onClick={() => router.push(`/admin/rag-traces/sessions/${encodeURIComponent(s.sessionId)}`)} className="hover:bg-[var(--surface)] cursor-pointer transition-colors">
+                    <td className="px-5 py-3.5 text-caption font-mono text-[var(--text)]">{s.sessionId}</td>
+                    <td className="px-4 py-3.5 text-caption text-[var(--muted)]">{new Date(s.firstActivity).toLocaleString()}</td>
+                    <td className="px-4 py-3.5 text-caption text-[var(--muted)]">{new Date(s.lastActivity).toLocaleString()}</td>
+                    <td className="px-4 py-3.5 text-caption font-semibold text-[var(--text)]">{s.traceCount}</td>
+                    <td className="px-4 py-3.5 text-caption text-[var(--muted)] tabular-nums">{fmtMs(s.totalDurationMs)}</td>
                   </tr>
                 ))}
               </tbody>

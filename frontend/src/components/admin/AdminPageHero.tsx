@@ -1,4 +1,5 @@
 'use client';
+import Link from 'next/link';
 
 interface AdminPageHeroProps {
   /** Kept so existing callers compile; the hero no longer shows an icon. */
@@ -9,6 +10,8 @@ interface AdminPageHeroProps {
   subtitle: string;
   action?: React.ReactNode;
   badge?: string;
+  /** A section between Admin and this page, e.g. Lectures on one lecture. */
+  parent?: { label: string; href: string };
 }
 
 /**
@@ -24,13 +27,21 @@ interface AdminPageHeroProps {
  * 17px section headings beneath it: at 20px the two were close enough that
  * nothing on the page read as a level above anything else.
  */
-export function AdminPageHero({ title, subtitle, action, badge }: AdminPageHeroProps) {
+export function AdminPageHero({ title, subtitle, action, badge, parent }: AdminPageHeroProps) {
   return (
     <div className="mb-7 border-b border-[var(--border)] pb-5">
-      <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-caption text-[var(--muted)]">
-        <span>Admin</span>
+      {/* The trail is how you go back up, so a page one level down needs no
+          Back button of its own. */}
+      <nav aria-label="Breadcrumb" className="flex flex-wrap items-center gap-1.5 text-caption text-[var(--muted)]">
+        <Link href="/admin/dashboard" className="hover:text-[var(--text)] transition-colors">Admin</Link>
         <i className="fas fa-chevron-right text-[9px]" aria-hidden="true" />
-        <span className="font-medium text-[var(--text)]">{title}</span>
+        {parent && (
+          <>
+            <Link href={parent.href} className="hover:text-[var(--text)] transition-colors">{parent.label}</Link>
+            <i className="fas fa-chevron-right text-[9px]" aria-hidden="true" />
+          </>
+        )}
+        <span className="font-medium text-[var(--text)] truncate max-w-[52ch]">{title}</span>
       </nav>
 
       {/* No icon beside the title. A tinted square holding a pictogram is the
