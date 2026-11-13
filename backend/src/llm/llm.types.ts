@@ -39,6 +39,10 @@ export interface LlmRequest {
   // Aborts the underlying request — same AbortSignal.timeout() idiom used
   // everywhere else in this codebase (embedding/rerank).
   timeoutMs?: number;
+  // Parent cancellation and safe operation labels, honoured by Gemini quizzes.
+  // Existing callers/providers not using these optional fields are unchanged.
+  signal?: AbortSignal;
+  telemetry?: { requestId: string; operation: 'QUIZ_GENERATE' | 'QUIZ_VERIFY' };
 }
 
 export interface LlmUsage {

@@ -27,13 +27,10 @@ export interface SubqueryRetrievalOutcome {
   failedStage?: 'EMBEDDING' | 'VECTOR_SEARCH' | 'RERANK';
 }
 
-// Runs the existing embed -> vector-search -> rerank pipeline for exactly
-// one subquery, using the same clients/thresholds the single-query path
-// uses (searchChunks already enforces SIMILARITY_THRESHOLD internally).
-// Never throws — a transient failure on one subquery (embedding/search/
-// rerank server hiccup) must not take down the other subqueries or the
-// whole request; it just counts as uncovered, same as a genuine
-// no-evidence result.
+// Runs embed -> bounded raw vector candidates -> validated reranker for one
+// subquery. The cosine prefilter is deferred, just as on the direct path.
+// Never forwards raw candidates when embedding/search/reranking fails:
+// that aspect is unavailable, not proven absent from the lecture.
 //
 // Exported so adaptive-retrieval.service.ts can run exactly this same
 // pipeline for a single planner-proposed targeted query, instead of
@@ -47,24 +44,26 @@ export async function retrieveForSubquery(
 ): Promise<SubqueryRetrievalOutcome> {
   const run = async (): Promise<SubqueryRetrievalOutcome> => {
     let stage: NonNullable<SubqueryRetrievalOutcome['failedStage']> = 'EMBEDDING';
+    let candidateCount = 0;
     try {
       const embedding = await deps.generateEmbedding(subquery, true);
       stage = 'VECTOR_SEARCH';
       const candidates = await deps.searchChunks(embedding, lectureId, SUBQUERY_CANDIDATE_LIMIT);
+      candidateCount = candidates.length;
       if (candidates.length === 0) {
         return { index, subquery, candidateCount: 0, reranked: [], covered: false, failureReason: 'NO_VECTOR_CANDIDATES' };
       }
 
       stage = 'RERANK';
       const reranked = await deps.rerankChunks(subquery, candidates, candidates.length);
-      const covered = reranked.some(c => (c.rerankScore ?? 0) >= DEFAULT_MIN_RERANK_SCORE);
+      const covered = reranked.some(c => Number.isFinite(c.rerankScore) && (c.rerankScore ?? 0) >= DEFAULT_MIN_RERANK_SCORE);
       return {
-        index, subquery, candidateCount: candidates.length, reranked, covered,
+        index, subquery, candidateCount, reranked, covered,
         failureReason: covered ? undefined : 'ALL_BELOW_RERANK_FLOOR',
       };
     } catch (err) {
-      logger.warn(`[QUERY-DECOMPOSITION] ⚠️  Subquery ${index} retrieval failed at ${stage}, treating as uncovered: ${(err as Error).message}`);
-      return { index, subquery, candidateCount: 0, reranked: [], covered: false, failureReason: 'RETRIEVAL_ERROR', failedStage: stage };
+      logger.warn(`[QUERY-DECOMPOSITION] subquery=${index} candidates=${candidateCount} stage=${stage} reason=RETRIEVAL_ERROR rawFallbackBlocked=true`);
+      return { index, subquery, candidateCount, reranked: [], covered: false, failureReason: 'RETRIEVAL_ERROR', failedStage: stage };
     }
   };
 

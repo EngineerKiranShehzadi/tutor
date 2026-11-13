@@ -2,89 +2,78 @@ import { query } from '../config/database';
 import { QnaChunk } from '../types';
 import { logger } from '../utils/logger';
 import { env } from '../config/env';
+import { getActiveTrace } from '../observability/tracer';
 import { searchChunksFts } from './fulltext-search.service';
 
+// Retained for diagnostics/threshold tuning, NOT an admission gate before
+// reranking. Cosine similarity and a cross-encoder score are different signals.
 export const SIMILARITY_THRESHOLD = env.RETRIEVAL.VECTOR_SIMILARITY_THRESHOLD;
 
-// Searches only the specified lecture's chunks using pgvector cosine similarity,
-// and only those in the lecture's ACTIVE dataset version — chunks of a version
-// still being built (or of an older one) are never returned. Returns the top-K
-// by similarity with NO threshold applied; searchChunks() is the production
-// entry point that enforces it, and the threshold tuner reads this directly.
+type ScoredChunk = QnaChunk & { similarity: number };
+
+// Searches only one lecture and its pinned (or currently ACTIVE) version.
+// Returns the bounded raw top-K. Every answer-producing caller MUST rerank
+// these candidates and apply the reranker relevance floor before generation.
 export const searchChunkCandidates = async (
   embedding: number[],
   lectureId: number,
   topK = 5,
-  // Pin the search to one dataset version. A chat request resolves the version
-  // once at its start and passes it to every retrieval call, so a publish that
-  // lands mid-request can never mix two versions' chunks into one answer.
-  // Omitted: the lecture's active version at query time.
   datasetVersionId?: number
-): Promise<(QnaChunk & { similarity: number })[]> => {
+): Promise<ScoredChunk[]> => {
   const vectorLiteral = `[${embedding.join(',')}]`;
-
-  const { rows } = await query<QnaChunk & { similarity: number }>(
-    `SELECT
-       id, lecture_id, topic, question, answer,
-       chunk_text, chunk_index, start_time, end_time, keywords,
-       1 - (local_embedding <=> $1::vector) AS similarity
-     FROM lecture_qna_chunks
-     WHERE lecture_id = $2
-       AND id IN (SELECT chunk_id FROM dataset_version_chunks
-                  WHERE version_id = COALESCE($4::int, (SELECT active_version_id FROM lectures WHERE id = $2)))
-       AND local_embedding IS NOT NULL
-     ORDER BY local_embedding <=> $1::vector
-     LIMIT $3`,
-    [vectorLiteral, lectureId, topK, datasetVersionId ?? null]
-  );
-
-  return rows;
+  const run = async (): Promise<ScoredChunk[]> => {
+    try {
+      const { rows } = await query<ScoredChunk>(
+        `SELECT
+           id, lecture_id, topic, question, answer,
+           chunk_text, chunk_index, start_time, end_time, keywords,
+           1 - (local_embedding <=> $1::vector) AS similarity
+         FROM lecture_qna_chunks
+         WHERE lecture_id = $2
+           AND id IN (SELECT chunk_id FROM dataset_version_chunks
+                      WHERE version_id = COALESCE($4::int, (SELECT active_version_id FROM lectures WHERE id = $2)))
+           AND local_embedding IS NOT NULL
+         ORDER BY local_embedding <=> $1::vector
+         LIMIT $3`,
+        [vectorLiteral, lectureId, topK, datasetVersionId ?? null]
+      );
+      const belowLegacyFloor = rows.filter(r => r.similarity < SIMILARITY_THRESHOLD).length;
+      logger.info(`[VECTOR SEARCH] lecture=${lectureId} raw=${rows.length} forwarded=${rows.length} belowLegacyFloor=${belowLegacyFloor} thresholdApplied=false reason=${rows.length ? 'DEFER_TO_RERANKER' : 'NO_VECTOR_CANDIDATES'}`);
+      return rows;
+    } catch (err) {
+      logger.warn(`[VECTOR SEARCH] lecture=${lectureId} reason=VECTOR_SEARCH_FAILURE`);
+      throw err; // A database failure is NOT evidence that the topic is absent.
+    }
+  };
+  const trace = getActiveTrace();
+  return trace ? trace.span('collect-vector-candidates', run, rows => ({
+    lectureId,
+    datasetVersionId: datasetVersionId ?? null,
+    candidateLimit: topK,
+    rawVectorCount: rows.length,
+    forwardedVectorCount: rows.length,
+    belowLegacyVectorFloor: rows.filter(r => r.similarity < SIMILARITY_THRESHOLD).length,
+    legacyVectorThreshold: SIMILARITY_THRESHOLD,
+    vectorThresholdApplied: false,
+    selectionReason: rows.length ? 'DEFER_TO_RERANKER' : 'NO_VECTOR_CANDIDATES',
+    candidateIds: rows.map(r => r.id).join(','),
+  })) : run();
 };
 
+// Vector-only path used by decomposed/adaptive retrieval and by chat when
+// hybrid search is disabled. It has the SAME reranker-first admission policy.
 export const searchChunks = async (
   embedding: number[],
   lectureId: number,
   topK = 5,
   datasetVersionId?: number
-): Promise<QnaChunk[]> => {
-  const rows = await searchChunkCandidates(embedding, lectureId, topK, datasetVersionId);
+): Promise<QnaChunk[]> => searchChunkCandidates(embedding, lectureId, topK, datasetVersionId);
 
-  // Filter by similarity threshold — strictly enforced
-  const filtered = rows.filter(r => (r.similarity ?? 0) >= SIMILARITY_THRESHOLD);
-
-  logger.info(
-    `[VECTOR SEARCH] Lecture #${lectureId}: ${rows.length} raw results → ${filtered.length} above threshold ${SIMILARITY_THRESHOLD}`
-  );
-
-  if (filtered.length === 0) {
-    logger.warn(
-      `[VECTOR SEARCH] ⚠️  No chunks met threshold ${SIMILARITY_THRESHOLD} (best=${rows[0]?.similarity?.toFixed(3) ?? 'n/a'}) — returning empty`
-    );
-  }
-
-  return filtered;
-};
-
-// Hybrid search (2026-11-03, Finding 2 of the RAG test, S-R1): runs vector
-// search and full-text search in parallel and fuses them with Reciprocal
-// Rank Fusion, so a chunk that one signal misses but the other finds
-// strongly (a near-duplicate "slide 14"-vs-"slide 15" question is the
-// motivating case — see fulltext-search.service.ts) still surfaces.
-//
-// A pure RRF score has no natural "did this clear the bar" cutoff the way
-// cosine similarity does, so the existing threshold is kept as a *floor*,
-// not replaced: a chunk is returned if it individually passed the vector
-// threshold OR individually passed the FTS floor (appears at all — FTS
-// is binary match/no-match per row via `@@`, ts_rank_cd only orders
-// the matches). RRF only decides the merged *order* those survivors come
-// back in, which feeds straight into the existing reranker exactly like
-// searchChunks()'s output always has — this is a wider, better-ordered
-// candidate pool for the same downstream rerank+floor logic, not a new
-// decision stage.
-//
-// FTS runs best-effort: a lexical-search failure (bad input, index issue)
-// never takes down retrieval — it just falls back to vector-only, same
-// as the existing fail-open convention for the reranker (S-R3).
+// Bounded vector + lexical retrieval, still in parallel, fused with the
+// existing Reciprocal Rank Fusion ordering. Deduplicate by chunk ID, not
+// answer text (answer/piece dedup happens AFTER reranking). Do not discard a
+// vector hit at 0.55: known outcomes/typo evidence scored below that floor.
+// FTS failure remains best-effort; vector/database failures still propagate.
 export const searchChunksHybrid = async (
   embedding: number[],
   queryText: string,
@@ -96,40 +85,52 @@ export const searchChunksHybrid = async (
     return searchChunks(embedding, lectureId, topK, datasetVersionId);
   }
 
-  const vectorRowsPromise = searchChunkCandidates(embedding, lectureId, topK, datasetVersionId);
-  const ftsRowsPromise = searchChunksFts(queryText, lectureId, topK, datasetVersionId)
-    .catch(err => {
-      logger.warn(`[HYBRID SEARCH] ⚠️  Full-text search failed, continuing vector-only: ${(err as Error).message}`);
-      return [] as (QnaChunk & { ftsRank: number })[];
+  let vectorCount = 0;
+  let ftsCount = 0;
+  let belowLegacyFloor = 0;
+  let ftsUnavailable = false;
+  const run = async (): Promise<QnaChunk[]> => {
+    const vectorRowsPromise = searchChunkCandidates(embedding, lectureId, topK, datasetVersionId);
+    const ftsRowsPromise = searchChunksFts(queryText, lectureId, topK, datasetVersionId)
+      .catch(() => {
+        ftsUnavailable = true;
+        logger.warn(`[HYBRID SEARCH] lecture=${lectureId} reason=FTS_UNAVAILABLE_VECTOR_ONLY`);
+        return [] as (QnaChunk & { ftsRank: number })[];
+      });
+    const [vectorRows, ftsRows] = await Promise.all([vectorRowsPromise, ftsRowsPromise]);
+    vectorCount = vectorRows.length;
+    ftsCount = ftsRows.length;
+    belowLegacyFloor = vectorRows.filter(r => r.similarity < SIMILARITY_THRESHOLD).length;
+
+    const k = env.RETRIEVAL.RRF_K;
+    const fusedScore = new Map<number, number>();
+    const byId = new Map<number, QnaChunk>();
+    vectorRows.forEach((r, rank) => {
+      byId.set(r.id, r);
+      fusedScore.set(r.id, (fusedScore.get(r.id) ?? 0) + 1 / (k + rank + 1));
+    });
+    ftsRows.forEach((r, rank) => {
+      if (!byId.has(r.id)) byId.set(r.id, r);
+      fusedScore.set(r.id, (fusedScore.get(r.id) ?? 0) + 1 / (k + rank + 1));
     });
 
-  const [vectorRows, ftsRows] = await Promise.all([vectorRowsPromise, ftsRowsPromise]);
-
-  const vectorPass = new Set(vectorRows.filter(r => (r.similarity ?? 0) >= SIMILARITY_THRESHOLD).map(r => r.id));
-  const ftsPass = new Set(ftsRows.map(r => r.id));
-
-  // RRF: each list contributes 1/(k + rank) to a chunk's fused score —
-  // chunks in both lists accumulate both contributions. k=RRF_K dampens how
-  // much a single list's exact rank dominates (standard choice, k=60).
-  const k = env.RETRIEVAL.RRF_K;
-  const fusedScore = new Map<number, number>();
-  const byId = new Map<number, QnaChunk>();
-  vectorRows.forEach((r, rank) => {
-    byId.set(r.id, r);
-    fusedScore.set(r.id, (fusedScore.get(r.id) ?? 0) + 1 / (k + rank + 1));
-  });
-  ftsRows.forEach((r, rank) => {
-    if (!byId.has(r.id)) byId.set(r.id, r);
-    fusedScore.set(r.id, (fusedScore.get(r.id) ?? 0) + 1 / (k + rank + 1));
-  });
-
-  const survivors = [...byId.values()].filter(c => vectorPass.has(c.id) || ftsPass.has(c.id));
-  survivors.sort((a, b) => (fusedScore.get(b.id) ?? 0) - (fusedScore.get(a.id) ?? 0));
-
-  logger.info(
-    `[HYBRID SEARCH] Lecture #${lectureId}: vector ${vectorRows.length} (${vectorPass.size} above threshold) + ` +
-    `fts ${ftsRows.length} → fused ${survivors.length} distinct candidate(s)`
-  );
-
-  return survivors;
+    // Each input is topK-bounded, so the union contains at most 2 * topK.
+    const candidates = [...byId.values()];
+    candidates.sort((a, b) => (fusedScore.get(b.id) ?? 0) - (fusedScore.get(a.id) ?? 0));
+    logger.info(`[HYBRID SEARCH] lecture=${lectureId} vector=${vectorCount} fts=${ftsCount} merged=${candidates.length} belowLegacyFloor=${belowLegacyFloor} thresholdApplied=false reason=${candidates.length ? 'DEFER_TO_RERANKER' : 'NO_RETRIEVAL_CANDIDATES'}`);
+    return candidates;
+  };
+  const trace = getActiveTrace();
+  return trace ? trace.span('merge-retrieval-candidates', run, rows => ({
+    lectureId,
+    datasetVersionId: datasetVersionId ?? null,
+    rawVectorCount: vectorCount,
+    lexicalCandidateCount: ftsCount,
+    mergedCandidateCount: rows.length,
+    belowLegacyVectorFloor: belowLegacyFloor,
+    vectorThresholdApplied: false,
+    ftsUnavailable,
+    selectionReason: rows.length ? 'DEFER_TO_RERANKER' : 'NO_RETRIEVAL_CANDIDATES',
+    candidateIds: rows.map(r => r.id).join(','),
+  })) : run();
 };

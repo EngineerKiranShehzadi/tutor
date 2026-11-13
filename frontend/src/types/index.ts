@@ -36,6 +36,7 @@ export interface ApiResponse<T = undefined> {
 export interface DBLecture {
   id:              string;
   title:           string;
+  agentName?:      string | null;
   description?:    string;
   youtubeUrl:      string;
   youtubeVideoId?: string;
