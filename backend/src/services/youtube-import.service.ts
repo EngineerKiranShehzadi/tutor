@@ -51,7 +51,19 @@ export function fetchPilotCaptions(videoId: string): Promise<{language: string; 
     child.on('error', () => finish(new AppError('Caption extractor unavailable', 503)));
     child.on('close', code => {
       if (done) return;
-      if (code !== 0) { finish(new AppError('Captions unavailable', 422)); return; }
+      if (code !== 0) {
+        let errorCode = '';
+        try { errorCode = String(JSON.parse(text)?.error || ''); } catch { /* invalid output */ }
+        const messages: Record<string,string> = {
+          CAPTIONS_DISABLED: 'Captions are disabled for this video',
+          SUPPORTED_CAPTIONS_NOT_FOUND: 'No supported Hindi, Urdu or English captions found',
+          VIDEO_UNAVAILABLE: 'YouTube video is unavailable',
+          CAPTION_ACCESS_BLOCKED: 'YouTube caption access temporarily blocked',
+          CAPTION_FETCH_FAILED: 'Caption fetch failed',
+        };
+        finish(new AppError(messages[errorCode] || 'Captions unavailable',422));
+        return;
+      }
       try { finish(undefined, validateCaptionPayload(JSON.parse(text))); }
       catch { finish(new AppError('Invalid caption extractor output', 422)); }
     });
