@@ -3,7 +3,6 @@ import { useEffect, useState } from 'react';
 import { downloadCsv } from '@/lib/csv';
 import { useRouter } from 'next/navigation';
 import { useApolloClient, useQuery, useMutation } from '@apollo/client';
-import { cn } from '@/lib/cn';
 import { GET_REGISTERED_STUDENTS } from '@/graphql/analytics.queries';
 import { DELETE_USER_MUTATION } from '@/graphql/admin.mutations';
 import { AdminPageHero } from '@/components/admin/AdminPageHero';
@@ -17,7 +16,6 @@ interface Student {
   status: 'ACTIVE' | 'INACTIVE';
 }
 
-const COLORS = ['bg-blue-100 text-blue-700','bg-violet-100 text-violet-700','bg-emerald-100 text-emerald-700','bg-amber-100 text-amber-700','bg-rose-100 text-rose-700','bg-indigo-100 text-indigo-700'];
 const PAGE_SIZE = 10;
 // Export pages through the same server API, 100 rows at a time (AD6).
 const EXPORT_PAGE = 100;
@@ -28,31 +26,34 @@ interface StudentPage {
   totalStudents: number; activeCount: number; inactiveCount: number;
 }
 
-const STATUS_CONFIG = {
-  ACTIVE:   { label: 'Active',   dot: 'bg-emerald-400', text: 'text-emerald-700', bg: 'bg-emerald-50', border: 'border-emerald-200' },
-  INACTIVE: { label: 'Inactive', dot: 'bg-slate-400',   text: 'text-slate-500',  bg: 'bg-slate-100',  border: 'border-slate-200'   },
-};
+const outlineBtn = 'rounded-control border border-[var(--border)] px-3.5 py-2 text-caption font-semibold text-[var(--text)] hover:bg-[var(--surface)] transition-colors disabled:opacity-50';
 
-function exportCSV(students: Student[]) {
-  const rows = [['Name','Email','Status','Questions Asked','Joined']];
-  students.forEach(s => rows.push([
-    s.name, s.email, s.status, String(s.questionCount),
-    new Date(s.createdAt).toLocaleDateString(),
-  ]));
-  downloadCsv('students.csv', rows);
-}
-
+/**
+ * Students.
+ *
+ * The page opened with three number cards carrying coloured icon tiles, gave
+ * every student an avatar in one of six random colours, and labelled them
+ * "Active" or "Inactive" — which here means nothing more than whether they have
+ * ever asked a question. Overview says that in words, so this page now does too.
+ *
+ * Deleting a student is the one thing on this page that cannot be undone:
+ * users cascade into chat_sessions, chat_history, student_questions,
+ * notifications and rag_answer_memory, so removing a student removes every
+ * question they asked from the analytics with them. The confirmation says so,
+ * and asks for a tick when there is history to lose.
+ */
 export default function AdminStudents() {
   const router = useRouter();
   const client = useApolloClient();
-  const [deleteUser] = useMutation(DELETE_USER_MUTATION);
+  const [deleteUser, { loading: deleting }] = useMutation(DELETE_USER_MUTATION);
 
   const [searchInput,  setSearchInput]  = useState('');
   const [search,       setSearch]       = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [page,         setPage]         = useState(1);
   const [deleteId,     setDeleteId]     = useState<string | null>(null);
-  const [deleteError,  setDeleteError]  = useState('');
+  const [pageError,    setPageError]    = useState('');
+  const [notice,       setNotice]       = useState('');
   const [exporting,    setExporting]    = useState(false);
 
   // Search and the status filter run on the server; wait for a pause in typing.
@@ -60,6 +61,12 @@ export default function AdminStudents() {
     const t = setTimeout(() => { setSearch(searchInput.trim()); setPage(1); }, 300);
     return () => clearTimeout(t);
   }, [searchInput]);
+
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(''), 4000);
+    return () => clearTimeout(t);
+  }, [notice]);
 
   const filters = { search: search || null, status: statusFilter === 'ALL' ? null : statusFilter };
   const { data, loading, refetch } = useQuery<{ registeredStudents: StudentPage }>(GET_REGISTERED_STUDENTS, {
@@ -77,9 +84,20 @@ export default function AdminStudents() {
   // Deleting the only row on the last page leaves `page` past the end.
   useEffect(() => { if (result && page > totalPages) setPage(totalPages); }, [result, page, totalPages]);
 
+  // Same rule as the Lectures list: a filter that cannot separate anything is
+  // not shown at all.
+  const pendingStudent = paged.find(s => s.id === deleteId) ?? null;
+
+  const showTabs = activeCount > 0 && inactiveCount > 0;
+  const tabs = [
+    { key: 'ALL',      label: 'All' },
+    { key: 'ACTIVE',   label: 'Have asked a question' },
+    { key: 'INACTIVE', label: 'Have not asked yet' },
+  ];
+
   // Every student matching the current filters, fetched page by page.
   const handleExport = async () => {
-    setExporting(true);
+    setExporting(true); setPageError('');
     try {
       const all: Student[] = [];
       for (let offset = 0; offset < EXPORT_MAX; offset += EXPORT_PAGE) {
@@ -91,223 +109,213 @@ export default function AdminStudents() {
         all.push(...d.registeredStudents.items);
         if (!d.registeredStudents.hasMore) break;
       }
-      exportCSV(all);
+      const rows = [['Name', 'Email', 'Questions asked', 'Joined']];
+      all.forEach(s => rows.push([
+        s.name, s.email, String(s.questionCount), new Date(s.createdAt).toLocaleDateString(),
+      ]));
+      downloadCsv('students.csv', rows);
     } catch {
-      setDeleteError('Export failed. Please try again.');
+      setPageError('Export failed. Please try again.');
     } finally {
       setExporting(false);
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (deleteId !== id) { setDeleteId(id); setDeleteError(''); return; }
+  const startDelete = (id: string) => { setDeleteId(id); setPageError(''); setNotice(''); };
+
+  const confirmDelete = async (student: Student) => {
     try {
-      await deleteUser({ variables: { id } });
-      refetch();
+      await deleteUser({ variables: { id: student.id } });
       setDeleteId(null);
+      setNotice(`${student.name} has been deleted.`);
+      await refetch();
     } catch (err: unknown) {
-      setDeleteError((err as { graphQLErrors?: { message: string }[] })?.graphQLErrors?.[0]?.message ?? 'Delete failed.');
+      setPageError((err as { graphQLErrors?: { message: string }[] })?.graphQLErrors?.[0]?.message ?? 'That student could not be deleted.');
+      setDeleteId(null);
     }
   };
 
   return (
-    <div className="max-w-[1500px]">
+    <div className="max-w-[1180px]">
       <AdminPageHero
-        icon="fas fa-user-graduate"
-        iconGradient="from-emerald-500 to-teal-600"
         title="Students"
-        subtitle={loading && !data ? 'Loading…' : `${totalStudents} registered student${totalStudents !== 1 ? 's' : ''} · ${activeCount} active`}
+        subtitle="Everyone registered as a student, and how much they have used the tutor."
         action={
+          /* Filled, like New Course and New Lecture. That slot holds the
+             page's main action, and it looks the same on every page. */
           <button
             onClick={() => { void handleExport(); }}
             disabled={loading || exporting || total === 0}
-            className="flex items-center gap-2 px-4 py-2.5 bg-white/15 text-white border border-white/25 backdrop-blur-sm rounded-xl text-[14px] font-semibold hover:bg-white/25 transition-all disabled:opacity-40"
+            className="h-10 rounded-control bg-[var(--accent)] px-5 text-label font-semibold text-white hover:bg-[var(--accent-deep)] transition-colors disabled:opacity-50"
           >
-            <i className={`fas ${exporting ? 'fa-spinner fa-spin' : 'fa-download'} text-[12px]`} /> {exporting ? 'Exporting…' : 'Export CSV'}
+            {exporting ? 'Exporting…' : 'Export CSV'}
           </button>
         }
       />
 
-      {/* Delete error banner */}
-      {deleteError && (
-        <div className="mb-4 flex items-center gap-2.5 bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-[14px] text-red-700">
-          <i className="fas fa-circle-exclamation shrink-0" /> {deleteError}
-          <button onClick={() => setDeleteError('')} className="ml-auto text-red-400 hover:text-red-600"><i className="fas fa-xmark" /></button>
+      {notice && (
+        <div role="status" className="mb-5 flex items-center gap-2.5 rounded-card border border-[var(--border)] border-l-[3px] border-l-[var(--accent)] bg-[var(--card)] px-5 py-3.5">
+          <i className="fas fa-circle-check text-[13px] text-[var(--accent)]" aria-hidden="true" />
+          <p className="text-label text-[var(--text)]">{notice}</p>
+        </div>
+      )}
+      {pageError && (
+        <div role="alert" className="mb-5 flex items-start gap-2.5 rounded-card border border-[var(--border)] border-l-[3px] border-l-[var(--gold)] bg-[var(--card)] px-5 py-3.5">
+          <i className="fas fa-triangle-exclamation text-[13px] text-[var(--gold)] mt-1" aria-hidden="true" />
+          <p className="text-label text-[var(--text)]">{pageError}</p>
         </div>
       )}
 
-      {/* Status summary cards */}
-      {!(loading && !data) && (
-        <div className="grid grid-cols-3 gap-4 mb-6">
-          {[
-            { label: 'Total Students', value: totalStudents,      icon: 'fas fa-users',      bg: 'bg-blue-600'    },
-            { label: 'Active',         value: activeCount,        icon: 'fas fa-bolt',        bg: 'bg-emerald-600' },
-            { label: 'Inactive',       value: inactiveCount,      icon: 'fas fa-user-clock',  bg: 'bg-slate-500'   },
-          ].map(c => (
-            <div key={c.label} className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm flex items-center gap-4">
-              <div className={`w-12 h-12 rounded-xl ${c.bg} flex items-center justify-center shrink-0`}>
-                <i className={`${c.icon} text-white text-[16px]`} />
-              </div>
-              <div>
-                <p className="text-[28px] font-extrabold text-slate-900 leading-none">{c.value}</p>
-                <p className="text-[13px] text-slate-500 mt-0.5 font-medium">{c.label}</p>
-              </div>
-            </div>
+      {showTabs && (
+        <div className="flex flex-wrap gap-2 mb-4">
+          {tabs.map(t => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => { setStatusFilter(t.key); setPage(1); setDeleteId(null); }}
+              className={`rounded-control px-3.5 py-2 text-caption font-semibold transition-colors ${
+                statusFilter === t.key
+                  ? 'bg-[var(--accent)] text-white'
+                  : 'border border-[var(--border)] text-[var(--text)] hover:bg-[var(--surface)]'
+              }`}
+            >
+              {t.label}
+            </button>
           ))}
         </div>
       )}
 
-      {/* Search + Status filter */}
-      <div className="flex items-center gap-3 mb-5">
-        <div className="flex-1 relative">
-          <i className="fas fa-search absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-[13px]" />
-          <input
-            value={searchInput}
-            onChange={e => setSearchInput(e.target.value)}
-            placeholder="Search by name or email…"
-            className="w-full pl-9 pr-4 py-3 bg-white border border-slate-200 rounded-xl text-[14px] text-slate-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all"
-          />
-        </div>
-        <select
-          value={statusFilter}
-          onChange={e => { setStatusFilter(e.target.value); setPage(1); }}
-          className="px-4 py-3 bg-white border border-slate-200 rounded-xl text-[14px] text-slate-700 outline-none focus:border-indigo-400 transition-all"
-        >
-          <option value="ALL">All statuses</option>
-          <option value="ACTIVE">Active</option>
-          <option value="INACTIVE">Inactive</option>
-        </select>
+      <div className="relative mb-5 max-w-[420px]">
+        <i className="fas fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-[13px] text-[var(--muted2)]" aria-hidden="true" />
+        <input
+          value={searchInput}
+          onChange={e => setSearchInput(e.target.value)}
+          placeholder="Search by name or email"
+          className="w-full rounded-control border border-[var(--border)] bg-[var(--card)] pl-10 pr-4 py-2.5 text-label text-[var(--text)] outline-none transition-colors focus:border-[var(--muted)] placeholder:text-[var(--muted2)]"
+        />
       </div>
 
       {loading && !data ? (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-          {[1,2,3,4,5].map(i => (
-            <div key={i} className="flex items-center gap-4 px-6 py-4 border-b border-slate-100 last:border-0">
-              <div className="w-9 h-9 rounded-full bg-slate-100 animate-pulse shrink-0" />
-              <div className="flex-1 space-y-2"><div className="h-4 w-32 bg-slate-100 rounded animate-pulse" /><div className="h-3.5 w-48 bg-slate-100 rounded animate-pulse" /></div>
-              <div className="h-6 w-16 bg-slate-100 rounded-full animate-pulse" />
-              <div className="h-3.5 w-20 bg-slate-100 rounded animate-pulse" />
-            </div>
+        <div className="space-y-3">
+          {[1, 2, 3, 4].map(i => (
+            <div key={i} className="h-[72px] rounded-card border border-[var(--border)] bg-[var(--card)] animate-pulse" />
           ))}
         </div>
       ) : paged.length === 0 ? (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col items-center justify-center py-20 text-slate-400">
-          <div className="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center mb-4">
-            <i className="fas fa-users text-2xl text-slate-400" />
-          </div>
-          <p className="text-[17px] font-semibold text-slate-600">{search || statusFilter !== 'ALL' ? 'No matching students' : 'No students yet'}</p>
-          <p className="text-[14px] mt-1">{search || statusFilter !== 'ALL' ? 'Try adjusting your filters.' : 'Students will appear here once they register.'}</p>
+        <div className="rounded-card border border-[var(--border)] bg-[var(--card)] p-10 text-center">
+          <p className="text-label font-semibold text-[var(--text)]">
+            {search || statusFilter !== 'ALL' ? 'Nothing matches those filters' : 'No students yet'}
+          </p>
+          <p className="text-caption text-[var(--muted)] mt-1">
+            {search || statusFilter !== 'ALL' ? 'Clear the search or choose a different filter.' : 'Students appear here once they register.'}
+          </p>
         </div>
       ) : (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+        <div className="rounded-card border border-[var(--border)] bg-[var(--card)] overflow-hidden">
           <table className="w-full">
             <thead>
-              <tr className="border-b border-slate-200 bg-slate-50/80">
-                <th className="text-left px-6 py-4 text-[12px] font-semibold text-slate-500 uppercase tracking-widest w-10">#</th>
-                <th className="text-left px-4 py-4 text-[12px] font-semibold text-slate-500 uppercase tracking-widest">Student</th>
-                <th className="text-left px-4 py-4 text-[12px] font-semibold text-slate-500 uppercase tracking-widest w-28">Status</th>
-                <th className="text-left px-4 py-4 text-[12px] font-semibold text-slate-500 uppercase tracking-widest w-28">Questions</th>
-                <th className="text-left px-4 py-4 text-[12px] font-semibold text-slate-500 uppercase tracking-widest w-32">Joined</th>
-                <th className="text-right px-6 py-4 text-[12px] font-semibold text-slate-500 uppercase tracking-widest w-20">Actions</th>
+              {/* Lower case, not uppercase and letter-spaced, and no "#"
+                  column: that was the row's position, not anything about the
+                  student. */}
+              <tr className="border-b border-[var(--border)] text-left text-caption text-[var(--muted)]">
+                <th className="px-6 py-3 font-medium">Student</th>
+                <th className="px-4 py-3 font-medium w-48">Questions asked</th>
+                <th className="px-4 py-3 font-medium w-36">Joined</th>
+                <th className="px-6 py-3 font-medium w-44">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
-              {paged.map((student, i) => {
-                const color = COLORS[((page - 1) * PAGE_SIZE + i) % COLORS.length];
-                const sc = STATUS_CONFIG[student.status];
-                return (
-                  <tr key={student.id} className={cn('transition-colors', deleteId === student.id ? 'bg-red-50' : 'hover:bg-slate-50/60')}>
-                    <td className="px-6 py-4 text-[13px] text-slate-400 tabular-nums">{(page - 1) * PAGE_SIZE + i + 1}</td>
-                    <td className="px-4 py-4">
-                      <div className="flex items-center gap-3">
-                        <div className={`w-9 h-9 rounded-full flex items-center justify-center text-[13px] font-bold shrink-0 ${color}`}>
-                          {student.name.charAt(0).toUpperCase()}
-                        </div>
-                        <div className="min-w-0">
-                          <p className="text-[15px] font-semibold text-slate-800">{student.name}</p>
-                          <p className="text-[13px] text-slate-400 truncate">{student.email}</p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-4 py-4">
-                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px] font-semibold border ${sc.bg} ${sc.border} ${sc.text}`}>
-                        <span className={`w-1.5 h-1.5 rounded-full ${sc.dot}`} />
-                        {sc.label}
-                      </span>
-                    </td>
-                    <td className="px-4 py-4">
-                      <div className="flex items-center gap-1.5">
-                        <i className="fas fa-comments text-[11px] text-slate-400" />
-                        <span className="text-[15px] font-semibold text-slate-700 tabular-nums">{student.questionCount}</span>
-                        <span className="text-[13px] text-slate-400">asked</span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-4 text-[13px] text-slate-400">
-                      {new Date(student.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex justify-end items-center gap-1.5">
-                        {deleteId === student.id ? (
-                          <>
-                            <span className="text-[13px] text-red-600 font-medium mr-1">Delete?</span>
-                            <button
-                              onClick={() => handleDelete(student.id)}
-                              className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-[13px] font-semibold hover:bg-red-700 transition-colors"
-                            >
-                              Yes, delete
-                            </button>
-                            <button
-                              onClick={() => setDeleteId(null)}
-                              className="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 text-[13px] font-semibold hover:bg-slate-200 transition-colors border border-slate-200"
-                            >
-                              Cancel
-                            </button>
-                          </>
-                        ) : (
-                          <>
-                            <button
-                              onClick={() => router.push(`/admin/students/${student.id}`)}
-                              className="px-3 py-1.5 rounded-lg bg-indigo-50 text-indigo-700 text-[13px] font-semibold hover:bg-indigo-100 active:scale-95 transition-all border border-indigo-100 flex items-center gap-1"
-                            >
-                              <i className="fas fa-route text-[11px]" /> View
-                            </button>
-                            <button
-                              onClick={() => handleDelete(student.id)}
-                              className="px-3 py-1.5 rounded-lg bg-red-50 text-red-600 text-[13px] font-semibold hover:bg-red-100 active:scale-95 transition-all border border-red-100 flex items-center gap-1"
-                            >
-                              <i className="fas fa-trash text-[11px]" /> Delete
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
+            <tbody className="divide-y divide-[var(--border)]">
+              {paged.map(student => (
+                <tr key={student.id}>
+                  <td className="px-6 py-4">
+                    <p className="text-label font-semibold text-[var(--text)]">{student.name}</p>
+                    <p className="text-caption text-[var(--muted)] mt-0.5">{student.email}</p>
+                  </td>
+                  {/* "Active" and "Inactive" only ever meant "has asked
+                      something" or "has not", so the count says it. */}
+                  <td className="px-4 py-4 text-label text-[var(--text)] tabular-nums">
+                    {student.questionCount > 0
+                      ? student.questionCount.toLocaleString()
+                      : <span className="text-[var(--muted)]">None yet</span>}
+                  </td>
+                  <td className="px-4 py-4 text-caption text-[var(--muted)] whitespace-nowrap">
+                    {new Date(student.createdAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="flex gap-2">
+                      <button onClick={() => router.push(`/admin/students/${student.id}`)} className={outlineBtn}>
+                        View
+                      </button>
+                      <button onClick={() => startDelete(student.id)} className={outlineBtn}>
+                        Delete
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
 
-          {/* Footer */}
-          <div className="px-6 py-3.5 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between">
-            <span className="text-[13px] text-slate-400">{total} student{total !== 1 ? 's' : ''}</span>
-            {totalPages > 1 && (
-              <div className="flex items-center gap-1.5">
-                <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
-                  className="w-8 h-8 rounded-lg border border-slate-200 flex items-center justify-center text-slate-500 hover:bg-slate-100 disabled:opacity-30 text-[12px]">
-                  <i className="fas fa-chevron-left" />
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between gap-4 px-6 py-4 border-t border-[var(--border)]">
+              <span className="text-caption text-[var(--muted)] tabular-nums">
+                Page {page} of {totalPages} · {total.toLocaleString()} {total === 1 ? 'student' : 'students'}
+              </span>
+              <div className="flex gap-2">
+                <button onClick={() => { setPage(p => Math.max(1, p - 1)); setDeleteId(null); }} disabled={page === 1} className={outlineBtn}>
+                  Previous
                 </button>
-                {Array.from({ length: totalPages }, (_, i) => i + 1).map(p => (
-                  <button key={p} onClick={() => setPage(p)}
-                    className={`w-8 h-8 rounded-lg text-[13px] font-semibold border transition-colors ${p === page ? 'bg-indigo-600 text-white border-indigo-600' : 'border-slate-200 text-slate-600 hover:bg-slate-100'}`}>
-                    {p}
-                  </button>
-                ))}
-                <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}
-                  className="w-8 h-8 rounded-lg border border-slate-200 flex items-center justify-center text-slate-500 hover:bg-slate-100 disabled:opacity-30 text-[12px]">
-                  <i className="fas fa-chevron-right" />
+                <button onClick={() => { setPage(p => Math.min(totalPages, p + 1)); setDeleteId(null); }} disabled={page === totalPages} className={outlineBtn}>
+                  Next
                 </button>
               </div>
-            )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {!loading && paged.length > 0 && totalPages === 1 && (
+        <p className="text-caption text-[var(--muted)] mt-4 tabular-nums">
+          {totalStudents.toLocaleString()} registered · {activeCount.toLocaleString()} have asked a question
+        </p>
+      )}
+
+      {/* A dialog, not an expanded table row. Expanding the row pushed the
+          table apart and left the question sitting under a column heading. */}
+      {pendingStudent && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(22,26,31,0.45)] p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setDeleteId(null)}
+        >
+          <div
+            className="w-full max-w-[460px] rounded-card border border-[var(--border)] bg-[var(--card)] p-7 shadow-[0_16px_48px_rgba(22,26,31,0.18)]"
+            onClick={e => e.stopPropagation()}
+          >
+            <h2 className="text-h3 font-semibold text-[var(--text)]">Delete {pendingStudent.name}?</h2>
+            <p className="text-label text-[var(--muted)] mt-2 leading-relaxed">
+              {pendingStudent.questionCount > 0
+                ? `Their ${pendingStudent.questionCount.toLocaleString()} ${pendingStudent.questionCount === 1 ? 'question is' : 'questions are'} deleted too, and they cannot log in again. This cannot be undone.`
+                : 'They cannot log in again. This cannot be undone.'}
+            </p>
+            <div className="flex flex-wrap gap-2 mt-5">
+              <button
+                type="button"
+                disabled={deleting}
+                onClick={() => void confirmDelete(pendingStudent)}
+                className="h-10 rounded-control bg-[var(--accent)] px-5 text-label font-semibold text-white hover:bg-[var(--accent-deep)] transition-colors disabled:opacity-50"
+              >
+                {deleting ? 'Deleting…' : 'Delete Permanently'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setDeleteId(null)}
+                className="h-10 rounded-control border border-[var(--border)] px-4 text-label font-semibold text-[var(--text)] hover:bg-[var(--surface)] transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         </div>
       )}

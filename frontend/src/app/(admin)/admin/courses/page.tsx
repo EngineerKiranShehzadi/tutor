@@ -8,7 +8,7 @@ import {
 import { DBCourse } from '@/types/course';
 import { AdminPageHero } from '@/components/admin/AdminPageHero';
 
-const inputStyle = 'w-full rounded-control border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-label text-[var(--text)] outline-none transition-colors focus:border-[var(--muted)]';
+const inputStyle = 'w-full rounded-control border border-[var(--border)] bg-[var(--card)] px-3.5 py-2.5 text-label text-[var(--text)] outline-none transition-colors focus:border-[var(--muted)]';
 const outlineBtn = 'rounded-control border border-[var(--border)] px-3.5 py-2 text-caption font-semibold text-[var(--text)] hover:bg-[var(--surface)] transition-colors';
 const initial = { title: '', subtitle: '', description: '' };
 

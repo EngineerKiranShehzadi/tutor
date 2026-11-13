@@ -11,7 +11,7 @@ import { EmptyState, ErrorState } from '@/components/observability/PhoenixConnec
 import { observabilityApi, ObservabilityApiError } from '@/lib/observability-api';
 import type { OverviewMetrics, TraceSummary } from '@/types/observability';
 
-const CHART_TOOLTIP_STYLE = { borderRadius: 12, border: '1px solid #e2e8f0', fontSize: 13, color: '#334155', padding: '10px 14px', boxShadow: '0 4px 16px rgba(0,0,0,0.08)' };
+const CHART_TOOLTIP_STYLE = { borderRadius: 12, border: '1px solid #e5e3df', fontSize: 13, color: '#1c1f24', padding: '10px 14px', boxShadow: '0 4px 16px rgba(0,0,0,0.08)' };
 function fmtMs(ms: number): string { return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(2)}s`; }
 
 export default function ErrorsPage() {
@@ -51,12 +51,12 @@ export default function ErrorsPage() {
   }, [load]);
 
   return (
-    <div className="max-w-[1500px]">
+    <div className="max-w-[1180px]">
       <ObservabilityHeader subtitle="Focused error analysis across the RAG pipeline." onRefresh={() => load()} refreshing={loading} />
       <ObservabilityTabs />
 
       {error ? (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm"><ErrorState message={error} onRetry={() => load()} /></div>
+        <div className="bg-[var(--card)] rounded-card border border-[var(--border)]"><ErrorState message={error} onRetry={() => load()} /></div>
       ) : (
         <>
           <div className="grid grid-cols-4 gap-5 mb-6">
@@ -67,29 +67,29 @@ export default function ErrorsPage() {
           </div>
 
           <div className="grid grid-cols-2 gap-5 mb-6">
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm">
-              <div className="px-6 pt-5 pb-3"><h2 className="text-[15px] font-bold text-slate-900">Errors over time</h2></div>
+            <div className="bg-[var(--card)] rounded-card border border-[var(--border)]">
+              <div className="px-6 pt-5 pb-3"><h2 className="text-label font-semibold text-[var(--text)]">Errors over time</h2></div>
               {(metrics?.timeSeries.length ?? 0) === 0 ? <EmptyState icon="fa-face-smile" title="No errors" message="Nothing to plot — good sign." /> : (
                 <ResponsiveContainer width="100%" height={200}>
                   <BarChart data={metrics!.timeSeries} margin={{ top: 8, right: 20, left: -10, bottom: 8 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
-                    <XAxis dataKey="bucket" tickFormatter={(v) => new Date(v).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })} tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
-                    <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e3df" vertical={false} />
+                    <XAxis dataKey="bucket" tickFormatter={(v) => new Date(v).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })} tick={{ fontSize: 11, fill: '#8e8e92' }} axisLine={false} tickLine={false} />
+                    <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#8e8e92' }} axisLine={false} tickLine={false} />
                     <Tooltip contentStyle={CHART_TOOLTIP_STYLE} labelFormatter={(v) => new Date(v).toLocaleString()} />
-                    <Bar dataKey="errorCount" name="Errors" fill="#ef4444" radius={[6, 6, 0, 0]} />
+                    <Bar dataKey="errorCount" name="Errors" fill="#a35f0d" radius={[6, 6, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               )}
             </div>
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm">
-              <div className="px-6 pt-5 pb-3"><h2 className="text-[15px] font-bold text-slate-900">Errors by code</h2><p className="text-[12px] text-slate-400 mt-0.5">Click to filter the trace list below</p></div>
+            <div className="bg-[var(--card)] rounded-card border border-[var(--border)]">
+              <div className="px-6 pt-5 pb-3"><h2 className="text-label font-semibold text-[var(--text)]">Errors by code</h2><p className="text-caption text-[var(--muted2)] mt-0.5">Click to filter the trace list below</p></div>
               {(metrics?.mostFrequentErrors.length ?? 0) === 0 ? <EmptyState icon="fa-face-smile" title="No errors" message="Nothing to show." /> : (
-                <div className="divide-y divide-slate-50 pb-2">
+                <div className="divide-y divide-[var(--border)] pb-2">
                   {metrics!.mostFrequentErrors.map(e => (
-                    <button key={e.errorCode} onClick={() => router.push(`/admin/rag-traces/errors?code=${encodeURIComponent(e.errorCode)}`)} className={`w-full flex items-center gap-3 px-6 py-2.5 hover:bg-slate-50 transition-colors text-left ${focusCode === e.errorCode ? 'bg-red-50' : ''}`}>
-                      <span className="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0" />
-                      <span className="flex-1 text-[13px] font-mono text-slate-700">{e.errorCode}</span>
-                      <span className="text-[13px] font-bold text-red-600">{e.count}</span>
+                    <button key={e.errorCode} onClick={() => router.push(`/admin/rag-traces/errors?code=${encodeURIComponent(e.errorCode)}`)} className={`w-full flex items-center gap-3 px-6 py-2.5 hover:bg-[var(--surface)] transition-colors text-left ${focusCode === e.errorCode ? 'bg-[var(--gold-soft)]' : ''}`}>
+                      <span className="w-1.5 h-1.5 rounded-full bg-[var(--gold)] shrink-0" />
+                      <span className="flex-1 text-caption font-mono text-[var(--text)]">{e.errorCode}</span>
+                      <span className="text-caption font-semibold text-[var(--gold)]">{e.count}</span>
                     </button>
                   ))}
                 </div>
@@ -97,32 +97,32 @@ export default function ErrorsPage() {
             </div>
           </div>
 
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="bg-[var(--card)] rounded-card border border-[var(--border)] overflow-hidden">
             <div className="px-6 pt-5 pb-3 flex items-center justify-between">
-              <div><h2 className="text-[15px] font-bold text-slate-900">Recent failed traces</h2><p className="text-[12px] text-slate-400 mt-0.5">{focusCode ? `Filtered to ${focusCode}` : 'All error codes'}</p></div>
-              {focusCode && <button onClick={() => router.push('/admin/rag-traces/errors')} className="text-[12px] font-semibold text-slate-500 hover:text-red-600"><i className="fas fa-xmark mr-1" />Clear filter</button>}
+              <div><h2 className="text-label font-semibold text-[var(--text)]">Recent failed traces</h2><p className="text-caption text-[var(--muted2)] mt-0.5">{focusCode ? `Filtered to ${focusCode}` : 'All error codes'}</p></div>
+              {focusCode && <button onClick={() => router.push('/admin/rag-traces/errors')} className="text-caption font-semibold text-[var(--muted)] hover:text-[var(--gold)]"><i className="fas fa-xmark mr-1" />Clear filter</button>}
             </div>
-            {loading ? <div className="p-6 space-y-3">{[1, 2, 3].map(i => <div key={i} className="h-10 bg-slate-100 rounded-lg animate-pulse" />)}</div>
+            {loading ? <div className="p-6 space-y-3">{[1, 2, 3].map(i => <div key={i} className="h-10 bg-[var(--surface)] rounded-card animate-pulse" />)}</div>
               : failedTraces.length === 0 ? (scan.limitReached
                 ? <EmptyState icon="fa-magnifying-glass" title="None in the latest traces" message={`No failed trace${focusCode ? ` with ${focusCode}` : ''} among the latest ${scan.scanned} traces checked. Older failures are counted above but not listed here.`} />
                 : <EmptyState icon="fa-face-smile" title="No failed traces" message="Nothing to show for this filter." />)
               : (
                 <table className="w-full">
-                  <thead><tr className="border-b border-slate-200 bg-slate-50/80">
-                    <th className="text-left px-5 py-3 text-[11px] font-semibold text-slate-500 uppercase">Time</th>
-                    <th className="text-left px-4 py-3 text-[11px] font-semibold text-slate-500 uppercase">Route</th>
-                    <th className="text-left px-4 py-3 text-[11px] font-semibold text-slate-500 uppercase">Error</th>
-                    <th className="text-left px-4 py-3 text-[11px] font-semibold text-slate-500 uppercase">Duration</th>
-                    <th className="text-left px-4 py-3 text-[11px] font-semibold text-slate-500 uppercase">Trace</th>
+                  <thead><tr className="border-b border-[var(--border)] bg-[var(--surface)]">
+                    <th className="text-left px-5 py-3 text-[11px] font-semibold text-[var(--muted)]">Time</th>
+                    <th className="text-left px-4 py-3 text-[11px] font-semibold text-[var(--muted)]">Route</th>
+                    <th className="text-left px-4 py-3 text-[11px] font-semibold text-[var(--muted)]">Error</th>
+                    <th className="text-left px-4 py-3 text-[11px] font-semibold text-[var(--muted)]">Duration</th>
+                    <th className="text-left px-4 py-3 text-[11px] font-semibold text-[var(--muted)]">Trace</th>
                   </tr></thead>
-                  <tbody className="divide-y divide-slate-100">
+                  <tbody className="divide-y divide-[var(--border)]">
                     {failedTraces.map(t => (
-                      <tr key={t.traceId} onClick={() => router.push(`/admin/rag-traces/traces/${encodeURIComponent(t.traceId)}`)} className="hover:bg-slate-50/60 cursor-pointer transition-colors">
-                        <td className="px-5 py-3 text-[12px] text-slate-500">{new Date(t.timestamp).toLocaleString()}</td>
-                        <td className="px-4 py-3 text-[12px] font-medium text-slate-600">{t.route ?? '—'}</td>
-                        <td className="px-4 py-3"><TraceStatusBadge status={t.status} /> <span className="text-[11px] font-mono text-slate-500 ml-1">{t.errorCode}</span></td>
-                        <td className="px-4 py-3 text-[13px] text-slate-500 tabular-nums">{fmtMs(t.durationMs)}</td>
-                        <td className="px-4 py-3 text-[11px] text-slate-400 font-mono truncate max-w-[140px]">{t.traceId}</td>
+                      <tr key={t.traceId} onClick={() => router.push(`/admin/rag-traces/traces/${encodeURIComponent(t.traceId)}`)} className="hover:bg-[var(--surface)] cursor-pointer transition-colors">
+                        <td className="px-5 py-3 text-caption text-[var(--muted)]">{new Date(t.timestamp).toLocaleString()}</td>
+                        <td className="px-4 py-3 text-caption font-medium text-[var(--muted)]">{t.route ?? '—'}</td>
+                        <td className="px-4 py-3"><TraceStatusBadge status={t.status} /> <span className="text-[11px] font-mono text-[var(--muted)] ml-1">{t.errorCode}</span></td>
+                        <td className="px-4 py-3 text-caption text-[var(--muted)] tabular-nums">{fmtMs(t.durationMs)}</td>
+                        <td className="px-4 py-3 text-[11px] text-[var(--muted2)] font-mono truncate max-w-[140px]">{t.traceId}</td>
                       </tr>
                     ))}
                   </tbody>

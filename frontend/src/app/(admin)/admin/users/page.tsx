@@ -141,19 +141,19 @@ export default function AdminUsersPage() {
     : `${totalUsers} user${totalUsers !== 1 ? 's' : ''} · ${studentCount} student${studentCount !== 1 ? 's' : ''} · ${adminCount} admin${adminCount !== 1 ? 's' : ''}`;
 
   return (
-    <div className="max-w-[1500px]">
+    <div className="max-w-[1180px]">
       <AdminPageHero
         icon="fas fa-users-gear"
-        iconGradient="from-cyan-500 to-blue-600"
+        iconGradient=" "
         title="User Management"
         subtitle={subtitle}
         action={
           <button
             onClick={() => { void handleExport(); }}
             disabled={loading || exporting || total === 0}
-            className="flex items-center gap-2 px-4 py-2.5 bg-white/15 text-white border border-white/25 backdrop-blur-sm rounded-xl text-[14px] font-semibold hover:bg-white/25 transition-all disabled:opacity-40"
+            className="flex items-center gap-2 px-4 py-2.5 bg-white/15 text-white border border-white/25 rounded-card text-label font-semibold hover:bg-white/25 transition-colors disabled:opacity-40"
           >
-            <i className={`fas ${exporting ? 'fa-spinner fa-spin' : 'fa-download'} text-[12px]`} /> {exporting ? 'Exporting…' : 'Export CSV'}
+            <i className={`fas ${exporting ? 'fa-spinner fa-spin' : 'fa-download'} text-caption`} /> {exporting ? 'Exporting…' : 'Export CSV'}
           </button>
         }
       />
@@ -161,27 +161,27 @@ export default function AdminUsersPage() {
       {/* Search + role filter */}
       <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-5">
         <div className="flex-1 relative">
-          <i className="fas fa-search absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-[13px]" />
+          <i className="fas fa-search absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--muted2)] text-caption" />
           <input
             value={searchInput}
             onChange={e => setSearchInput(e.target.value)}
             placeholder="Search by name or email…"
-            className="w-full pl-9 pr-4 py-3 bg-white border border-slate-200 rounded-xl text-[14px] text-slate-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all"
+            className="w-full pl-9 pr-4 py-3 bg-[var(--card)] border border-[var(--border)] rounded-card text-label text-[var(--text)] outline-none focus:border-[var(--accent)] transition-colors"
           />
         </div>
-        <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl p-1.5 shrink-0">
+        <div className="flex items-center gap-1.5 bg-[var(--card)] border border-[var(--border)] rounded-card p-1.5 shrink-0">
           {tabs.map(t => (
             <button
               key={t.key}
               onClick={() => { setRoleFilter(t.key); setPage(1); }}
-              className={`px-3.5 py-2 rounded-lg text-[13px] font-semibold transition-colors ${
+              className={`px-3.5 py-2 rounded-card text-caption font-semibold transition-colors ${
                 roleFilter === t.key
-                  ? 'bg-indigo-600 text-white'
-                  : 'text-slate-600 hover:bg-slate-100'
+                  ? 'bg-[var(--accent)] text-white'
+                  : 'text-[var(--muted)] hover:bg-[var(--surface)]'
               }`}
             >
               {t.label}
-              <span className={`ml-1.5 tabular-nums ${roleFilter === t.key ? 'text-white/70' : 'text-slate-400'}`}>
+              <span className={`ml-1.5 tabular-nums ${roleFilter === t.key ? 'text-white/70' : 'text-[var(--muted2)]'}`}>
                 {t.count}
               </span>
             </button>
@@ -190,85 +190,85 @@ export default function AdminUsersPage() {
       </div>
 
       {loading && !data ? (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+        <div className="bg-[var(--card)] rounded-card border border-[var(--border)] overflow-hidden">
           {[1,2,3,4,5].map(i => (
-            <div key={i} className="flex items-center gap-4 px-6 py-4 border-b border-slate-100 last:border-0">
-              <div className="w-9 h-9 rounded-full bg-slate-100 animate-pulse shrink-0" />
-              <div className="flex-1 space-y-2"><div className="h-4 w-32 bg-slate-100 rounded animate-pulse" /><div className="h-3.5 w-48 bg-slate-100 rounded animate-pulse" /></div>
-              <div className="w-16 h-6 bg-slate-100 rounded-full animate-pulse" />
-              <div className="w-20 h-8 bg-slate-100 rounded-lg animate-pulse" />
+            <div key={i} className="flex items-center gap-4 px-6 py-4 border-b border-[var(--border)] last:border-0">
+              <div className="w-9 h-9 rounded-full bg-[var(--surface)] animate-pulse shrink-0" />
+              <div className="flex-1 space-y-2"><div className="h-4 w-32 bg-[var(--surface)] rounded animate-pulse" /><div className="h-3.5 w-48 bg-[var(--surface)] rounded animate-pulse" /></div>
+              <div className="w-16 h-6 bg-[var(--surface)] rounded-full animate-pulse" />
+              <div className="w-20 h-8 bg-[var(--surface)] rounded-card animate-pulse" />
             </div>
           ))}
         </div>
       ) : paged.length === 0 ? (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col items-center justify-center py-20 text-slate-400">
-          <i className="fas fa-users text-3xl mb-3" />
-          <p className="text-[17px] font-semibold text-slate-600">No users found</p>
-          <p className="text-[14px] mt-1">
+        <div className="bg-[var(--card)] rounded-card border border-[var(--border)] flex flex-col items-center justify-center py-20 text-[var(--muted2)]">
+          <i className="fas fa-users text-display mb-3" />
+          <p className="text-h3 font-semibold text-[var(--muted)]">No users found</p>
+          <p className="text-label mt-1">
             {search ? 'Try adjusting your search.' : 'There are no users with this role yet.'}
           </p>
         </div>
       ) : (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+        <div className="bg-[var(--card)] rounded-card border border-[var(--border)] overflow-hidden">
           <table className="w-full">
             <thead>
-              <tr className="border-b border-slate-200 bg-slate-50/80">
-                <th className="text-left px-6 py-4 text-[12px] font-semibold text-slate-500 uppercase tracking-widest">#</th>
-                <th className="text-left px-4 py-4 text-[12px] font-semibold text-slate-500 uppercase tracking-widest">User</th>
-                <th className="text-left px-4 py-4 text-[12px] font-semibold text-slate-500 uppercase tracking-widest w-32">Role</th>
-                <th className="text-left px-4 py-4 text-[12px] font-semibold text-slate-500 uppercase tracking-widest">Status</th>
-                <th className="text-left px-4 py-4 text-[12px] font-semibold text-slate-500 uppercase tracking-widest w-32">Joined</th>
-                <th className="text-right px-6 py-4 text-[12px] font-semibold text-slate-500 uppercase tracking-widest w-44">Actions</th>
+              <tr className="border-b border-[var(--border)] bg-[var(--surface)]">
+                <th className="text-left px-6 py-4 text-caption font-semibold text-[var(--muted)]">#</th>
+                <th className="text-left px-4 py-4 text-caption font-semibold text-[var(--muted)]">User</th>
+                <th className="text-left px-4 py-4 text-caption font-semibold text-[var(--muted)] w-32">Role</th>
+                <th className="text-left px-4 py-4 text-caption font-semibold text-[var(--muted)]">Status</th>
+                <th className="text-left px-4 py-4 text-caption font-semibold text-[var(--muted)] w-32">Joined</th>
+                <th className="text-right px-6 py-4 text-caption font-semibold text-[var(--muted)] w-44">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-[var(--border)]">
               {paged.map((u, i) => {
                 const self  = isSelf(u);
                 const admin = u.role === 'ADMIN';
                 return (
-                  <tr key={u.id} className={`transition-colors group ${self ? 'bg-indigo-50/40' : 'hover:bg-slate-50/60'}`}>
-                    <td className="px-6 py-4 text-[13px] text-slate-400 tabular-nums">{(safePage - 1) * PAGE_SIZE + i + 1}</td>
+                  <tr key={u.id} className={`transition-colors group ${self ? 'bg-[var(--surface)]' : 'hover:bg-[var(--surface)]'}`}>
+                    <td className="px-6 py-4 text-caption text-[var(--muted2)] tabular-nums">{(safePage - 1) * PAGE_SIZE + i + 1}</td>
                     <td className="px-4 py-4">
                       <div className="flex items-center gap-3">
-                        <div className={`w-9 h-9 rounded-full flex items-center justify-center text-[13px] font-bold shrink-0 ${
-                          admin ? 'bg-violet-100 text-violet-700' : 'bg-indigo-100 text-indigo-700'
+                        <div className={`w-9 h-9 rounded-full flex items-center justify-center text-caption font-semibold shrink-0 ${
+                          admin ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : 'bg-[var(--surface)] text-[var(--muted)]'
                         }`}>
                           {u.name.charAt(0).toUpperCase()}
                         </div>
                         <div className="min-w-0">
-                          <p className="text-[15px] font-semibold text-slate-800 truncate flex items-center gap-2">
+                          <p className="text-label font-semibold text-[var(--text)] truncate flex items-center gap-2">
                             {u.name}
                             {self && (
-                              <span className="text-[11px] font-bold text-indigo-600 bg-indigo-100 px-1.5 py-0.5 rounded">YOU</span>
+                              <span className="text-[11px] font-medium text-[var(--muted)]">(you)</span>
                             )}
                           </p>
-                          <p className="text-[13px] text-slate-400 truncate">{u.email}</p>
+                          <p className="text-caption text-[var(--muted2)] truncate">{u.email}</p>
                         </div>
                       </div>
                     </td>
                     <td className="px-4 py-4">
                       {admin ? (
-                        <span className="inline-flex items-center gap-1 text-[12px] font-semibold text-violet-700 bg-violet-50 border border-violet-200 px-2.5 py-1 rounded-full">
+                        <span className="inline-flex items-center gap-1 text-caption font-semibold text-[var(--accent)] bg-[var(--accent-soft)] border border-[var(--border)] px-2.5 py-1 rounded-full">
                           <i className="fas fa-user-shield text-[10px]" /> Admin
                         </span>
                       ) : (
-                        <span className="inline-flex items-center gap-1 text-[12px] font-semibold text-slate-600 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-full">
+                        <span className="inline-flex items-center gap-1 text-caption font-semibold text-[var(--muted)] bg-[var(--surface)] border border-[var(--border)] px-2.5 py-1 rounded-full">
                           <i className="fas fa-user text-[10px]" /> Student
                         </span>
                       )}
                     </td>
                     <td className="px-4 py-4">
                       {u.isVerified ? (
-                        <span className="inline-flex items-center gap-1 text-[12px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full">
+                        <span className="inline-flex items-center gap-1 text-caption font-semibold text-[var(--accent)] bg-[var(--accent-soft)] border border-[var(--border)] px-2.5 py-1 rounded-full">
                           <i className="fas fa-circle-check text-[10px]" /> Verified
                         </span>
                       ) : (
-                        <span className="inline-flex items-center gap-1 text-[12px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-full">
+                        <span className="inline-flex items-center gap-1 text-caption font-semibold text-[var(--gold)] bg-[var(--gold-soft)] border border-[var(--border)] px-2.5 py-1 rounded-full">
                           <i className="fas fa-clock text-[10px]" /> Pending
                         </span>
                       )}
                     </td>
-                    <td className="px-4 py-4 text-[13px] text-slate-400">
+                    <td className="px-4 py-4 text-caption text-[var(--muted2)]">
                       {new Date(u.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
                     </td>
                     <td className="px-6 py-4">
@@ -277,7 +277,7 @@ export default function AdminUsersPage() {
                            refuses it as well; saying so here is clearer than
                            offering a button that always errors. */
                         <div className="flex items-center justify-end">
-                          <span className="text-[12px] text-slate-400 italic">Your account</span>
+                          <span className="text-caption text-[var(--muted2)] italic">Your account</span>
                         </div>
                       ) : (
                         <div className="flex items-center justify-end gap-1.5 opacity-70 group-hover:opacity-100 transition-opacity">
@@ -285,10 +285,10 @@ export default function AdminUsersPage() {
                             onClick={() => handleRoleToggle(u)}
                             disabled={updatingId === u.id}
                             title={admin ? 'Change to Student' : 'Change to Admin'}
-                            className={`px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-colors border disabled:opacity-40 ${
+                            className={`px-3 py-1.5 rounded-card text-caption font-semibold transition-colors border disabled:opacity-40 ${
                               admin
-                                ? 'bg-slate-50 text-slate-700 hover:bg-slate-100 border-slate-200'
-                                : 'bg-violet-50 text-violet-700 hover:bg-violet-100 border-violet-100'
+                                ? 'bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface)] border-[var(--border)]'
+                                : 'bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent-soft)] border-[var(--border)]'
                             }`}
                           >
                             {updatingId === u.id
@@ -299,7 +299,7 @@ export default function AdminUsersPage() {
                           <button
                             onClick={() => handleDelete(u)}
                             title="Delete user"
-                            className="px-3 py-1.5 rounded-lg bg-red-50 text-red-600 text-[12px] font-semibold hover:bg-red-100 transition-colors border border-red-100"
+                            className="px-3 py-1.5 rounded-card bg-[var(--gold-soft)] text-[var(--gold)] text-caption font-semibold hover:bg-[var(--gold-soft)] transition-colors border border-[var(--border)]"
                           >
                             <i className="fas fa-trash text-[11px]" />
                           </button>
@@ -313,22 +313,22 @@ export default function AdminUsersPage() {
           </table>
 
           {/* Footer */}
-          <div className="px-6 py-3.5 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between">
-            <span className="text-[13px] text-slate-400">{total} user{total !== 1 ? 's' : ''}</span>
+          <div className="px-6 py-3.5 border-t border-[var(--border)] bg-[var(--surface)] flex items-center justify-between">
+            <span className="text-caption text-[var(--muted2)]">{total} user{total !== 1 ? 's' : ''}</span>
             {totalPages > 1 && (
               <div className="flex items-center gap-1.5">
                 <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={safePage === 1}
-                  className="w-8 h-8 rounded-lg border border-slate-200 flex items-center justify-center text-slate-500 hover:bg-slate-100 disabled:opacity-30 text-[12px]">
+                  className="w-8 h-8 rounded-card border border-[var(--border)] flex items-center justify-center text-[var(--muted)] hover:bg-[var(--surface)] disabled:opacity-30 text-caption">
                   <i className="fas fa-chevron-left" />
                 </button>
                 {Array.from({ length: totalPages }, (_, i) => i + 1).map(p => (
                   <button key={p} onClick={() => setPage(p)}
-                    className={`w-8 h-8 rounded-lg text-[13px] font-semibold border transition-colors ${p === safePage ? 'bg-indigo-600 text-white border-indigo-600' : 'border-slate-200 text-slate-600 hover:bg-slate-100'}`}>
+                    className={`w-8 h-8 rounded-card text-caption font-semibold border transition-colors ${p === safePage ? 'bg-[var(--accent)] text-white border-[var(--accent)]' : 'border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface)]'}`}>
                     {p}
                   </button>
                 ))}
                 <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={safePage === totalPages}
-                  className="w-8 h-8 rounded-lg border border-slate-200 flex items-center justify-center text-slate-500 hover:bg-slate-100 disabled:opacity-30 text-[12px]">
+                  className="w-8 h-8 rounded-card border border-[var(--border)] flex items-center justify-center text-[var(--muted)] hover:bg-[var(--surface)] disabled:opacity-30 text-caption">
                   <i className="fas fa-chevron-right" />
                 </button>
               </div>

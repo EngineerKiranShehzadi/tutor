@@ -64,52 +64,52 @@ export default function SpansExplorerPage() {
   const goPrev = () => { if (pageIndex > 0) setPageIndex(i => i - 1); };
 
   return (
-    <div className="max-w-[1500px]">
+    <div className="max-w-[1180px]">
       <ObservabilityHeader subtitle="Cross-trace span investigation — find every slow, failed, or model-specific operation across requests." />
       <ObservabilityTabs />
 
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 mb-5 flex flex-wrap items-center gap-3">
-        <select value={spanKind} onChange={(e) => updateFilter('spanKind', e.target.value)} className="text-[13px] rounded-lg border border-slate-200 px-3 py-2.5">
+      <div className="bg-[var(--card)] rounded-card border border-[var(--border)] p-4 mb-5 flex flex-wrap items-center gap-3">
+        <select value={spanKind} onChange={(e) => updateFilter('spanKind', e.target.value)} className="text-caption rounded-card border border-[var(--border)] px-3 py-2.5">
           <option value="">All kinds</option>
           {SPAN_KINDS.map(k => <option key={k} value={k}>{k}</option>)}
         </select>
-        <input value={name} onChange={(e) => updateFilter('name', e.target.value)} placeholder="Span name (e.g. rerank-candidates)" className="text-[13px] rounded-lg border border-slate-200 px-3 py-2.5 flex-1 min-w-[200px]" />
-        <select value={status} onChange={(e) => updateFilter('status', e.target.value)} className="text-[13px] rounded-lg border border-slate-200 px-3 py-2.5">
+        <input value={name} onChange={(e) => updateFilter('name', e.target.value)} placeholder="Span name (e.g. rerank-candidates)" className="text-caption rounded-card border border-[var(--border)] px-3 py-2.5 flex-1 min-w-[200px]" />
+        <select value={status} onChange={(e) => updateFilter('status', e.target.value)} className="text-caption rounded-card border border-[var(--border)] px-3 py-2.5">
           <option value="">All statuses</option>
           <option value="OK">OK</option>
           <option value="ERROR">Error</option>
         </select>
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+      <div className="bg-[var(--card)] rounded-card border border-[var(--border)] overflow-hidden">
         {error ? <ErrorState message={error} onRetry={() => load(cursor)} />
-          : loading ? <div className="p-6 space-y-3">{[1, 2, 3, 4, 5].map(i => <div key={i} className="h-9 bg-slate-100 rounded-lg animate-pulse" />)}</div>
+          : loading ? <div className="p-6 space-y-3">{[1, 2, 3, 4, 5].map(i => <div key={i} className="h-9 bg-[var(--surface)] rounded-card animate-pulse" />)}</div>
           : spans.length === 0 ? <EmptyState icon="fa-layer-group" title="No spans match these filters" message="Try a different span kind or clear the filters." />
           : (
             <>
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead>
-                    <tr className="border-b border-slate-200 bg-slate-50/80">
-                      <th className="text-left px-5 py-3.5 text-[11px] font-semibold text-slate-500 uppercase tracking-widest">Time</th>
-                      <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-slate-500 uppercase tracking-widest">Span</th>
-                      <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-slate-500 uppercase tracking-widest">Kind</th>
-                      <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-slate-500 uppercase tracking-widest">Status</th>
-                      <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-slate-500 uppercase tracking-widest">Duration</th>
-                      <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-slate-500 uppercase tracking-widest">Model</th>
-                      <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-slate-500 uppercase tracking-widest">Trace</th>
+                    <tr className="border-b border-[var(--border)] bg-[var(--surface)]">
+                      <th className="text-left px-5 py-3.5 text-[11px] font-semibold text-[var(--muted)]">Time</th>
+                      <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-[var(--muted)]">Span</th>
+                      <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-[var(--muted)]">Kind</th>
+                      <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-[var(--muted)]">Status</th>
+                      <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-[var(--muted)]">Duration</th>
+                      <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-[var(--muted)]">Model</th>
+                      <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-[var(--muted)]">Trace</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100">
+                  <tbody className="divide-y divide-[var(--border)]">
                     {spans.map(s => (
-                      <tr key={s.spanId} onClick={() => router.push(`/admin/rag-traces/traces/${encodeURIComponent(s.traceId)}?span=${encodeURIComponent(s.spanId)}`)} className="hover:bg-slate-50/60 cursor-pointer transition-colors">
-                        <td className="px-5 py-3 text-[12px] text-slate-500 whitespace-nowrap">{new Date(s.startTime).toLocaleTimeString()}</td>
-                        <td className="px-4 py-3 text-[13px] font-medium text-slate-700">{s.name}</td>
-                        <td className="px-4 py-3 text-[12px] text-slate-500">{s.kind}</td>
+                      <tr key={s.spanId} onClick={() => router.push(`/admin/rag-traces/traces/${encodeURIComponent(s.traceId)}?span=${encodeURIComponent(s.spanId)}`)} className="hover:bg-[var(--surface)] cursor-pointer transition-colors">
+                        <td className="px-5 py-3 text-caption text-[var(--muted)] whitespace-nowrap">{new Date(s.startTime).toLocaleTimeString()}</td>
+                        <td className="px-4 py-3 text-caption font-medium text-[var(--text)]">{s.name}</td>
+                        <td className="px-4 py-3 text-caption text-[var(--muted)]">{s.kind}</td>
                         <td className="px-4 py-3"><TraceStatusBadge status={s.status} /></td>
-                        <td className="px-4 py-3 text-[13px] text-slate-500 tabular-nums">{fmtMs(s.durationMs)}</td>
-                        <td className="px-4 py-3 text-[12px] text-slate-500">{s.model ?? '—'}</td>
-                        <td className="px-4 py-3 text-[11px] text-slate-400 font-mono truncate max-w-[140px]">{s.traceId}</td>
+                        <td className="px-4 py-3 text-caption text-[var(--muted)] tabular-nums">{fmtMs(s.durationMs)}</td>
+                        <td className="px-4 py-3 text-caption text-[var(--muted)]">{s.model ?? '—'}</td>
+                        <td className="px-4 py-3 text-[11px] text-[var(--muted2)] font-mono truncate max-w-[140px]">{s.traceId}</td>
                       </tr>
                     ))}
                   </tbody>

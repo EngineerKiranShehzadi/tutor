@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useApolloClient, useQuery } from '@apollo/client';
 import { GET_LECTURE_STATUS_LIST, GET_RECENT_QUESTIONS_PAGE } from '@/graphql/analytics.queries';
 import { AdminPageHero } from '@/components/admin/AdminPageHero';
@@ -17,20 +18,25 @@ interface RecentQuestion {
 
 interface QuestionPage { items: RecentQuestion[]; total: number; hasMore: boolean }
 
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 15;
 // Export pages through the same server API, 200 rows at a time.
 const EXPORT_PAGE = 200;
 const EXPORT_MAX = 20_000;
 
-// Page buttons around the current one, with the first and last always shown.
-function pageWindow(page: number, total: number): (number | '…')[] {
-  const pages = new Set([1, total, page - 2, page - 1, page, page + 1, page + 2].filter(p => p >= 1 && p <= total));
-  const sorted = [...pages].sort((a, b) => a - b);
-  const out: (number | '…')[] = [];
-  sorted.forEach((p, i) => { if (i > 0 && p - sorted[i - 1] > 1) out.push('…'); out.push(p); });
-  return out;
-}
+const outlineBtn = 'rounded-control border border-[var(--border)] px-3.5 py-2 text-caption font-semibold text-[var(--text)] hover:bg-[var(--surface)] transition-colors disabled:opacity-50';
 
+/**
+ * Questions.
+ *
+ * A question is a sentence, and sentences do not fit in a table column: the
+ * old layout truncated the one thing the page exists to show, behind a "#"
+ * column counting rows and a student column repeating the same four names.
+ * It is a list now, in the same shape as Recent Questions on Overview, with
+ * the question first and everything else under it.
+ *
+ * student_questions holds the question only, so the tutor's answer cannot be
+ * shown here; it lives in chat_history and is reached through Tutor Monitor.
+ */
 export default function AdminQuestions() {
   const client = useApolloClient();
   const [searchInput,   setSearchInput]   = useState('');
@@ -58,26 +64,27 @@ export default function AdminQuestions() {
   const total = data?.recentQuestionsPage.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const lectures = [...(lectureData?.lectureStatusList ?? [])].sort((a, b) => a.title.localeCompare(b.title));
-  const filtering = !!search || lectureFilter !== 'ALL';
+  const filtering = Boolean(search) || lectureFilter !== 'ALL';
 
-  const handleLecture = (val: string) => { setLectureFilter(val); setPage(1); };
-
-  // Every question matching the current filters, fetched page by page.
   const exportCSV = async () => {
     setExporting(true); setExportError('');
     try {
-      const rows: unknown[][] = [['Student', 'Email', 'Lecture', 'Question', 'Date']];
+      const all: RecentQuestion[] = [];
       for (let offset = 0; offset < EXPORT_MAX; offset += EXPORT_PAGE) {
         const { data: d } = await client.query<{ recentQuestionsPage: QuestionPage }>({
           query: GET_RECENT_QUESTIONS_PAGE,
           variables: { limit: EXPORT_PAGE, offset, ...filters },
           fetchPolicy: 'network-only',
         });
-        d.recentQuestionsPage.items.forEach(q =>
-          rows.push([q.studentName, q.studentEmail, q.lectureTitle, q.question, new Date(q.createdAt).toLocaleString()]));
+        all.push(...d.recentQuestionsPage.items);
         if (!d.recentQuestionsPage.hasMore) break;
       }
-      downloadCsv('student-questions.csv', rows);
+      const rows = [['Student', 'Email', 'Lecture', 'Question', 'Asked']];
+      all.forEach(q => rows.push([
+        q.studentName, q.studentEmail, q.lectureTitle, q.question,
+        new Date(q.createdAt).toLocaleString(),
+      ]));
+      downloadCsv('questions.csv', rows);
     } catch {
       setExportError('Export failed. Please try again.');
     } finally {
@@ -86,136 +93,105 @@ export default function AdminQuestions() {
   };
 
   return (
-    <div className="max-w-[1500px]">
+    <div className="max-w-[1180px]">
+      {/* Titled "Questions", the same word the sidebar uses. */}
       <AdminPageHero
-        icon="fas fa-comments"
-        iconGradient="from-amber-500 to-orange-600"
-        title="Student Questions"
-        subtitle={loading && !data ? 'Loading…' : `${total} question${total !== 1 ? 's' : ''}${filtering ? ' match' : ' asked'}`}
+        title="Questions"
+        subtitle="Everything students have asked the tutor, newest first."
         action={
           <button
             onClick={() => { void exportCSV(); }}
             disabled={loading || exporting || total === 0}
-            className="flex items-center gap-2 px-4 py-2.5 bg-white/15 text-white border border-white/25 backdrop-blur-sm rounded-xl text-[14px] font-semibold hover:bg-white/25 transition-all disabled:opacity-40"
+            className="h-10 rounded-control bg-[var(--accent)] px-5 text-label font-semibold text-white hover:bg-[var(--accent-deep)] transition-colors disabled:opacity-50"
           >
-            <i className={`fas ${exporting ? 'fa-spinner fa-spin' : 'fa-download'} text-[12px]`} /> {exporting ? 'Exporting…' : 'Export CSV'}
+            {exporting ? 'Exporting…' : 'Export CSV'}
           </button>
         }
       />
 
-      {/* Filters */}
-      <div className="flex items-center gap-3 mb-5">
-        <div className="flex-1 relative">
-          <i className="fas fa-search absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-[13px]" />
+      {exportError && (
+        <div role="alert" className="mb-5 flex items-start gap-2.5 rounded-card border border-[var(--border)] border-l-[3px] border-l-[var(--gold)] bg-[var(--card)] px-5 py-3.5">
+          <i className="fas fa-triangle-exclamation text-[13px] text-[var(--gold)] mt-1" aria-hidden="true" />
+          <p className="text-label text-[var(--text)]">{exportError}</p>
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-3 mb-5">
+        <div className="relative flex-1 min-w-[260px]">
+          <i className="fas fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-[13px] text-[var(--muted2)]" aria-hidden="true" />
           <input
             value={searchInput}
             onChange={e => setSearchInput(e.target.value)}
-            placeholder="Search by question or student name…"
-            className="w-full pl-9 pr-4 py-3 bg-white border border-slate-200 rounded-xl text-[14px] text-slate-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all"
+            placeholder="Search a question or a student name"
+            className="w-full rounded-control border border-[var(--border)] bg-[var(--card)] pl-10 pr-4 py-2.5 text-label text-[var(--text)] outline-none transition-colors focus:border-[var(--muted)] placeholder:text-[var(--muted2)]"
           />
         </div>
-        <select
-          value={lectureFilter}
-          onChange={e => handleLecture(e.target.value)}
-          className="px-4 py-3 bg-white border border-slate-200 rounded-xl text-[14px] text-slate-700 outline-none focus:border-indigo-400 transition-all min-w-[180px]"
-        >
-          <option value="ALL">All lectures</option>
-          {lectures.map(l => <option key={l.id} value={String(l.id)}>{l.title}</option>)}
-        </select>
+        <div className="relative">
+          <select
+            aria-label="Filter by lecture"
+            value={lectureFilter}
+            onChange={e => { setLectureFilter(e.target.value); setPage(1); }}
+            className="appearance-none rounded-control border border-[var(--border)] bg-[var(--card)] pl-3.5 pr-10 py-2.5 text-label text-[var(--text)] outline-none transition-colors focus:border-[var(--muted)] max-w-[260px]"
+          >
+            <option value="ALL">All lectures</option>
+            {lectures.map(l => <option key={l.id} value={String(l.id)}>{l.title}</option>)}
+          </select>
+          <i className="fas fa-chevron-down pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-[11px] text-[var(--muted)]" aria-hidden="true" />
+        </div>
       </div>
 
-      {exportError && <p className="text-[14px] text-red-600 mb-3">{exportError}</p>}
-
       {loading && !data ? (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-          {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="flex gap-4 px-6 py-5 border-b border-slate-100 last:border-0">
-              <div className="space-y-2 w-32 shrink-0">
-                <div className="h-4 bg-slate-100 rounded animate-pulse" />
-                <div className="h-3.5 bg-slate-100 rounded animate-pulse" />
-              </div>
-              <div className="flex-1 space-y-2">
-                <div className="h-4 w-40 bg-slate-100 rounded animate-pulse" />
-                <div className="h-3.5 bg-slate-100 rounded animate-pulse" />
-              </div>
-            </div>
+        <div className="space-y-3">
+          {[1, 2, 3, 4, 5].map(i => (
+            <div key={i} className="h-[76px] rounded-card border border-[var(--border)] bg-[var(--card)] animate-pulse" />
           ))}
         </div>
       ) : total === 0 ? (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col items-center justify-center py-20 text-slate-400">
-          <div className="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center mb-4">
-            <i className="fas fa-comments text-2xl text-slate-400" />
-          </div>
-          <p className="text-[17px] font-semibold text-slate-600">
-            {filtering ? 'No matching questions' : 'No questions yet'}
+        <div className="rounded-card border border-[var(--border)] bg-[var(--card)] p-10 text-center">
+          <p className="text-label font-semibold text-[var(--text)]">
+            {filtering ? 'Nothing matches those filters' : 'No questions yet'}
           </p>
-          <p className="text-[14px] mt-1">
-            {filtering ? 'Try adjusting your filters.' : 'Questions asked by students via the AI tutor will appear here.'}
+          <p className="text-caption text-[var(--muted)] mt-1">
+            {filtering ? 'Clear the search or choose a different lecture.' : 'Questions appear here as students use the tutor.'}
           </p>
         </div>
       ) : (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-slate-200 bg-slate-50/80">
-                <th className="text-left px-6 py-4 text-[12px] font-semibold text-slate-500 uppercase tracking-widest w-10">#</th>
-                <th className="text-left px-4 py-4 text-[12px] font-semibold text-slate-500 uppercase tracking-widest w-44">Student</th>
-                <th className="text-left px-4 py-4 text-[12px] font-semibold text-slate-500 uppercase tracking-widest w-48">Lecture</th>
-                <th className="text-left px-4 py-4 text-[12px] font-semibold text-slate-500 uppercase tracking-widest">Question</th>
-                <th className="text-left px-6 py-4 text-[12px] font-semibold text-slate-500 uppercase tracking-widest w-36">Date</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {paged.map((q, i) => (
-                <tr key={q.id} className="hover:bg-slate-50/60 transition-colors">
-                  <td className="px-6 py-4 text-[13px] text-slate-400 tabular-nums">{(page - 1) * PAGE_SIZE + i + 1}</td>
-                  <td className="px-4 py-4">
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 text-[12px] font-bold shrink-0">
-                        {q.studentName.charAt(0).toUpperCase()}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-[15px] font-semibold text-slate-800 truncate">{q.studentName}</p>
-                        <p className="text-[12px] text-slate-400 truncate">{q.studentEmail}</p>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="px-4 py-4">
-                    <span className="inline-block max-w-[180px] text-[13px] text-slate-600 bg-slate-100 px-2.5 py-1 rounded-lg font-medium truncate">
-                      {q.lectureTitle}
-                    </span>
-                  </td>
-                  <td className="px-4 py-4">
-                    <p className="text-[15px] text-slate-700 line-clamp-2 leading-relaxed max-w-lg">{q.question}</p>
-                  </td>
-                  <td className="px-6 py-4 text-[13px] text-slate-400 whitespace-nowrap">
-                    {new Date(q.createdAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="rounded-card border border-[var(--border)] bg-[var(--card)] px-6">
+          {/* The question is the content, so it comes first and is never cut
+              off. Who asked it and where is the line underneath. */}
+          <ul className="divide-y divide-[var(--border)]">
+            {paged.map(q => (
+              <li key={q.id} className="py-4">
+                <p className="text-label text-[var(--text)] leading-relaxed">{q.question}</p>
+                <p className="text-caption text-[var(--muted)] mt-1.5">
+                  {/* No link to the student: recentQuestionsPage returns the
+                      name and email but not the id the student page needs. */}
+                  <span title={q.studentEmail}>{q.studentName}</span>
+                  {' · '}
+                  <Link href={`/admin/lectures/${q.lectureId}`} className="hover:underline">
+                    {q.lectureTitle}
+                  </Link>
+                  {' · '}
+                  {new Date(q.createdAt).toLocaleString(undefined, {
+                    day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+                  })}
+                </p>
+              </li>
+            ))}
+          </ul>
 
-          {/* Footer */}
-          <div className="px-6 py-3.5 border-t border-slate-100 bg-slate-50/50 flex flex-col items-center gap-2">
-            <span className="text-[13px] text-slate-400">{total} question{total !== 1 ? 's' : ''}</span>
+          <div className="flex flex-wrap items-center justify-between gap-4 py-4 border-t border-[var(--border)]">
+            <span className="text-caption text-[var(--muted)] tabular-nums">
+              {totalPages > 1 ? `Page ${page} of ${totalPages} · ` : ''}
+              {total.toLocaleString()} {total === 1 ? 'question' : 'questions'}{filtering ? ' matching' : ''}
+            </span>
             {totalPages > 1 && (
-              <div className="flex items-center gap-1.5">
-                <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
-                  className="w-8 h-8 rounded-lg border border-slate-200 flex items-center justify-center text-slate-500 hover:bg-slate-100 disabled:opacity-30 text-[12px]">
-                  <i className="fas fa-chevron-left" />
+              <div className="flex gap-2">
+                <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} className={outlineBtn}>
+                  Previous
                 </button>
-                {pageWindow(page, totalPages).map((p, i) => p === '…' ? (
-                  <span key={`gap-${i}`} className="w-8 text-center text-slate-400 text-[13px]">…</span>
-                ) : (
-                  <button key={p} onClick={() => setPage(p)}
-                    className={`w-8 h-8 rounded-lg text-[13px] font-semibold border transition-colors ${p === page ? 'bg-indigo-600 text-white border-indigo-600' : 'border-slate-200 text-slate-600 hover:bg-slate-100'}`}>
-                    {p}
-                  </button>
-                ))}
-                <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}
-                  className="w-8 h-8 rounded-lg border border-slate-200 flex items-center justify-center text-slate-500 hover:bg-slate-100 disabled:opacity-30 text-[12px]">
-                  <i className="fas fa-chevron-right" />
+                <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages} className={outlineBtn}>
+                  Next
                 </button>
               </div>
             )}
