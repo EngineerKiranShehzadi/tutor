@@ -25,7 +25,7 @@ async function main(){
     for(const u of users){
       const {rows}=await query<{id:string}>(
         "INSERT INTO student_youtube_courses(student_id,playlist_id,title,status) VALUES($1,$2,'QA course','READY') RETURNING id",
-        [u,'PL_shared_'+randomUUID().replaceAll('-','')]);
+        [u,'PL_shared_'+randomUUID().replace(/-/g,'')]);
       const id=Number(rows[0].id);
       ids.push(id);
       await query(

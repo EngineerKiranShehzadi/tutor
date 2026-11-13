@@ -20,7 +20,7 @@ async function main(){
     assert.throws(()=>validatePrivateQuizVideoIds(['bad']),/Choose/);
     const {rows:c}=await query<{id:string}>(
       "INSERT INTO student_youtube_courses(student_id,playlist_id,title,status) VALUES($1,$2,'Quiz Course','READY') RETURNING id",
-      [students[0],'PL_Quiz_'+randomUUID().replaceAll('-','')]);
+      [students[0],'PL_Quiz_'+randomUUID().replace(/-/g,'')]);
     const courseId=Number(c[0].id);
     const {rows:q}=await query<{id:string}>(
       `INSERT INTO student_youtube_practice_quizzes(student_id,course_id,video_ids,question_count)
