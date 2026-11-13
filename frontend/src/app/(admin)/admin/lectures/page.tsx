@@ -53,13 +53,13 @@ export default function AdminLectures() {
   // page that can restore one.
   const { data, loading, refetch } = useQuery(GET_LECTURES, {
     variables: { includeArchived: true },
-    fetchPolicy: 'network-only',
+    fetchPolicy: 'cache-and-network',
   });
-  const { data: agentData, loading: agentLoading } = useQuery(GET_LECTURE_AGENT_DETAILS, { fetchPolicy: 'network-only' });
+  const { data: agentData, loading: agentLoading } = useQuery(GET_LECTURE_AGENT_DETAILS, { fetchPolicy: 'cache-and-network' });
   const { data: courseData } = useQuery(GET_COURSES, { variables: { includeArchived: true } });
   // Already fetched by Overview; reused so the delete warning can state a real
   // number instead of a vague caution.
-  const { data: askedData } = useQuery(GET_QUESTIONS_PER_LECTURE, { fetchPolicy: 'network-only' });
+  const { data: askedData } = useQuery(GET_QUESTIONS_PER_LECTURE, { fetchPolicy: 'cache-and-network' });
 
   const [archiveLecture, { loading: archiving }] = useMutation(ARCHIVE_LECTURE_MUTATION);
   const [restoreLecture, { loading: restoring }] = useMutation(RESTORE_LECTURE_MUTATION);
@@ -248,7 +248,7 @@ export default function AdminLectures() {
         </Link>
       </div>
 
-      {loading ? (
+      {loading && !data ? (
         <div className="space-y-3">
           {[1, 2, 3].map(i => (
             <div key={i} className="h-[86px] rounded-card border border-[var(--border)] bg-[var(--card)] animate-pulse" />
@@ -371,7 +371,7 @@ export default function AdminLectures() {
         </div>
       )}
 
-      {!loading && lectures.length > 0 && (narrowed || inProgress) && (
+      {(!loading || !!data) && lectures.length > 0 && (narrowed || inProgress) && (
         <div className="flex items-center justify-between pt-4">
           <span className="text-caption text-[var(--muted)]">
             {narrowed ? `${lectures.length} of ${scopedActive.length} shown` : ''}
