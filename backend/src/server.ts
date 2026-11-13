@@ -106,6 +106,20 @@ const start = async () => {
         })
         .catch(err => logger.error('[PERSONAL-RAG] worker unavailable',{type:err?.name}));
 
+      // Shared YouTube storage maintenance is bounded and optional. A deployment
+      // must explicitly enable it; tests and ordinary restarts cannot delete
+      // student data by accident.
+      if (process.env.YOUTUBE_STORAGE_MAINTENANCE_ENABLED === 'true') {
+        import('./services/youtube-storage-maintenance.service')
+          .then(m => {
+            const sweep=()=>void m.sweepYoutubeStorage()
+              .catch(err => logger.error('[YOUTUBE-STORAGE] sweep failed',{type:err?.name}));
+            setTimeout(sweep,60_000).unref();
+            setInterval(sweep,6*60*60*1000).unref();
+          })
+          .catch(err => logger.error('[YOUTUBE-STORAGE] maintenance unavailable',{type:err?.name}));
+      }
+
       // Resume pilot jobs after restart (disabled in production).
       import('./services/youtube-import.service')
         .then(m => {

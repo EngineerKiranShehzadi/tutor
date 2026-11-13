@@ -1,4 +1,5 @@
 import pool, { query } from '../config/database';
+import { PERSONAL_COURSE_LIMIT } from './youtube-storage-policy.service';
 import { AppError } from '../middleware/errorHandler';
 import { getPlaylistMetadata, previewPlaylist, validPlaylistId } from './youtube-discovery.service';
 
@@ -8,11 +9,12 @@ export interface PersonalCourseVideo {
 }
 export interface PersonalCourse {
   id: string; playlist_id: string; title: string; channel_title: string;
-  thumbnail_url: string|null; status: 'PREVIEW_ONLY' | 'QUEUED' | 'PROCESSING' | 'PARTIAL' | 'READY' | 'FAILED'; created_at: Date;
+  expires_at?: string|null; last_accessed_at?: string|null;
+  thumbnail_url: string|null; status: 'PREVIEW_ONLY' | 'QUEUED' | 'PROCESSING' | 'PARTIAL' | 'READY' | 'FAILED' | 'EXPIRED'; created_at: Date;
   last_error?: string|null;
   videos: PersonalCourseVideo[];
 }
-export const MAX_PERSONAL_COURSES = 10;
+export const MAX_PERSONAL_COURSES = PERSONAL_COURSE_LIMIT;
 
 export const validatePersonalCourseId = (id: unknown): number => {
   const n = Number(id);
@@ -22,7 +24,7 @@ export const validatePersonalCourseId = (id: unknown): number => {
 
 export async function listPersonalCourses(studentId: string): Promise<PersonalCourse[]> {
   const { rows } = await query<PersonalCourse>(
-    `SELECT c.id,c.playlist_id,c.title,c.channel_title,c.thumbnail_url,c.status,c.created_at,c.last_error,
+    `SELECT c.id,c.playlist_id,c.title,c.channel_title,c.thumbnail_url,c.status,c.created_at,c.last_error,c.expires_at,c.last_accessed_at,
       COALESCE(json_agg(json_build_object(
         'video_id',v.video_id,'title',v.title,'thumbnail_url',v.thumbnail_url,'position',v.position,
         'ingest_status',v.ingest_status,'last_error',v.last_error
@@ -57,7 +59,7 @@ export async function addPersonalCourse(studentId: string, playlistId: string): 
     } else {
       const count = await client.query<{n:number}>(
         'SELECT COUNT(*)::int AS n FROM student_youtube_courses WHERE student_id=$1',[studentId]);
-      if (count.rows[0].n >= MAX_PERSONAL_COURSES) throw new AppError('Maximum 10 personal courses allowed', 409);
+      if (count.rows[0].n >= MAX_PERSONAL_COURSES) throw new AppError('Maximum '+MAX_PERSONAL_COURSES+' personal courses allowed. Remove an older course to add another.', 409);
       const created = await client.query<{id:string}>(
         `INSERT INTO student_youtube_courses(student_id,playlist_id,title,channel_title,thumbnail_url)
          VALUES($1,$2,$3,$4,$5) RETURNING id`,
@@ -84,4 +86,5 @@ export async function removePersonalCourse(studentId: string, id: number): Promi
     'DELETE FROM student_youtube_courses WHERE id=$1 AND student_id=$2',
     [validatePersonalCourseId(id),studentId]);
   if (!rowCount) throw new AppError('Personal course not found', 404);
+  // Shared embeddings are reclaimed by a separate reference-aware retention job.
 }

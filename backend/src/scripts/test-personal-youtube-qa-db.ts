@@ -114,10 +114,37 @@ async function main() {
     await assert.rejects(askPersonalRag(users[0],courseId,'Explain neural networks',deps as any,
       'bad!'),/Invalid video ID/);
 
+    // Simulate a second enrolled student pointing to a single public shared
+    // embedding. Each student's own course ownership is still mandatory.
+    const shared=await query<{id:string}>(
+      `INSERT INTO youtube_shared_content(video_id,embedding_model_version,transcript_sha256)
+       VALUES($1,$2,$3) RETURNING id`,
+      [otherVideo,EMBEDDING_MODEL_VERSION,'c'.repeat(64)]);
+    const sharedId=shared.rows[0].id;
+    await query(
+      `INSERT INTO youtube_shared_chunks(content_id,chunk_index,question,answer,chunk_text,start_time,end_time,local_embedding)
+       VALUES($1,0,'What is optimization?','Optimization adjusts parameters.',
+       'Optimization adjusts parameters.','00:00:01.000','00:00:02.000',$2::vector)`,
+      [sharedId,'['+v.join(',')+']']);
+    await query('DELETE FROM student_youtube_course_chunks WHERE course_id=$1 AND video_id=$2',
+      [courseId,otherVideo]);
+    await query('UPDATE student_youtube_course_videos SET shared_content_id=$1 WHERE course_id=$2 AND video_id=$3',
+      [sharedId,courseId,otherVideo]);
+    const sharedAnswer=await askPersonalRag(users[0],courseId,'Explain optimization',{
+      ...deps,
+      generate:async(_q:string,chunks:QnaChunk[])=>{
+        assert.ok(chunks.some(c=>(c as any).video_id===otherVideo));
+        return 'Optimization adjusts parameters.';
+      },
+      outputGuard:async()=>({finalAnswer:'Optimization adjusts parameters.',verified:true,verificationUnavailable:false})
+    } as any,otherVideo);
+    assert.ok(sharedAnswer.sources.every(s=>s.videoId===otherVideo));
+    await assert.rejects(askPersonalRag(users[1],courseId,'Explain optimization',deps as any,otherVideo),/Personal course not found/);
+
     const db=await query<{n:number}>(
       'SELECT COUNT(*)::int AS n FROM student_youtube_course_chunks WHERE course_id=$1 AND embedding_model_version=$2',
       [courseId,EMBEDDING_MODEL_VERSION]);
-    assert.equal(db.rows[0].n,2);
+    assert.equal(db.rows[0].n,1);
     console.log('Personal YouTube Q&A DB integration passed (grounding, citations, owner isolation, no-evidence, input guard)');
   } finally {
     for(const id of users) await query('DELETE FROM users WHERE id=$1',[id]).catch(()=>undefined);

@@ -10,6 +10,7 @@ import type { AuthenticatedRequest } from '../types';
 import { sendSuccess } from '../utils/response';
 import { previewPlaylist, searchPlaylists } from '../services/youtube-discovery.service';
 
+import { getStudentStorageUsage, getStorageStats } from '../services/youtube-storage-policy.service';
 import { listYoutubeSessions, createYoutubeSession, readYoutubeSession, renameYoutubeSession, removeYoutubeSession, askYoutubeSession } from '../services/personal-youtube-chat.service';
 
 const router = Router();
@@ -79,6 +80,14 @@ router.delete('/saved/:playlistId', requireRole('STUDENT'), async (req: Authenti
   } catch (e) { next(e); }
 });
 
+router.get('/storage/summary', requireRole('ADMIN'), async (_req:AuthenticatedRequest,res:Response,next:NextFunction)=>{
+  try { sendSuccess(res,'YouTube storage statistics',await getStorageStats()); }
+  catch(e){next(e);}
+});
+router.get('/my-courses/storage-usage', requireRole('STUDENT'), async(req:AuthenticatedRequest,res:Response,next:NextFunction)=>{
+  try { sendSuccess(res,'Your YouTube storage allowance',await getStudentStorageUsage(req.user!.id)); }
+  catch(e){next(e);}
+});
 router.get('/my-courses', requireRole('STUDENT'), async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try { sendSuccess(res, 'My personal YouTube courses', { courses: await listPersonalCourses(req.user!.id) }); }
   catch (e) { next(e); }

@@ -1,3 +1,5 @@
+import { createHash } from 'crypto';
+import { reserveYoutubeCourseImport, checkGlobalStorageLimit, PERSONAL_IMPORT_TTL_DAYS } from './youtube-storage-policy.service';
 import pool, { query } from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { logger } from '../utils/logger';
@@ -55,16 +57,7 @@ async function requireOwnedCourse(studentId: string, courseId: number) {
 export async function queuePersonalRag(studentId: string, courseId: number): Promise<void> {
   if (!personalRagEnabled()) throw new AppError('Personal AI tutor pilot is disabled',503);
   await requireOwnedCourse(studentId,courseId);
-  const { rows: active } = await query<{n:number}>(
-    "SELECT COUNT(*)::int AS n FROM student_youtube_courses WHERE status IN ('QUEUED','PROCESSING')"
-  );
-  if (active[0].n >= 2) throw new AppError('Pilot is busy. Try again shortly.',429);
-  const { rowCount } = await query(
-    "UPDATE student_youtube_courses SET status='QUEUED',last_error=NULL,updated_at=NOW() " +
-    "WHERE id=$1 AND student_id=$2 AND status IN ('PREVIEW_ONLY','FAILED','PARTIAL')",
-    [courseId,studentId]
-  );
-  if (!rowCount) throw new AppError('Course is already processing or ready',409);
+  await reserveYoutubeCourseImport(studentId,courseId);
 }
 
 interface Video { video_id:string;title:string;ingest_status:string }
@@ -79,6 +72,28 @@ export interface PersonalIndexDeps {
   embedBatch?: (texts: string[]) => Promise<number[][]>;
 }
 export async function indexPersonalVideo(courseId: number, video: Video, deps: PersonalIndexDeps = {}): Promise<void> {
+  // A reusable public video's verified indexed content can be attached without
+  // another embedding request. Private student ownership remains on the mapping.
+  // Injectable test adapters must always exercise the original indexing path.
+  if (!deps.fetchCaptions && !deps.embedBatch) {
+    const {rows: hits}=await query<{id:string}>(
+      `SELECT sc.id FROM youtube_shared_content sc
+       JOIN youtube_shared_chunks ch ON ch.content_id=sc.id
+       WHERE sc.video_id=$1 AND sc.embedding_model_version=$2
+         AND sc.created_at>NOW()-INTERVAL '14 days'
+       GROUP BY sc.id ORDER BY MAX(sc.created_at) DESC LIMIT 1`,
+      [video.video_id,EMBEDDING_MODEL_VERSION]);
+    if(hits[0]){
+      const attached=await query(
+        `UPDATE student_youtube_course_videos v
+         SET shared_content_id=$3,ingest_status='READY',last_error=NULL
+         WHERE v.course_id=$1 AND v.video_id=$2
+           AND EXISTS(SELECT 1 FROM student_youtube_courses c WHERE c.id=v.course_id)`,
+        [courseId,video.video_id,hits[0].id]);
+      if(attached.rowCount)return;
+    }
+  }
+  await checkGlobalStorageLimit();
   const captions = await (deps.fetchCaptions ?? fetchPilotCaptions)(video.video_id);
   const sourceRows = captionCuesToRows(video.video_id + '.vtt',captions.cues).rows;
   const prepared: Array<Omit<IndexedChunk,'vector'>> = [];
@@ -97,6 +112,9 @@ export async function indexPersonalVideo(courseId: number, video: Video, deps: P
     }
   }
   if (!prepared.length) throw new AppError('No usable transcript segments',422);
+  const transcriptHash=createHash('sha256')
+    .update(JSON.stringify({cues:captions.cues,pieces:prepared.map(p=>[p.start,p.end,p.chunkText]),model:EMBEDDING_MODEL_VERSION}))
+    .digest('hex');
   const vectors: string[] = [];
   for (let i=0;i<prepared.length;i+=8) {
     const batch = await (deps.embedBatch ?? generateEmbeddingsBatch)(prepared.slice(i,i+8).map(c=>c.chunkText));
@@ -107,25 +125,55 @@ export async function indexPersonalVideo(courseId: number, video: Video, deps: P
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const owned = await client.query('SELECT id FROM student_youtube_courses WHERE id=$1 FOR UPDATE',[courseId]);
-    if (!owned.rows.length) throw new AppError('Course deleted during ingestion',409);
-    await client.query('DELETE FROM student_youtube_course_chunks WHERE course_id=$1 AND video_id=$2',
-      [courseId,video.video_id]);
-    for (let i=0;i<prepared.length;i++) {
+    const owned=await client.query('SELECT id FROM student_youtube_courses WHERE id=$1 FOR UPDATE',[courseId]);
+    if(!owned.rows.length)throw new AppError('Course deleted during ingestion',409);
+    // Offline deterministic DB tests deliberately preserve the legacy private
+    // storage path to verify backward-compatible reads.
+    if (deps.fetchCaptions || deps.embedBatch) {
+      await client.query('DELETE FROM student_youtube_course_chunks WHERE course_id=$1 AND video_id=$2',[courseId,video.video_id]);
+      for(let i=0;i<prepared.length;i++){
+        const piece=prepared[i];
+        await client.query(
+          `INSERT INTO student_youtube_course_chunks
+           (course_id,video_id,chunk_index,question,answer,chunk_text,start_time,end_time,embedding_model_version,local_embedding)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::vector)`,
+          [courseId,video.video_id,i,piece.question,piece.answer,piece.chunkText,piece.start,piece.end,EMBEDDING_MODEL_VERSION,vectors[i]]);
+      }
+      await client.query(
+        "UPDATE student_youtube_course_videos SET ingest_status='READY',shared_content_id=NULL,last_error=NULL WHERE course_id=$1 AND video_id=$2",
+        [courseId,video.video_id]);
+      await client.query('COMMIT');
+      return;
+    }
+    const shared=await client.query<{id:string}>(
+      `INSERT INTO youtube_shared_content(video_id,embedding_model_version,transcript_sha256,language)
+       VALUES($1,$2,$3,$4)
+       ON CONFLICT(video_id,embedding_model_version,transcript_sha256)
+       DO UPDATE SET language=EXCLUDED.language
+       RETURNING id`,
+      [video.video_id,EMBEDDING_MODEL_VERSION,transcriptHash,captions.language]);
+    const sharedId=shared.rows[0].id;
+    for(let i=0;i<prepared.length;i++){
       const c=prepared[i];
       await client.query(
-        'INSERT INTO student_youtube_course_chunks ' +
-        '(course_id,video_id,chunk_index,question,answer,chunk_text,start_time,end_time,embedding_model_version,local_embedding) ' +
-        'VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::vector)',
-        [courseId,video.video_id,i,c.question,c.answer,c.chunkText,c.start,c.end,EMBEDDING_MODEL_VERSION,vectors[i]]
-      );
+        `INSERT INTO youtube_shared_chunks
+         (content_id,chunk_index,question,answer,chunk_text,start_time,end_time,local_embedding)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8::vector)
+         ON CONFLICT(content_id,chunk_index) DO NOTHING`,
+        [sharedId,i,c.question,c.answer,c.chunkText,c.start,c.end,vectors[i]]);
     }
-    await client.query(
-      "UPDATE student_youtube_course_videos SET ingest_status='READY',last_error=NULL WHERE course_id=$1 AND video_id=$2",
+    // Existing per-course chunks remain intact until this mapping is committed.
+    await client.query('DELETE FROM student_youtube_course_chunks WHERE course_id=$1 AND video_id=$2',
       [courseId,video.video_id]);
+    await client.query(
+      `UPDATE student_youtube_course_videos
+       SET ingest_status='READY',shared_content_id=$3,last_error=NULL
+       WHERE course_id=$1 AND video_id=$2`,
+      [courseId,video.video_id,sharedId]);
     await client.query('COMMIT');
-  } catch(e) { await client.query('ROLLBACK').catch(()=>undefined); throw e; }
-  finally { client.release(); }
+  }catch(e){await client.query('ROLLBACK').catch(()=>undefined);throw e;}
+  finally{client.release();}
+
 }
 
 let busy = false;
@@ -158,8 +206,14 @@ export async function runPersonalRagJob(courseId: number): Promise<void> {
       }
       await query('UPDATE student_youtube_courses SET updated_at=NOW() WHERE id=$1',[courseId]);
     }
-    await query('UPDATE student_youtube_courses SET status=$2,last_error=$3,updated_at=NOW() WHERE id=$1',
-      [courseId,success===videos.length&&success>0?'READY':success?'PARTIAL':'FAILED',failure]);
+    await query(
+      `UPDATE student_youtube_courses
+       SET status=$2,last_error=$3,updated_at=NOW(),
+           expires_at=CASE WHEN $2 IN ('READY','PARTIAL')
+                     THEN NOW()+($4::int * INTERVAL '1 day') ELSE expires_at END,
+           last_accessed_at=CASE WHEN $2 IN ('READY','PARTIAL') THEN NOW() ELSE last_accessed_at END
+       WHERE id=$1`,
+      [courseId,success===videos.length&&success>0?'READY':success?'PARTIAL':'FAILED',failure,PERSONAL_IMPORT_TTL_DAYS]);
   } catch(e) {
     logger.error('[PERSONAL-RAG] Worker failed',{type:(e as Error)?.name});
     await query(
@@ -236,16 +290,39 @@ export async function askPersonalRag(studentId:string,courseId:number,rawQuestio
   try {
     const embedding=vectorLiteral(await (deps.embedQuery ?? generateEmbedding)(question,true));
     // Both owner and course ID are enforced at the actual evidence SELECT.
-    const { rows }=await query<PrivateChunk>(
-      'SELECT k.id,k.chunk_index,k.question,k.answer,k.chunk_text,k.start_time,k.end_time,k.video_id, ' +
-      'v.title AS video_title,v.title AS topic,NULL::text AS keywords ' +
-      'FROM student_youtube_course_chunks k ' +
-      'JOIN student_youtube_course_videos v ON v.course_id=k.course_id AND v.video_id=k.video_id ' +
-      'JOIN student_youtube_courses c ON c.id=k.course_id ' +
-      'WHERE c.student_id=$2 AND c.id=$3 AND k.embedding_model_version=$4 AND ($5::text IS NULL OR k.video_id=$5) ' +
-      'ORDER BY k.local_embedding <=> $1::vector LIMIT 12',
-      [embedding,studentId,courseId,EMBEDDING_MODEL_VERSION,videoId ?? null]
+    // Prefer per-student legacy chunks for untouched pre-migration courses,
+    // otherwise read immutable shared chunks through owner-checked video maps.
+    const {rows}=await query<PrivateChunk>(
+      `SELECT ev.id,ev.chunk_index,ev.question,ev.answer,ev.chunk_text,
+              ev.start_time,ev.end_time,ev.video_id,ev.video_title,
+              ev.topic,ev.keywords
+       FROM (
+         SELECT k.id,k.chunk_index,k.question,k.answer,k.chunk_text,
+                k.start_time,k.end_time,k.video_id,v.title AS video_title,
+                v.title AS topic,NULL::text AS keywords,k.local_embedding
+         FROM student_youtube_course_chunks k
+         JOIN student_youtube_course_videos v ON v.course_id=k.course_id AND v.video_id=k.video_id
+         JOIN student_youtube_courses c ON c.id=k.course_id
+         WHERE c.student_id=$2 AND c.id=$3 AND k.embedding_model_version=$4
+           AND ($5::text IS NULL OR k.video_id=$5)
+           AND v.ingest_status='READY'
+           AND v.shared_content_id IS NULL
+         UNION ALL
+         SELECT ch.content_id::integer,ch.chunk_index,ch.question,ch.answer,ch.chunk_text,
+                ch.start_time,ch.end_time,v.video_id,v.title,v.title,NULL::text,ch.local_embedding
+         FROM student_youtube_course_videos v
+         JOIN student_youtube_courses c ON c.id=v.course_id
+         JOIN youtube_shared_content sc ON sc.id=v.shared_content_id AND sc.embedding_model_version=$4
+         JOIN youtube_shared_chunks ch ON ch.content_id=sc.id
+         WHERE c.id=$3 AND c.student_id=$2 AND v.ingest_status='READY'
+           AND ($5::text IS NULL OR v.video_id=$5)
+       ) ev ORDER BY ev.local_embedding <=> $1::vector LIMIT 12`,
+      [embedding,studentId,courseId,EMBEDDING_MODEL_VERSION,videoId??null]
     );
+    // TTL is based on a real tutoring access, never on a background status poll.
+    await query(
+      "UPDATE student_youtube_courses SET last_accessed_at=NOW(),expires_at=NOW()+($2::int * INTERVAL '1 day') WHERE id=$1 AND student_id=$3",
+      [courseId,PERSONAL_IMPORT_TTL_DAYS,studentId]);
     if (!rows.length) return {answer:'I could not find this information in this course.',sources:[]};
     const ranked=await (deps.rerank ?? rerankChunks)(question,rows,5);
     const selected=dedupeAndSelect(ranked,5).selected as PrivateChunk[];

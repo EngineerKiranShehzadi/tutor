@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import api from '@/lib/api';
 import Link from 'next/link';
 
-export type PersonalCourseStatus = 'PREVIEW_ONLY' | 'QUEUED' | 'PROCESSING' | 'PARTIAL' | 'READY' | 'FAILED';
+export type PersonalCourseStatus = 'PREVIEW_ONLY' | 'QUEUED' | 'PROCESSING' | 'PARTIAL' | 'READY' | 'FAILED' | 'EXPIRED';
 interface PersonalVideo {
   video_id: string;
   title: string;
@@ -19,6 +19,7 @@ interface PersonalCourse {
   channel_title: string;
   status: PersonalCourseStatus;
   last_error?: string | null;
+  expires_at?: string | null;
   videos: PersonalVideo[];
 }
 interface Citation {
@@ -36,6 +37,7 @@ const CAN_ASK: PersonalCourseStatus[] = ['READY', 'PARTIAL'];
 export default function PersonalYouTubeCourses({ refreshKey = 0 }: { refreshKey?: number }) {
   const [courses, setCourses] = useState<PersonalCourse[]>([]);
   const [enabled, setEnabled] = useState(false);
+  const [usage,setUsage]=useState<{courses:number;maxCourses:number;reservedChunkCapacity:number;maxChunkCapacity:number}|null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
@@ -52,6 +54,9 @@ export default function PersonalYouTubeCourses({ refreshKey = 0 }: { refreshKey?
       const response = await api.get('/youtube/my-courses');
       if (!mounted.current) return;
       setCourses(response.data.data.courses ?? []);
+      void api.get('/youtube/my-courses/storage-usage')
+        .then(r=>{if(mounted.current)setUsage(r.data.data);})
+        .catch(()=>undefined);
       setLoaded(true);
       if (!silent) setError('');
     } catch {
@@ -118,6 +123,10 @@ export default function PersonalYouTubeCourses({ refreshKey = 0 }: { refreshKey?
       </div>
       {error && <p role="alert" className="text-red-600 text-label mb-3">{error}</p>}
       {message && <p role="status" className="text-label mb-3">{message}</p>}
+      {usage && <p className="text-label text-[var(--muted)] mb-3" role="status">
+        Storage: {usage.courses}/{usage.maxCourses} personal courses ·
+        reserved up to {usage.reservedChunkCapacity}/{usage.maxChunkCapacity} transcript chunks.
+      </p>}
       {loaded && courses.length === 0 && <p className="text-label text-[var(--muted)]">No personal courses yet. Search a playlist below and choose Add to My Courses.</p>}
       <div className="grid gap-4">
         {courses.map(course => (
@@ -127,6 +136,15 @@ export default function PersonalYouTubeCourses({ refreshKey = 0 }: { refreshKey?
                 <p className="text-caption text-[var(--muted)]">{course.channel_title} · {course.videos.length} videos</p></div>
               <span className="text-caption font-semibold rounded-control px-3 py-1 bg-[var(--surface)]">{course.status.replace('_', ' ')}</span>
             </div>
+            {course.expires_at && ['READY','PARTIAL'].includes(course.status) && (
+              <p className="text-caption text-[var(--gold)] mt-2">
+                Indexed content expires after inactivity around {new Date(course.expires_at).toLocaleDateString()}.
+                Open your tutor to extend availability.
+              </p>
+            )}
+            {course.status === 'EXPIRED' && <p className="text-label text-[var(--muted)] mt-2">
+              Indexed content expired to save storage. Your old chats remain; select Re-import to study again.
+            </p>}
             {course.last_error && <p className="text-caption text-red-600 mt-2">Import issue: {course.last_error}</p>}
             <div className="grid gap-2 mt-3 sm:grid-cols-2">
               {course.videos.map(video => (
@@ -139,10 +157,10 @@ export default function PersonalYouTubeCourses({ refreshKey = 0 }: { refreshKey?
               ))}
             </div>
             <div className="flex flex-wrap gap-3 mt-3">
-              {enabled && (course.status === 'PREVIEW_ONLY' || course.status === 'FAILED' || course.status === 'PARTIAL') &&
+              {enabled && (course.status === 'PREVIEW_ONLY' || course.status === 'FAILED' || course.status === 'PARTIAL' || course.status === 'EXPIRED') &&
                 <button type="button" disabled={busyId === course.id} onClick={() => void ingest(course)}
                   className="bg-[var(--accent)] text-white px-4 py-2 rounded-control disabled:opacity-50">
-                  {course.status === 'PREVIEW_ONLY' ? 'Start AI Import (2 videos)' : 'Retry Failed Videos'}
+                  {course.status === 'PREVIEW_ONLY' ? 'Start AI Import' : course.status === 'EXPIRED' ? 'Re-import expired course' : 'Retry Failed Videos'}
                 </button>}
               {ACTIVE.includes(course.status) && <span role="status" className="text-label text-[var(--muted)]">Processing transcripts and embeddings…</span>}
               <button type="button" disabled={busyId === course.id} onClick={() => void remove(course)}
