@@ -362,6 +362,15 @@ export const askLectureAgent = async (
       throw new AppError('AI tutor is not ready for this lecture yet. Please wait for processing.', 400);
     }
 
+    // 1b. Withdrawn from students. An archived lecture keeps its data and its
+    // READY status, so the check above cannot catch it, and a student who still
+    // has the page open would otherwise keep getting answers.
+    if (lecture.archived_at) {
+      logger.warn(`[CHAT] ⚠️  Lecture #${lectureId} is archived`);
+      finishTrace('ERROR', { responseStatus: 'LECTURE_NOT_READY' });
+      throw new AppError('This lecture is no longer available.', 400);
+    }
+
     // 1-bis. Dataset readiness: an active version whose every chunk is embedded
     // with the current model. A lecture that is READY by status but fails this
     // would only ever answer "not found", so reject it as not ready instead.

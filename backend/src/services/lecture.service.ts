@@ -180,6 +180,15 @@ export const restoreLecture = async (id: number): Promise<Lecture> => {
  */
 export const deleteLecture = async (id: number): Promise<boolean> => {
   await getLectureById(id);
+  // A build in flight writes chunks and version rows that all cascade off this
+  // lecture; removing it underneath that leaves the worker writing to rows
+  // that no longer exist.
+  const { rows: building } = await query<{ id: number }>(
+    `SELECT id FROM dataset_versions WHERE lecture_id = $1 AND status IN ('BUILDING','READY_TO_ACTIVATE') LIMIT 1`,
+    [id]);
+  if (building[0]) {
+    throw new AppError('A dataset update is still building for this lecture. Wait for it to finish, or cancel it, before deleting.', 409);
+  }
   const asked = await lectureQuestionCount(id);
   if (asked > 0) {
     throw new AppError(

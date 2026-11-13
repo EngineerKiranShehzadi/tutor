@@ -208,12 +208,15 @@ export async function createPracticeQuiz(studentId: string, courseId: number, re
     requestedIds.some(id => !Number.isSafeInteger(id) || id <= 0) || new Set(requestedIds).size !== requestedIds.length) {
     throw new AppError('Select between 1 and 50 distinct lectures.', 400);
   }
-  const {rows: lectureRows} = await query<{id: number; title: string; active_version_id: number | null; status: string}>(
-    'SELECT id, title, active_version_id, status FROM lectures WHERE course_id=$1 AND id=ANY($2::int[])',
+  const {rows: lectureRows} = await query<{id: number; title: string; active_version_id: number | null; status: string; archived_at: Date | null}>(
+    'SELECT id, title, active_version_id, status, archived_at FROM lectures WHERE course_id=$1 AND id=ANY($2::int[])',
     [courseId, requestedIds]
   );
-  if (lectureRows.length !== requestedIds.length || lectureRows.some(l => l.status !== 'READY' || !l.active_version_id)) {
-    throw new AppError('All selected lectures must belong to this course and have ready learning material.', 400);
+  // archived_at is checked here too: an archived lecture keeps its READY status
+  // and its active version, so neither of those tests would exclude it.
+  if (lectureRows.length !== requestedIds.length ||
+      lectureRows.some(l => l.status !== 'READY' || !l.active_version_id || l.archived_at)) {
+    throw new AppError('All selected lectures must belong to this course, be available to students, and have ready learning material.', 400);
   }
   const plan = allocateByLecture(requestedIds);
   const lectureInfo = new Map(lectureRows.map(r => [r.id,r]));
@@ -222,7 +225,7 @@ export async function createPracticeQuiz(studentId: string, courseId: number, re
        FROM lectures l
        JOIN dataset_version_chunks d ON d.version_id = l.active_version_id
        JOIN lecture_qna_chunks c ON c.id = d.chunk_id AND c.lecture_id = l.id
-       WHERE l.course_id = $1 AND l.id = ANY($2::int[])
+       WHERE l.course_id = $1 AND l.id = ANY($2::int[]) AND l.archived_at IS NULL
        ORDER BY l.id ASC, d.qa_id ASC, d.chunk_index ASC, c.id ASC`,
     [courseId, requestedIds]
   );
