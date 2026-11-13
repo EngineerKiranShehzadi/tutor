@@ -29,7 +29,7 @@ export default function AdminCoursesPage() {
   // admins alone; every other caller gets active courses.
   const { data, loading, error, refetch } = useQuery(GET_COURSES, {
     variables: { includeArchived: true },
-    fetchPolicy: 'network-only',
+    fetchPolicy: 'cache-and-network',
   });
   const [createCourse,  { loading: creating }]   = useMutation(CREATE_COURSE);
   const [updateCourse,  { loading: updating }]   = useMutation(UPDATE_COURSE);
@@ -268,7 +268,7 @@ export default function AdminCoursesPage() {
 
       <div className={panelOpen ? 'grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_380px] gap-6 items-start' : ''}>
         <section>
-          {loading ? (
+          {loading && !data ? (
             <p className="text-label text-[var(--muted)]">Loading courses…</p>
           ) : error ? (
             <div role="alert" className="rounded-card border border-[var(--border)] bg-[var(--card)] p-6">

@@ -96,6 +96,40 @@ const start = async () => {
       // Continue any dataset build that was interrupted by a restart. Only
       // chunks that still have no embedding are processed; finished work is
       // never repeated. Runs in the background — startup does not wait for it.
+      // Private student course pilot uses a separate worker and tables.
+      import('./services/personal-youtube-rag.service')
+        .then(m => {
+          void m.resumePersonalRagJobs().catch(err => logger.error('[PERSONAL-RAG] resume failed',{type:err?.name}));
+          setInterval(() => {
+            void m.resumePersonalRagJobs().catch(err => logger.error('[PERSONAL-RAG] periodic resume failed',{type:err?.name}));
+          }, 60_000).unref();
+        })
+        .catch(err => logger.error('[PERSONAL-RAG] worker unavailable',{type:err?.name}));
+
+      // Shared YouTube storage maintenance is bounded and optional. A deployment
+      // must explicitly enable it; tests and ordinary restarts cannot delete
+      // student data by accident.
+      if (process.env.YOUTUBE_STORAGE_MAINTENANCE_ENABLED === 'true') {
+        import('./services/youtube-storage-maintenance.service')
+          .then(m => {
+            const sweep=()=>void m.sweepYoutubeStorage()
+              .catch(err => logger.error('[YOUTUBE-STORAGE] sweep failed',{type:err?.name}));
+            setTimeout(sweep,60_000).unref();
+            setInterval(sweep,6*60*60*1000).unref();
+          })
+          .catch(err => logger.error('[YOUTUBE-STORAGE] maintenance unavailable',{type:err?.name}));
+      }
+
+      // Resume pilot jobs after restart (disabled in production).
+      import('./services/youtube-import.service')
+        .then(m => {
+          void m.resumeImports().catch(err => logger.error('[YOUTUBE] resume failed', { type: err?.name }));
+          setInterval(() => {
+            void m.resumeImports().catch(err => logger.error('[YOUTUBE] periodic resume failed', { type: err?.name }));
+          }, 60_000).unref();
+        })
+        .catch(err => logger.error('[YOUTUBE] worker unavailable', { type: err?.name }));
+
       import('./services/dataset-version.service')
         .then(m => {
           void m.resumePendingVersions().catch(err => logger.error('[DATASET] resume on startup failed', err));

@@ -1,0 +1,173 @@
+import { Router } from 'express';
+import { queuePersonalRag, runPersonalRagJob, askPersonalRag, personalRagEnabled } from '../services/personal-youtube-rag.service';
+import { listPersonalCourses, addPersonalCourse, removePersonalCourse, validatePersonalCourseId } from '../services/student-youtube-course.service';
+import { listSavedPlaylists, savePlaylist, removeSavedPlaylist } from '../services/saved-playlists.service';
+import { enqueueImport, getImportJob, retryImport, runImport } from '../services/youtube-import.service';
+import { AppError } from '../middleware/errorHandler';
+import type { Response, NextFunction } from 'express';
+import { protect, requireRole } from '../middleware/auth.middleware';
+import type { AuthenticatedRequest } from '../types';
+import { sendSuccess } from '../utils/response';
+import { previewPlaylist, searchPlaylists } from '../services/youtube-discovery.service';
+
+import { getStudentStorageUsage, getStorageStats } from '../services/youtube-storage-policy.service';
+import { createPrivateYoutubeQuiz, loadPrivateYoutubeQuiz, listPrivateYoutubeQuizzes, submitPrivateYoutubeQuiz } from '../services/personal-youtube-quiz.service';
+import { listYoutubeSessions, createYoutubeSession, readYoutubeSession, renameYoutubeSession, removeYoutubeSession, askYoutubeSession } from '../services/personal-youtube-chat.service';
+
+const router = Router();
+router.use(protect, requireRole('STUDENT', 'ADMIN'));
+
+// Pilot is intentionally read-only. No course is created until the transcript
+// ingestion and per-student membership path are safely integrated.
+router.get('/playlists/search', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const query = typeof req.query.q === 'string' ? req.query.q : '';
+    const language = typeof req.query.language === 'string' ? req.query.language : 'hi';
+    sendSuccess(res, 'Playlist matches', { playlists: await searchPlaylists(query, language) });
+  } catch (err) { next(err); }
+});
+
+router.get('/playlists/:playlistId/preview', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    sendSuccess(res, 'Pilot playlist preview (first two videos)', {
+      videos: await previewPlaylist(req.params.playlistId),
+      pilotLimit: 2,
+    });
+  } catch (err) { next(err); }
+});
+
+
+
+// Admin-only experimental import. Student Add to My Courses requires private
+// enrollment/authorization and is intentionally NOT exposed in this pilot.
+router.post('/imports', requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const courseId = req.body?.courseId;
+    const playlistId = req.body?.playlistId;
+    if (!Number.isSafeInteger(courseId) || typeof playlistId !== 'string')
+      throw new AppError('courseId and playlistId are required', 400);
+    const job = await enqueueImport(courseId, playlistId, req.user!.id);
+    res.status(202).json({ success: true, message: 'Pilot import queued', data: { job } });
+    void runImport(Number(job.id));
+  } catch (e) { next(e); }
+});
+router.get('/imports/:jobId', requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try { sendSuccess(res, 'Pilot import status', await getImportJob(Number(req.params.jobId), req.user!.id)); }
+  catch(e) { next(e); }
+});
+router.post('/imports/:jobId/retry', requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const job = await retryImport(Number(req.params.jobId), req.user!.id);
+    res.status(202).json({ success: true, message: 'Pilot retry queued', data: { job } });
+    void runImport(Number(job.id));
+  } catch(e) { next(e); }
+});
+
+
+router.get('/saved', requireRole('STUDENT'), async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try { sendSuccess(res, 'My saved playlists', { playlists: await listSavedPlaylists(req.user!.id) }); }
+  catch (e) { next(e); }
+});
+router.post('/saved', requireRole('STUDENT'), async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    if (typeof req.body?.playlistId !== 'string') throw new AppError('playlistId required', 400);
+    sendSuccess(res, 'Playlist saved', { playlist: await savePlaylist(req.user!.id, req.body.playlistId) }, 201);
+  } catch (e) { next(e); }
+});
+router.delete('/saved/:playlistId', requireRole('STUDENT'), async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    await removeSavedPlaylist(req.user!.id, req.params.playlistId);
+    sendSuccess(res, 'Playlist removed');
+  } catch (e) { next(e); }
+});
+
+router.get('/storage/summary', requireRole('ADMIN'), async (_req:AuthenticatedRequest,res:Response,next:NextFunction)=>{
+  try { sendSuccess(res,'YouTube storage statistics',await getStorageStats()); }
+  catch(e){next(e);}
+});
+router.get('/my-courses/storage-usage', requireRole('STUDENT'), async(req:AuthenticatedRequest,res:Response,next:NextFunction)=>{
+  try { sendSuccess(res,'Your YouTube storage allowance',await getStudentStorageUsage(req.user!.id)); }
+  catch(e){next(e);}
+});
+router.get('/my-courses', requireRole('STUDENT'), async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try { sendSuccess(res, 'My personal YouTube courses', { courses: await listPersonalCourses(req.user!.id) }); }
+  catch (e) { next(e); }
+});
+router.post('/my-courses', requireRole('STUDENT'), async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    if (typeof req.body?.playlistId !== 'string') throw new AppError('playlistId required', 400);
+    const course = await addPersonalCourse(req.user!.id,req.body.playlistId);
+    sendSuccess(res, 'Playlist added to My Courses (preview only)', { course }, 201);
+  } catch(e) { next(e); }
+});
+router.delete('/my-courses/:id', requireRole('STUDENT'), async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    await removePersonalCourse(req.user!.id,validatePersonalCourseId(req.params.id));
+    sendSuccess(res,'Personal course removed');
+  } catch(e) { next(e); }
+});
+
+router.post('/my-courses/:id/ingest', requireRole('STUDENT'), async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const courseId=validatePersonalCourseId(req.params.id);
+    await queuePersonalRag(req.user!.id,courseId);
+    sendSuccess(res,'Personal course transcript import queued',{courseId},202);
+    void runPersonalRagJob(courseId);
+  } catch(e) { next(e); }
+});
+router.post('/my-courses/:id/ask', requireRole('STUDENT'), async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const courseId=validatePersonalCourseId(req.params.id);
+    if (typeof req.body?.question !== 'string') throw new AppError('Question required',400);
+    sendSuccess(res,'Grounded course answer',await askPersonalRag(req.user!.id,courseId,req.body.question));
+  } catch(e) { next(e); }
+});
+router.get('/my-courses/pilot-status', requireRole('STUDENT'), (_req: AuthenticatedRequest, res: Response) => {
+  sendSuccess(res,'Personal AI tutor pilot status',{enabled:personalRagEnabled()});
+});
+router.get('/my-courses/:id/sessions',requireRole('STUDENT'),async(req:AuthenticatedRequest,res:Response,next:NextFunction)=>{
+  try { sendSuccess(res,'Private lecture chats',{sessions:await listYoutubeSessions(req.user!.id,validatePersonalCourseId(req.params.id),String(req.query.videoId||''))}); }
+  catch(e){next(e);}
+});
+router.post('/my-courses/:id/sessions',requireRole('STUDENT'),async(req:AuthenticatedRequest,res:Response,next:NextFunction)=>{
+  try { sendSuccess(res,'Private chat created',{session:await createYoutubeSession(req.user!.id,validatePersonalCourseId(req.params.id),req.body?.videoId)},201); }
+  catch(e){next(e);}
+});
+router.get('/my-courses/:id/sessions/:sid',requireRole('STUDENT'),async(req:AuthenticatedRequest,res:Response,next:NextFunction)=>{
+  try { sendSuccess(res,'Private chat',await readYoutubeSession(req.user!.id,validatePersonalCourseId(req.params.id),Number(req.params.sid))); }
+  catch(e){next(e);}
+});
+router.patch('/my-courses/:id/sessions/:sid',requireRole('STUDENT'),async(req:AuthenticatedRequest,res:Response,next:NextFunction)=>{
+  try { await renameYoutubeSession(req.user!.id,validatePersonalCourseId(req.params.id),Number(req.params.sid),String(req.body?.title??''));sendSuccess(res,'Renamed'); }
+  catch(e){next(e);}
+});
+router.delete('/my-courses/:id/sessions/:sid',requireRole('STUDENT'),async(req:AuthenticatedRequest,res:Response,next:NextFunction)=>{
+  try { await removeYoutubeSession(req.user!.id,validatePersonalCourseId(req.params.id),Number(req.params.sid));sendSuccess(res,'Deleted'); }
+  catch(e){next(e);}
+});
+router.post('/my-courses/:id/sessions/:sid/ask',requireRole('STUDENT'),async(req:AuthenticatedRequest,res:Response,next:NextFunction)=>{
+  try { if(typeof req.body?.question!=='string') throw new AppError('Question required',400);
+    sendSuccess(res,'Private lecture answer',await askYoutubeSession(req.user!.id,validatePersonalCourseId(req.params.id),Number(req.params.sid),req.body.question));
+  }catch(e){next(e);}
+});
+// Personal quizzes share the existing /practice UI but never enter the
+// admin-course quiz tables. Ownership checks are inside every service call.
+router.get('/my-quizzes',requireRole('STUDENT'),async(req:AuthenticatedRequest,res:Response,next:NextFunction)=>{
+  try{sendSuccess(res,'Your private YouTube quizzes',{quizzes:await listPrivateYoutubeQuizzes(req.user!.id)});}
+  catch(e){next(e);}
+});
+router.post('/my-quizzes',requireRole('STUDENT'),async(req:AuthenticatedRequest,res:Response,next:NextFunction)=>{
+  try{sendSuccess(res,'Private YouTube quiz', {quiz:await createPrivateYoutubeQuiz(req.user!.id,req.body?.courseId,req.body?.videoIds)},201);}
+  catch(e){next(e);}
+});
+router.get('/my-quizzes/:quizId',requireRole('STUDENT'),async(req:AuthenticatedRequest,res:Response,next:NextFunction)=>{
+  try{sendSuccess(res,'Your private YouTube quiz',{quiz:await loadPrivateYoutubeQuiz(req.user!.id,req.params.quizId)});}
+  catch(e){next(e);}
+});
+router.post('/my-quizzes/:quizId/submit',requireRole('STUDENT'),async(req:AuthenticatedRequest,res:Response,next:NextFunction)=>{
+  try{sendSuccess(res,'Private quiz graded',{quiz:await submitPrivateYoutubeQuiz(req.user!.id,req.params.quizId,req.body?.answers)});}
+  catch(e){next(e);}
+});
+export default router;
+
+

@@ -10,7 +10,7 @@ import { enrichDocumentWithVision } from './document-vision.service';
 // The document boundary is isolated from the existing Excel parser and version
 // planner. No remote conversion services are used; the child process reads only
 // the uploaded bytes through stdin and outputs structured JSON through stdout.
-export const DOCUMENT_EXTENSIONS = new Set(['.pdf', '.docx', '.ppt', '.pptx', '.txt', '.html', '.htm']);
+export const DOCUMENT_EXTENSIONS = new Set(['.pdf', '.docx', '.ppt', '.pptx', '.txt', '.html', '.htm', '.srt', '.vtt']);
 
 export const supportedDatasetExtension = (filename: string): string | null => {
   const ext = path.extname(filename).toLowerCase();
@@ -38,7 +38,7 @@ const splitter = new RecursiveCharacterTextSplitter({
 });
 
 const extractTextOnly = (buffer: Buffer, extension: string): Promise<ExtractionResult> => {
-  if (!DOCUMENT_EXTENSIONS.has(extension)) {
+  if (!DOCUMENT_EXTENSIONS.has(extension) || extension === '.srt' || extension === '.vtt') {
     throw new AppError('Unsupported document format', 400);
   }
   if (buffer.length === 0 || buffer.length > MAX_DOCUMENT_BYTES) {

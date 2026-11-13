@@ -71,7 +71,7 @@ export default function AdminStudents() {
   const filters = { search: search || null, status: statusFilter === 'ALL' ? null : statusFilter };
   const { data, loading, refetch } = useQuery<{ registeredStudents: StudentPage }>(GET_REGISTERED_STUDENTS, {
     variables: { limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE, ...filters },
-    fetchPolicy: 'network-only',
+    fetchPolicy: 'cache-and-network',
   });
 
   const result        = data?.registeredStudents;

@@ -9,6 +9,7 @@ import { isLectureReady, sortLectures } from '@/lib/lectures';
 import { retakeVariables } from '@/lib/practice-retake';
 import type { DBCourse } from '@/types/course';
 import type { DBLecture } from '@/types';
+import PersonalYoutubeQuizPanel from '@/components/practice/PersonalYoutubeQuizPanel';
 
 type Item = {
   id: number; lectureId: number; lectureTitle: string; position: number; category: string;
@@ -27,6 +28,7 @@ export default function PracticePage() {
   const courses = useQuery(GET_COURSES, {fetchPolicy:'cache-and-network'});
   const lectures = useQuery(GET_LECTURES, {fetchPolicy:'cache-and-network'});
   const [courseId,setCourseId]=useState<number|null>(null);
+  const [practiceSource,setPracticeSource]=useState<'shared'|'personal'>('shared');
   const [selected,setSelected]=useState<number[]>([]);
   const [activeId,setActiveId]=useState<number|null>(null);
   const [answers,setAnswers]=useState<Record<number,number>>({});
@@ -107,12 +109,40 @@ export default function PracticePage() {
   const answered=quiz?.questions.filter(q=>answers[q.id]!==undefined).length??0;
   const answeredPercent=quiz&&quiz.total?Math.round(answered/quiz.total*100):0;
 
+  const sourceTabs = (
+    <div className="flex flex-wrap gap-2 mb-6" role="tablist" aria-label="Choose quiz course source">
+      <button type="button" role="tab" aria-selected={practiceSource==='shared'}
+        onClick={()=>{if(!pending)setPracticeSource('shared');}}
+        className={practiceSource==='shared'
+          ? 'px-4 py-2.5 rounded-control bg-[var(--accent)] text-white text-label font-semibold'
+          : 'px-4 py-2.5 rounded-control bg-white border border-[var(--border)] text-[var(--accent)] text-label font-semibold hover:bg-[var(--accent-soft)]'}>
+        Institute Courses
+      </button>
+      <button type="button" role="tab" aria-selected={practiceSource==='personal'}
+        onClick={()=>{if(!pending)setPracticeSource('personal');}}
+        className={practiceSource==='personal'
+          ? 'px-4 py-2.5 rounded-control bg-[var(--accent)] text-white text-label font-semibold'
+          : 'px-4 py-2.5 rounded-control bg-white border border-[var(--border)] text-[var(--accent)] text-label font-semibold hover:bg-[var(--accent-soft)]'}>
+        My YouTube Courses
+      </button>
+    </div>
+  );
+  if(practiceSource==='personal'){
+    return <main className="mx-auto max-w-[1180px] px-6 py-8">
+      <div className="mb-7"><h1 className="text-h2 font-semibold text-[var(--text)]">Practice Quiz</h1>
+        <p className="text-label text-[var(--muted)] mt-1">Practice what you have learned, review every answer, and see what to revise next.</p>
+      </div>
+      {sourceTabs}
+      <PersonalYoutubeQuizPanel/>
+    </main>;
+  }
   return (
     <main className="mx-auto max-w-[1180px] px-6 py-8">
       <div className="mb-7">
         <h1 className="text-h2 font-semibold text-[var(--text)]">Practice Quiz</h1>
         <p className="text-label text-[var(--muted)] mt-1">Practice what you have learned, review every answer, and see what to revise next.</p>
       </div>
+      {sourceTabs}
       {localError&&<div role="alert" className="mb-5 rounded-card border border-red-200 bg-red-50 p-4 text-label text-red-700">{localError}</div>}
       {!activeId ? (
         <>

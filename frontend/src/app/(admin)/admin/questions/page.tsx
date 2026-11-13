@@ -56,7 +56,7 @@ export default function AdminQuestions() {
   const filters = { search: search || null, lectureId };
   const { data, loading } = useQuery<{ recentQuestionsPage: QuestionPage }>(GET_RECENT_QUESTIONS_PAGE, {
     variables: { limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE, ...filters },
-    fetchPolicy: 'network-only',
+    fetchPolicy: 'cache-and-network',
   });
   const { data: lectureData } = useQuery<{ lectureStatusList: { id: number; title: string }[] }>(GET_LECTURE_STATUS_LIST);
 

@@ -45,6 +45,17 @@ jobs:
           JWT_SECRET: offline-test-access-secret-at-least-32-bytes
           JWT_REFRESH_SECRET: offline-test-refresh-secret-at-least-32-bytes
         run: npm run test:document-ingestion
+      - name: Offline YouTube pilot and personal-RAG contracts
+        working-directory: backend
+        env:
+          DB_PASSWORD: offline-test
+          JWT_SECRET: offline-test-access-secret-at-least-32-bytes
+          JWT_REFRESH_SECRET: offline-test-refresh-secret-at-least-32-bytes
+        run: |
+          npm run test:youtube-pilot
+          npm run test:youtube-import
+          npm run test:student-youtube-courses
+          npm run test:personal-youtube-rag
       - name: Typecheck backend
         working-directory: backend
         run: npm run typecheck
@@ -95,12 +106,89 @@ jobs:
         run: |
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/022_courses.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/scripts/test-courses-rerun.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/024_course_archive.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/025_lecture_archive.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/026_youtube_import_pilot.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/027_student_saved_playlists.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/028_student_youtube_courses.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/029_personal_youtube_rag.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/030_student_youtube_chat_sessions.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/031_youtube_shared_storage.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/031_youtube_shared_storage.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/032_student_youtube_practice_quizzes.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/032_student_youtube_practice_quizzes.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/scripts/test-personal-youtube-isolation.sql
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
       - name: Install backend dependencies for course service checks
         working-directory: backend
         run: npm ci --ignore-scripts
+      - name: Verify two-video private transcript indexing against real pgvector
+        working-directory: backend
+        env:
+          NODE_ENV: test
+          DB_HOST: 127.0.0.1
+          DB_PORT: '5432'
+          DB_USER: postgres
+          DB_PASSWORD: offline-test
+          DB_NAME: courses_test
+          JWT_SECRET: offline-test-access-secret-at-least-32-bytes
+          JWT_REFRESH_SECRET: offline-test-refresh-secret-at-least-32-bytes
+        run: npm run test:personal-youtube-pipeline-db
+      - name: Verify private YouTube Q&A against real pgvector with deterministic providers
+        working-directory: backend
+        env:
+          NODE_ENV: test
+          # These flags are scoped to this isolated test job; all model and
+          # transcript calls use deterministic test adapters, never the network.
+          YOUTUBE_PILOT_ENABLED: 'true'
+          YOUTUBE_TRANSCRIPT_EXPERIMENTAL_ENABLED: 'true'
+          YOUTUBE_STUDENT_RAG_PILOT_ENABLED: 'true'
+          DB_HOST: 127.0.0.1
+          DB_PORT: '5432'
+          DB_USER: postgres
+          DB_PASSWORD: offline-test
+          DB_NAME: courses_test
+          JWT_SECRET: offline-test-access-secret-at-least-32-bytes
+          JWT_REFRESH_SECRET: offline-test-refresh-secret-at-least-32-bytes
+        run: npm run test:personal-youtube-qa-db
+      - name: Verify private YouTube chat session isolation
+        working-directory: backend
+        env:
+          NODE_ENV: test
+          DB_HOST: 127.0.0.1
+          DB_PORT: '5432'
+          DB_USER: postgres
+          DB_PASSWORD: offline-test
+          DB_NAME: courses_test
+          JWT_SECRET: offline-test-access-secret-at-least-32-bytes
+          JWT_REFRESH_SECRET: offline-test-refresh-secret-at-least-32-bytes
+        run: npm run test:personal-youtube-sessions-db
+      - name: Verify shared YouTube embedding reuse, TTL and storage reporting
+        working-directory: backend
+        env:
+          NODE_ENV: test
+          DB_HOST: 127.0.0.1
+          DB_PORT: '5432'
+          DB_USER: postgres
+          DB_PASSWORD: offline-test
+          DB_NAME: courses_test
+          JWT_SECRET: offline-test-access-secret-at-least-32-bytes
+          JWT_REFRESH_SECRET: offline-test-refresh-secret-at-least-32-bytes
+        run: npm run test:youtube-storage-db
+      - name: Verify private YouTube quiz ownership and persistence
+        working-directory: backend
+        env:
+          NODE_ENV: test
+          DB_HOST: 127.0.0.1
+          DB_PORT: '5432'
+          DB_USER: postgres
+          DB_PASSWORD: offline-test
+          DB_NAME: courses_test
+          JWT_SECRET: offline-test-access-secret-at-least-32-bytes
+          JWT_REFRESH_SECRET: offline-test-refresh-secret-at-least-32-bytes
+        run: npm run test:youtube-quiz-db
       - name: Verify course creation, lecture assignment and agent profile
         working-directory: backend
         env:

@@ -34,12 +34,12 @@ function Skeleton({ className }: { className?: string }) {
 }
 
 export default function AdminDashboard() {
-  const { data: summaryData, loading: summaryLoading } = useQuery(GET_ANALYTICS_SUMMARY, { fetchPolicy: 'network-only' });
-  const { data: perLecture, loading: perLectureLoading } = useQuery(GET_QUESTIONS_PER_LECTURE, { fetchPolicy: 'network-only' });
-  const { data: recentData, loading: recentLoading } = useQuery(GET_RECENT_QUESTIONS, { variables: { limit: 10 }, fetchPolicy: 'network-only' });
+  const { data: summaryData, loading: summaryLoading } = useQuery(GET_ANALYTICS_SUMMARY, { fetchPolicy: 'cache-and-network' });
+  const { data: perLecture, loading: perLectureLoading } = useQuery(GET_QUESTIONS_PER_LECTURE, { fetchPolicy: 'cache-and-network' });
+  const { data: recentData, loading: recentLoading } = useQuery(GET_RECENT_QUESTIONS, { variables: { limit: 10 }, fetchPolicy: 'cache-and-network' });
 
   // Only the summary counts are needed here; the list itself is paged (AD6).
-  const { data: studentsData } = useQuery(GET_REGISTERED_STUDENTS, { variables: { limit: 1, offset: 0 }, fetchPolicy: 'network-only' });
+  const { data: studentsData } = useQuery(GET_REGISTERED_STUDENTS, { variables: { limit: 1, offset: 0 }, fetchPolicy: 'cache-and-network' });
 
   const summary     = summaryData?.analyticsSummary;
   const qPerLecture: LectureCount[] = perLecture?.questionsPerLecture ?? [];
@@ -86,7 +86,7 @@ export default function AdminDashboard() {
               <i className={`${icon} text-[12px] text-[var(--muted2)]`} aria-hidden="true" />
               {label}
             </p>
-            {summaryLoading ? (
+            {(summaryLoading && !summaryData) ? (
               <Skeleton className="h-8 w-14 mt-2" />
             ) : (
               <p className="text-h2 font-semibold text-[var(--text)] leading-none mt-2 tabular-nums">{value}</p>
@@ -98,7 +98,7 @@ export default function AdminDashboard() {
 
       {/* Shown only when there is something to do. An empty "all clear" panel
           would take the same room to say nothing. */}
-      {!summaryLoading && (notReady > 0 || unasked > 0) && (
+      {(!summaryLoading || !!summaryData) && (notReady > 0 || unasked > 0) && (
         <section className="rounded-card border border-[var(--border)] border-l-[3px] border-l-[var(--gold)] bg-[var(--card)] px-5 py-4 mb-5">
           <h2 className="flex items-center gap-2 text-label font-semibold text-[var(--text)]">
             <i className="fas fa-triangle-exclamation text-[13px] text-[var(--gold)]" aria-hidden="true" />
@@ -132,12 +132,12 @@ export default function AdminDashboard() {
               <h2 className="text-h3 font-semibold text-[var(--text)]">Questions per Lecture</h2>
               <p className="text-caption text-[var(--muted)] mt-0.5">Every student, since the course opened</p>
             </div>
-            {!perLectureLoading && qPerLecture.length > 0 && (
+            {(!perLectureLoading || !!perLecture) && qPerLecture.length > 0 && (
               <p className="text-caption text-[var(--muted)] shrink-0 tabular-nums">{askedTotal} in total</p>
             )}
           </div>
 
-          {perLectureLoading ? (
+          {(perLectureLoading && !perLecture) ? (
             <div className="space-y-4">
               {[1, 2, 3, 4, 5].map(i => <Skeleton key={i} className="h-8 w-full" />)}
             </div>
@@ -185,7 +185,7 @@ export default function AdminDashboard() {
             </Link>
           </div>
 
-          {recentLoading ? (
+          {(recentLoading && !recentData) ? (
             <div className="space-y-4">
               {[1, 2, 3, 4].map(i => <Skeleton key={i} className="h-12 w-full" />)}
             </div>
