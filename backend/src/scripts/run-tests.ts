@@ -74,6 +74,11 @@ const SUITES: Suite[] = [
   { name: 'auth-hardening', script: 'src/scripts/test-auth-hardening.ts' },
   { name: 'rag-defects', script: 'src/scripts/test-rag-defects.ts' },
   { name: 'admin-hardening', script: 'src/scripts/test-admin-hardening.ts' },
+  { name: 'document-ingestion', script: 'src/scripts/test-document-ingestion.ts' },
+  { name: 'context-family', script: 'src/scripts/test-context-family.ts' },
+  { name: 'practice-quiz', script: 'src/scripts/test-practice-quiz.ts' },
+  { name: 'clo-alignment', script: 'src/scripts/test-clo-alignment.ts' },
+  { name: 'dataset-pipeline', script: 'src/scripts/test-dataset-pipeline.ts' },
 ];
 
 function main(): void {
