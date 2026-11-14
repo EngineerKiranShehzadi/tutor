@@ -53,7 +53,7 @@ export async function myRevisionRecommendations(studentId:string,courseId:number
   FROM practice_question_outcomes m
   JOIN practice_questions q ON q.id=m.question_id
   JOIN practice_quizzes z ON z.id=q.quiz_id AND z.student_id=$2
-   AND z.course_id=$1 AND z.status='COMPLETED'
+   AND z.course_id=$1 AND z.status='COMPLETED' AND z.submitted_at IS NOT NULL
   JOIN practice_answers a ON a.quiz_id=z.id AND a.question_id=q.id
   GROUP BY m.outcome_id
  )
