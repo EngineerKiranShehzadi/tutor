@@ -63,6 +63,7 @@
     "test:youtube-import": "ts-node --transpile-only src/scripts/test-youtube-import.ts",
     "test:youtube-pilot": "ts-node --transpile-only src/scripts/test-youtube-pilot.ts",
     "test:context-family": "ts-node --transpile-only src/scripts/test-context-family.ts",
+    "test:context-family-db": "ts-node --transpile-only src/scripts/test-context-family-db.ts",
     "test:document-ingestion": "ts-node --transpile-only src/scripts/test-document-ingestion.ts",
     "test:course-services": "ts-node --transpile-only src/scripts/test-course-services.ts",
     "test:rag-defects": "ts-node --transpile-only src/scripts/test-rag-defects.ts",
