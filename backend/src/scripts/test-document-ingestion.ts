@@ -112,7 +112,7 @@ async function run() {
     /without its Question/
   );
   const mcqOptions=await documentToRows('mcq-slides.docx',{
-    units:[{locator:'Slide 5',text:'Common choices:\\nA. Zero shot\\nB. Few shot\\nExplanation: These are prompting techniques.'}],warnings:[]
+    units:[{locator:'Slide 5',text:'Common choices:\nA. Zero shot\nB. Few shot\nExplanation: These are prompting techniques.'}],warnings:[]
   });
   assert.ok(mcqOptions.rows.length>0,'MCQ answer options and ordinary explanation headings must be accepted');
   const inlineQA=await documentToRows('inline.docx',{
