@@ -1,0 +1,12 @@
+import {strict as assert} from 'assert';
+import {verifiedCloOutcomeId} from '../services/clo-alignment.service';
+const approved=[10,11];
+assert.equal(verifiedCloOutcomeId({grounded:true,unambiguous:true,outcomeId:10},approved),10);
+assert.equal(verifiedCloOutcomeId({grounded:true,unambiguous:true,outcomeId:11},approved),11);
+assert.equal(verifiedCloOutcomeId({grounded:true,unambiguous:true,outcomeId:99},approved),null);
+assert.equal(verifiedCloOutcomeId({grounded:false,unambiguous:true,outcomeId:10},approved),null);
+assert.equal(verifiedCloOutcomeId({grounded:true,unambiguous:false,outcomeId:10},approved),null);
+assert.equal(verifiedCloOutcomeId({grounded:true,unambiguous:true,outcomeId:0},approved),null);
+assert.equal(verifiedCloOutcomeId({grounded:true,unambiguous:true,outcomeId:10},[]),null);
+assert.equal(verifiedCloOutcomeId(null,approved),null);
+console.log('CLO question alignment guards passed.');
