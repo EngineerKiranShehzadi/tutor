@@ -46,7 +46,7 @@ def office_to_pdf(data, extension):
     if not soffice:
         raise ValueError("Visual analysis of PowerPoint requires LibreOffice on the backend")
     with tempfile.TemporaryDirectory(prefix="askaitutor-vis-") as root:
-        source = Path(root) / "upload.pptx"
+        source = Path(root) / ("upload.docx" if extension == ".docx" else "upload.pptx")
         source.write_bytes(data)
         dest = Path(root) / "pdf"
         dest.mkdir()
@@ -113,6 +113,9 @@ def visual_pages(data, extension, limit):
     elif extension == ".pdf":
         pdf = data
         name = "Page"
+    elif extension == ".docx":
+        pdf = office_to_pdf(data, extension)
+        name = "Page"
     else:
         return []
     if not pdf:
@@ -122,7 +125,7 @@ def visual_pages(data, extension, limit):
         raise ValueError("Password-protected PDFs are not supported")
     if len(doc) > MAX_PAGES:
         raise ValueError("Document has too many pages or slides")
-    if extension == ".pdf":
+    if extension in (".pdf", ".docx"):
         targets = identify_pdf_pages(doc)
     if len(targets) > limit:
         raise ValueError(f"Document has {len(targets)} visually significant pages; limit is {limit}. Split it into smaller documents instead of silently skipping diagrams.")
@@ -139,7 +142,7 @@ def main():
     except (ImportError, OSError, ValueError):
         pass
     parser = argparse.ArgumentParser()
-    parser.add_argument("--extension", required=True, choices=[".pdf", ".pptx", ".ppt"])
+    parser.add_argument("--extension", required=True, choices=[".pdf", ".pptx", ".ppt", ".docx"])
     parser.add_argument("--max-bytes", type=int, default=10 * 1024 * 1024)
     parser.add_argument("--max-visual-pages", type=int, default=MAX_VISUAL_PAGES)
     args = parser.parse_args()
