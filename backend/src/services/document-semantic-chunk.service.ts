@@ -27,6 +27,7 @@ export function parseLogicalSections(text:string):LogicalSection[] {
  const lines=text.replace(/\r\n?/g,'\n').split('\n');
  const result:LogicalSection[]=[];
  let question:string|null=null;
+ let explicitQuestion=false;
  let answer:string[]=[];
  let prose:string[]=[];
  const flushProse=()=>{
@@ -36,9 +37,10 @@ export function parseLogicalSections(text:string):LogicalSection[] {
  const flushQA=()=>{
   if(question!==null){
    if(answer.some(x=>x.trim()))result.push({kind:'QA',question,answer:answer.join('\n').trim()});
+   else if(explicitQuestion)throw new AppError('An explicit Question has no matching Answer. Keep each question and its answer in the same slide or section.',422);
    else result.push({kind:'TEXT',text:question});
   }
-  question=null;answer=[];
+  question=null;explicitQuestion=false;answer=[];
  };
  for(const raw of lines){
   const line=raw.trim();
@@ -56,10 +58,11 @@ export function parseLogicalSections(text:string):LogicalSection[] {
   const matchA=aLine.exec(line);
   const candidate=matchQ?.[1]?.trim()??(naturalQuestion.test(line)?line:null);
   if(candidate){
-   flushQA();flushProse();question=candidate;
+   flushQA();flushProse();question=candidate;explicitQuestion=!!matchQ;
    continue;
   }
-  if(matchA && question!==null){
+  if(matchA){
+   if(question===null)throw new AppError('An Answer was found without its Question. Keep both in one logical section.',422);
    if(matchA[1].trim())answer.push(matchA[1].trim());
    continue;
   }
