@@ -479,6 +479,11 @@ export async function prepareDatasetVersion(
   if (opts.dryRun) {
     return { kind: 'DRY_RUN', preview: p, previews: { MERGE: plans.get('MERGE')!.preview, REPLACE: plans.get('REPLACE')!.preview } };
   }
+  // Never publish a partially indexed answer. The dry run reports the
+  // oversize rows so the admin can split them; applying is fail-closed.
+  if (p.truncatedRows > 0) throw new AppError(
+    `${p.truncatedRows} answer(s) exceed the safe chunk limit. No content was changed. Split the affected answers or source sections and upload again.`, 422
+  );
   if (p.removed > 0 && opts.confirmRemovals !== p.removed) throw new RemovalConfirmationRequired(p);
 
   if (p.added === 0 && p.updated === 0 && p.removed === 0 && p.reembeddedForModel === 0) {
