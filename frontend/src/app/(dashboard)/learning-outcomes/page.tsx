@@ -5,6 +5,7 @@ import { useQuery } from '@apollo/client';
 import { GET_COURSES } from '@/graphql/course.queries';
 import { GET_MY_OUTCOME_PROGRESS } from '@/graphql/learning-outcome.queries';
 import { PersonalLearningSignals } from '@/components/student/PersonalLearningSignals';
+import { MyFacultyRevisionPlans } from '@/components/student/MyFacultyRevisionPlans';
 
 type Course={id:string;title:string};
 type Progress={outcomeId:number;code:string;description:string;attempted:number;correct:number;percent:number|null;status:string;lectureIds:number[]};
@@ -43,6 +44,7 @@ export default function StudentLearningOutcomes(){
         {r.status==='NEEDS_REVISION'&&<p className="mt-3 text-caption text-[var(--muted)]">Review a mapped lecture before requesting another quiz.</p>}
       </article>)}
     </section>
+    {courseId!==null&&<MyFacultyRevisionPlans courseId={courseId}/>}
     {courseId!==null&&<PersonalLearningSignals courseId={courseId} lectureLinks={Object.fromEntries(rows.map(r=>[r.outcomeId,r.lectureIds]))}/>}
     <p className="text-caption text-[var(--muted)] mt-5">At least three mapped graded answers are needed before a performance label is shown. These are learning indicators, not official university grades.</p>
     <Link href="/practice" className="inline-flex mt-5 items-center rounded-control bg-[var(--accent)] px-5 py-3 font-semibold text-white hover:bg-[var(--accent-deep)]">Practice another quiz</Link>

@@ -3,6 +3,7 @@ import {useEffect,useState} from 'react';
 import Link from 'next/link';
 import {useQuery} from '@apollo/client';
 import {AdminPageHero} from '@/components/admin/AdminPageHero';
+import {FacultyRevisionEditor} from '@/components/admin/FacultyRevisionEditor';
 import {GET_COURSES} from '@/graphql/course.queries';
 import {GET_FACULTY_LEARNING_GAPS} from '@/graphql/faculty-learning-gaps.queries';
 
@@ -79,6 +80,7 @@ export default function FacultyLearningGaps(){
        <div style={{width:x.revisionPercent+'%'}} className="h-full rounded-full bg-[var(--accent)]"/>
       </div>}
      </div>}
+    {courseId!==null&&<FacultyRevisionEditor courseId={courseId} outcomeId={x.outcomeId} code={x.code} lectureIds={x.lectureIds}/>}
     <div className="mt-4 pt-4 border-t border-[var(--border)]">
      <p className="text-caption font-semibold text-[var(--text)]">Suggested faculty action</p>
      <p className="text-label text-[var(--muted)] mt-1">{x.recommendation}</p>
