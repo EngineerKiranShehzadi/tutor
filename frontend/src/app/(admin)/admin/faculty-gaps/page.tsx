@@ -36,7 +36,7 @@ export default function FacultyLearningGaps(){
    </select>
   </section>
   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
-   {[{label:'Mapped learning outcomes',value:String(rows.length)},
+   {[{label:'Mapped learning outcomes',value:String(rows.filter(x=>x.mappedQuestions>0).length)},
      {label:'Faculty review suggested',value:String(review)},
      {label:'Not yet sufficiently assessed',value:String(insufficient)}].map(s=>
      <section key={s.label} className="rounded-card border border-[var(--border)] bg-[var(--card)] p-5">
