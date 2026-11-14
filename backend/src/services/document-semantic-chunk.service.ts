@@ -12,10 +12,10 @@ export type LogicalSection =
   | {kind:'TEXT';text:string};
 
 const slideLine=/^(?:slide|page)\s*(?:no\.?|number|#)?\s*[:.\-]?\s*\d+\s*(?:[:.\-].*)?$/i;
-const qLine=/^(?:q(?:uestion)?\s*(?:#?\d+)?\s*[:.\-])\s*(.+)$/i;
-const aLine=/^(?:a(?:nswer)?\s*(?:#?\d+)?\s*[:.\-])\s*(.*)$/i;
+const qLine=/^(?:q(?:uestion)?\s*(?:no\.?\s*)?(?:#?\d+)?\s*[:.\-])\s*(.+)$/i;
+const aLine=/^(?:(?:a(?:ns(?:wer)?)?|explanation|solution)\s*(?:#?\d+)?\s*[:.\-])\s*(.*)$/i;
 const naturalQuestion=/^.{5,350}\?$/;
-const inlinePair=/^(?:Q(?:uestion)?\s*(?:#?\d+)?\s*[:.\-])\s*(.+?)\s+(?:A(?:nswer)?\s*(?:#?\d+)?\s*[:.\-])\s*(.+)$/i;
+const inlinePair=/^(?:Q(?:uestion)?\s*(?:no\.?\s*)?(?:#?\d+)?\s*[:.\-])\s*(.+?)\s+(?:(?:A(?:ns(?:wer)?)?|Explanation|Solution)\s*(?:#?\d+)?\s*[:.\-])\s*(.+)$/i;
 const MAX_UNIT=1050;
 const OVERLAP=130;
 const splitter=new RecursiveCharacterTextSplitter({
