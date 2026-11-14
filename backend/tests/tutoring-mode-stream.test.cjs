@@ -62,19 +62,20 @@ test('Interrupted after draft is not eligible for a duplicate request',withFetch
   {onDelta(){},onReset(){}},new AbortController().signal),e=>e instanceof stream.StreamServerError && !(e instanceof stream.StreamUnavailableError));
 }));
 
+
 test('SSE route does not send provisional answer tokens before guardrail final',()=>{
  const route=fs.readFileSync(path.resolve(__dirname,'../src/routes/chat.routes.ts'),'utf8');
- assert.match(route,/send\\('processing', \\{\\}\\)/);
- assert.match(route,/onDelta: \\(\\) => \\{\\}/);
- assert.match(route,/onReset: \\(\\) => \\{\\}/);
- assert.doesNotMatch(route,/send\\('delta',/);
- assert.match(route,/send\\('final', \\{ answer, sources:/);
+ assert.match(route,/send\('processing', \{\}\)/);
+ assert.match(route,/onDelta: \(\) => \{\}/);
+ assert.match(route,/onReset: \(\) => \{\}/);
+ assert.doesNotMatch(route,/send\('delta',/);
+ assert.match(route,/send\('final', \{ answer, sources:/);
 });
 test('SSE processing event keeps final authoritative result',withFetch(async()=>{
  const seen=[];
  global.fetch=async()=>response([
-  'event: processing\\ndata: {}\\n\\n',
-  'event: final\\ndata: {"answer":"Creative prompts seek imaginative output.","sources":[{"id":18826}]}\\n\\n'
+  'event: processing\ndata: {}\n\n',
+  'event: final\ndata: {"answer":"Creative prompts seek imaginative output.","sources":[{"id":18826}]}\n\n'
  ]);
  const result=await stream.streamAsk({lectureId:2,sessionId:4,question:'What are Creative Prompts?',tutoringMode:'SIMPLE'},{
   onDelta:x=>seen.push(x),
