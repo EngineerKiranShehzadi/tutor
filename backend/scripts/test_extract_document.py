@@ -49,6 +49,25 @@ class TestDocumentExtractor(unittest.TestCase):
         self.assertIn("A list is a mutable sequence.", text)
         self.assertIn("list | mutable", text)
 
+    def test_docx_slide_heading_preserves_question_answer_scope(self):
+        from docx import Document
+        doc = Document()
+        doc.add_paragraph("Slide 1: Introduction")
+        doc.add_paragraph("Question: What is prompting?")
+        doc.add_paragraph("Answer: Giving instructions to a model.")
+        doc.add_paragraph("Slide 2: Types")
+        doc.add_paragraph("Q: What is a creative prompt?")
+        doc.add_paragraph("A: It requests imaginative content.")
+        buf = io.BytesIO()
+        doc.save(buf)
+        units = extract(buf.getvalue(), ".docx")["units"]
+        self.assertEqual([u["locator"] for u in units], ["Slide 1", "Slide 2"])
+        self.assertIn("What is prompting?", units[0]["text"])
+        self.assertIn("Giving instructions", units[0]["text"])
+        self.assertNotIn("creative prompt", units[0]["text"])
+        self.assertIn("creative prompt", units[1]["text"])
+        self.assertIn("imaginative content", units[1]["text"])
+
     def test_pptx_slide_provenance(self):
         from pptx import Presentation
         from pptx.util import Inches
