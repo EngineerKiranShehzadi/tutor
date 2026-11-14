@@ -4,6 +4,7 @@ import { logger } from '../utils/logger';
 import { env } from '../config/env';
 import { getActiveTrace } from '../observability/tracer';
 import { searchChunksFts } from './fulltext-search.service';
+import { expandContextCandidates } from './context-family.service';
 
 // Retained for diagnostics/threshold tuning, NOT an admission gate before
 // reranking. Cosine similarity and a cross-encoder score are different signals.
@@ -67,7 +68,10 @@ export const searchChunks = async (
   lectureId: number,
   topK = 5,
   datasetVersionId?: number
-): Promise<QnaChunk[]> => searchChunkCandidates(embedding, lectureId, topK, datasetVersionId);
+): Promise<QnaChunk[]> => {
+  const candidates=await searchChunkCandidates(embedding,lectureId,topK,datasetVersionId);
+  return expandContextCandidates(candidates,lectureId,topK,datasetVersionId);
+};
 
 // Bounded vector + lexical retrieval, still in parallel, fused with the
 // existing Reciprocal Rank Fusion ordering. Deduplicate by chunk ID, not
@@ -118,7 +122,9 @@ export const searchChunksHybrid = async (
     const candidates = [...byId.values()];
     candidates.sort((a, b) => (fusedScore.get(b.id) ?? 0) - (fusedScore.get(a.id) ?? 0));
     logger.info(`[HYBRID SEARCH] lecture=${lectureId} vector=${vectorCount} fts=${ftsCount} merged=${candidates.length} belowLegacyFloor=${belowLegacyFloor} thresholdApplied=false reason=${candidates.length ? 'DEFER_TO_RERANKER' : 'NO_RETRIEVAL_CANDIDATES'}`);
-    return candidates;
+    // Expand only same-version, same-lecture context BEFORE reranking.
+    // No neighbor bypasses the downstream reranker relevance threshold.
+    return expandContextCandidates(candidates,lectureId,topK,datasetVersionId);
   };
   const trace = getActiveTrace();
   return trace ? trace.span('merge-retrieval-candidates', run, rows => ({
