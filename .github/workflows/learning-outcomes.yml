@@ -15,6 +15,12 @@ on:
       - 'backend/src/db/migrations/033_learning_outcomes.sql'
       - 'backend/src/db/migrations/034_misconception_evidence.sql'
       - 'backend/src/db/migrations/035_socratic_chat_state.sql'
+      - 'backend/src/db/migrations/036_approved_revision_plans.sql'
+      - 'backend/src/services/revision-plan*'
+      - 'backend/src/graphql/revision-plan.schema.ts'
+      - 'backend/src/graphql/resolvers/revision-plan.resolver.ts'
+      - 'frontend/src/components/admin/FacultyRevisionEditor.tsx'
+      - 'frontend/src/components/student/MyFacultyRevisionPlans.tsx'
       - 'backend/src/services/misconception.service.ts'
       - 'backend/src/services/socratic-state.service.ts'
       - 'backend/src/services/tutoring-mode.service.ts'
@@ -61,6 +67,9 @@ jobs:
           JWT_SECRET: offline-test-access-secret-at-least-32-bytes
           JWT_REFRESH_SECRET: offline-test-refresh-secret-at-least-32-bytes
         run: npx ts-node --transpile-only src/scripts/test-faculty-learning-gaps.ts
+      - name: Faculty-approved revision threshold tests
+        working-directory: backend
+        run: npx ts-node --transpile-only src/scripts/test-revision-plan-policy.ts
       - name: Backend TypeScript
         working-directory: backend
         run: npm run typecheck
@@ -106,6 +115,8 @@ jobs:
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/034_misconception_evidence.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/035_socratic_chat_state.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/035_socratic_chat_state.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/036_approved_revision_plans.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/036_approved_revision_plans.sql
       - name: Check constraints and idempotence
         run: |
           psql -v ON_ERROR_STOP=1 <<'SQL'
