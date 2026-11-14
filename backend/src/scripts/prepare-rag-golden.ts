@@ -15,12 +15,19 @@ async function main() {
       !Number.isSafeInteger(maxQuestions) || maxQuestions < 1 || maxQuestions > 100) {
     throw new Error('Usage: npm run eval:prepare-golden -- <lectureId> [maxQuestions: 1..100]');
   }
-  const lecture = await pool.query<{ title: string; active_version_id: number | null }>(
+  // Enforce read-only at the PostgreSQL transaction level, not just by convention.
+  const client = await pool.connect();
+  let output: Record<string, unknown>;
+  let groupsCount = 0;
+  let selectedCount = 0;
+  try {
+    await client.query('BEGIN READ ONLY');
+  const lecture = await client.query<{ title: string; active_version_id: number | null }>(
     'SELECT title,active_version_id FROM lectures WHERE id=$1', [lectureId]);
   if (!lecture.rows.length || !lecture.rows[0].active_version_id)
     throw new Error('Lecture not found or has no active dataset');
   const versionId = lecture.rows[0].active_version_id;
-  const { rows } = await pool.query<{
+  const { rows } = await client.query<{
     qa_id: string; question: string; chunk_id: number; chunk_index: number;
     chunk_text: string; source_locator: string | null;
   }>(`
@@ -45,7 +52,7 @@ async function main() {
     .slice(0,maxQuestions);
   if (!candidates.length) throw new Error('No embedded questions found in active dataset');
 
-  const output = {
+  output = {
     schemaVersion: 1,
     status: 'REVIEW_REQUIRED',
     lectureId,
@@ -66,9 +73,18 @@ async function main() {
       reviewRequired: true
     }))
   };
-  const filename = resolve(process.cwd(), 'rag-review-lecture-'+lectureId+'-version-'+versionId+'.json');
+  groupsCount = groups.size;
+  selectedCount = candidates.length;
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+  const filename = resolve(process.cwd(), 'rag-review-lecture-'+lectureId+'-version-'+String(output.datasetVersionId)+'.json');
   writeFileSync(filename, JSON.stringify(output,null,2)+'\n', {flag:'wx',mode:0o600});
-  console.log('Prepared '+candidates.length+' unreviewed questions from '+groups.size+' source groups.');
+  console.log('Prepared '+selectedCount+' unreviewed questions from '+groupsCount+' source groups.');
   console.log('Review file: '+filename);
   console.log('No dataset rows, vectors or golden labels were modified.');
 }
