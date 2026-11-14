@@ -35,8 +35,8 @@ const chunkToSource = (c: QnaChunk) => ({
 //   error  {message}   — request failed
 router.post('/ask-stream', protect, async (req: AuthenticatedRequest, res: Response) => {
   const student = req.user;
-  const { lectureId, question, sessionId } = (req.body ?? {}) as {
-    lectureId?: unknown; question?: unknown; sessionId?: unknown;
+  const { lectureId, question, sessionId, tutoringMode } = (req.body ?? {}) as {
+    lectureId?: unknown; question?: unknown; sessionId?: unknown; tutoringMode?: unknown;
   };
 
   if (!student) { res.status(401).json({ success: false, message: 'Unauthorized' }); return; }
@@ -99,6 +99,7 @@ router.post('/ask-stream', protect, async (req: AuthenticatedRequest, res: Respo
       lectureId: lectureId as number,
       question:  question.trim(),
       sessionId: sessionId as number,
+      tutoringMode,
       stream: {
         onDelta: text => send('delta', { text }),
         onReset: () => send('reset', {}),

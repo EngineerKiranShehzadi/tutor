@@ -1,4 +1,5 @@
 import { AppError } from '../middleware/errorHandler';
+import { buildTutoringModeInstruction, type TutoringMode } from './tutoring-mode.service';
 import { QnaChunk, LectureAgentProfile } from '../types';
 import { logger } from '../utils/logger';
 import { logSafeText } from '../observability/sanitize';
@@ -145,7 +146,8 @@ export const generateAnswer = async (
   // rerank outage), so nothing is known about them. Kept apart from
   // uncoveredAspects, which means "searched, not in the lecture". The model
   // is told to say these parts couldn't be retrieved right now.
-  unavailableAspects: string[] = []
+  unavailableAspects: string[] = [],
+  tutoringMode: TutoringMode | null = null
 ): Promise<string> => {
   // Falls back to env.LLM.RAG_ANSWER.FALLBACK_MODEL after 2 failed attempts
   // on the primary model (same provider; unset, it is RAG_ANSWER_MODEL).
@@ -161,8 +163,10 @@ export const generateAnswer = async (
     ? `\n\nNote: the following part(s) of the question could not be looked up right now because of a temporary problem. Do not answer them and do not say they are missing from this lecture — say that this part could not be retrieved right now and the student can ask again in a moment:\n${unavailableAspects.map(a => `- ${a}`).join('\n')}`
     : '';
   const agentBlock = buildAgentInstructionBlock(agentProfile);
+  const teachingBlock = buildTutoringModeInstruction(tutoringMode);
   const prompt = `${SYSTEM_PROMPT}
 ${agentBlock ? `\n${agentBlock}\n` : ''}
+${teachingBlock ? `\n${teachingBlock}\n` : ''}
 Lecture: "${lectureTitle}"
 
 Lecture Q&A Context:
@@ -225,7 +229,7 @@ ${question}${uncoveredBlock}${unavailableBlock}`;
       logger.warn(`[LLM] Transient error on attempt ${attempt}/3${fallbackNote} — retrying in ${wait / 1000}s...`);
       if (streamedAny) stream?.onReset?.();
       await sleep(wait);
-      return generateAnswer(question, chunks, lectureTitle, history, uncoveredAspects, attempt + 1, stream, agentProfile, unavailableAspects);
+      return generateAnswer(question, chunks, lectureTitle, history, uncoveredAspects, attempt + 1, stream, agentProfile, unavailableAspects, tutoringMode);
     }
 
     recordProviderFailure('answerLlm', err);

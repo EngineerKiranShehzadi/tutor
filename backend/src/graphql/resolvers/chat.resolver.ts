@@ -171,7 +171,7 @@ export const chatResolvers = {
     // ── Core AI mutation ──────────────────────────────────────
     askLectureAgent: (
       _: unknown,
-      { input }: { input: { lectureId: number; question: string; sessionId: number } },
+      { input }: { input: { lectureId: number; question: string; sessionId: number; tutoringMode?: string } },
       ctx: GraphQLContext
     ) =>
       wrap(async () => {
@@ -186,6 +186,7 @@ export const chatResolvers = {
           lectureId: input.lectureId,
           question:  input.question.trim(),
           sessionId: input.sessionId,
+          tutoringMode: input.tutoringMode,
         });
         return { answer, sources: sources.map(chunkToGql) };
       }),

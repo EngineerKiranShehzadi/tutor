@@ -1,4 +1,5 @@
 import { query } from '../config/database';
+import { effectiveTutoringMode, modeAwarePromptVersion, type TutoringMode } from './tutoring-mode.service';
 import { env } from '../config/env';
 import { AppError } from '../middleware/errorHandler';
 import { ChatHistoryEntry, QnaChunk, LectureAgentProfile } from '../types';
@@ -70,7 +71,7 @@ export interface AskLectureAgentDeps {
   rerankChunks?:           (question: string, candidates: QnaChunk[], topN?: number) => Promise<QnaChunk[]>;
   dedupeAndSelect?:        (rankedChunks: QnaChunk[], desiredCount?: number, minRerankScore?: number) => DedupeResult;
   reorderForContext?:      (chunks: QnaChunk[]) => QnaChunk[];
-  generateAnswer?:         (question: string, chunks: QnaChunk[], lectureTitle: string, history?: ConversationTurn[], uncoveredAspects?: string[], attempt?: number, stream?: AnswerStreamHandlers, agentProfile?: LectureAgentProfile | null, unavailableAspects?: string[]) => Promise<string>;
+  generateAnswer?:         (question: string, chunks: QnaChunk[], lectureTitle: string, history?: ConversationTurn[], uncoveredAspects?: string[], attempt?: number, stream?: AnswerStreamHandlers, agentProfile?: LectureAgentProfile | null, unavailableAspects?: string[], tutoringMode?: TutoringMode | null) => Promise<string>;
   // Resolves the lecture's agent profile by lecture_id only (see
   // lecture-agent-profile.service.ts). Defaults to the real service.
   getAgentProfile?:        (lectureId: number) => Promise<AgentProfileLookup>;
@@ -272,6 +273,7 @@ export const askLectureAgent = async (
     lectureId: number;
     question:  string;
     sessionId: number;
+    tutoringMode?: unknown;
     // Optional live streaming of the grounded-answer draft (SSE endpoint).
     // Only the main generation step streams; greetings, summaries, memory
     // hits and guardrail fallbacks return their text via the final result.
@@ -282,6 +284,8 @@ export const askLectureAgent = async (
   deps: AskLectureAgentDeps = {}
 ): Promise<{ answer: string; sources: QnaChunk[] }> => {
   const { studentId, lectureId, sessionId } = params;
+  // Only server-approved enum values may affect the teaching prompt.
+  const tutoringMode = effectiveTutoringMode(params.tutoringMode);
   // Reassigned once the input guardrail runs — from that point on, every
   // downstream stage (routing, persistence, logs, every LLM prompt, and the
   // embed/search/rerank calls) sees the guarded (possibly PII-sanitized) text.
@@ -412,7 +416,7 @@ export const askLectureAgent = async (
     // exact lookup, its semantic lookup, and the memory write below, so an
     // agent-generated answer is never stored or matched under the generic
     // version (see getEffectiveAnswerPromptVersion).
-    const answerPromptVersion = (await import('./rag-answer-memory.service')).getEffectiveAnswerPromptVersion(agentProfile);
+    const answerPromptVersion = modeAwarePromptVersion((await import('./rag-answer-memory.service')).getEffectiveAnswerPromptVersion(agentProfile), tutoringMode);
 
     // 1a-2. Chat session validation — the supplied sessionId must exist, belong
     // to THIS student, and have been created for THIS lecture. Runs before
@@ -1011,7 +1015,7 @@ export const askLectureAgent = async (
       // answer-generation.service.ts for how it's used (a note, never merged into
       // the grounded context itself).
       async () => {
-        const draft = await generateAnswer(question, contextChunks, lecture.title, historyTurns, uncoveredAspects, 1, draftStream, agentProfile, unavailableAspects);
+        const draft = await generateAnswer(question, contextChunks, lecture.title, historyTurns, uncoveredAspects, 1, draftStream, agentProfile, unavailableAspects, tutoringMode);
         piiSafeStream?.flush();
         return draft;
       },

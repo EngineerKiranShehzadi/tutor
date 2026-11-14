@@ -89,6 +89,7 @@ export const typeDefs = `#graphql
     lectureId: Int!
     question:  String!
     sessionId: Int!
+    tutoringMode: String
   }
 
   type ChatSession {
