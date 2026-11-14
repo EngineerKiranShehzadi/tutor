@@ -65,6 +65,18 @@ export async function approveCloDocument(courseId:number,adminId:string,proposed
  const client=await pool.connect();
  try{
   await client.query('BEGIN');
+  // Serialize competing approvals for the SAME course. Without this lock,
+  // two admins could interleave DELETE + INSERT and leave a mixed CLO scope.
+  const lockedCourse=await client.query(
+   'SELECT id FROM courses WHERE id=$1 AND archived_at IS NULL FOR UPDATE',[courseId]);
+  if(!lockedCourse.rows.length)throw new AppError('Course not found',404);
+  // Revalidate within the transaction: a lecture may have been moved/archived
+  // after the initial preview and before approval.
+  const validLectures=await client.query<{id:number}>(
+   'SELECT id FROM lectures WHERE course_id=$1 AND archived_at IS NULL FOR SHARE',[courseId]);
+  const allowedLectures=new Set(validLectures.rows.map(row=>Number(row.id)));
+  if(items.some(item=>item.lectureIds.some(id=>!allowedLectures.has(id))))
+   throw new AppError('Lecture mapping changed. Re-analyze the CLO document.',409);
   for(const item of items){
    const {rows:existing}=await client.query<{id:string;description:string}>(
     'SELECT id,description FROM course_learning_outcomes WHERE course_id=$1 AND code=$2 FOR UPDATE',[courseId,item.code]);
