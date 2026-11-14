@@ -370,7 +370,7 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
           )}
           {inFlight && <span className="text-label text-[var(--muted2)]"><i className="fas fa-lock mr-1" /> Locked while a version is building</span>}
         </div>
-        {file && hasDataset && /\\.(docx|pdf|pptx|ppt)$/i.test(file.name) && mode==='MERGE' && (
+        {file && hasDataset && ['.docx','.pdf','.pptx','.ppt'].some(ext=>file.name.toLowerCase().endsWith(ext)) && mode==='MERGE' && (
           <p role="note" className="text-caption text-[var(--muted)]">Re-uploading corrected lecture material? Choose <strong>Replace everything</strong> after reviewing the dry-run removal count. Merge keeps the previous broken chunks alongside your corrected content.</p>
         )}
         </>
