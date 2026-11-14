@@ -53,6 +53,49 @@ async function run(): Promise<void> {
     const pinned = await expandContextCandidates(anchor.rows, lecture_id, 10, other.rows[0].id);
     assert.equal(pinned.length, 1, 'Anchor absent from pinned version must not expand');
   }
+  // Structural family identity is independent of mutable display labels.
+  // Run a real retrieval after temporarily changing only the sibling label.
+  // The test database is disposable; restore the original value even on failure.
+  const originalLabel = await pool.query<{ question: string }>(
+    'SELECT question FROM lecture_qna_chunks WHERE id=$1', [sibling_id]);
+  assert.equal(originalLabel.rows.length, 1);
+  const renamed = '__context_family_label_independence_test__';
+  try {
+    await pool.query('UPDATE lecture_qna_chunks SET question=$1 WHERE id=$2',
+      [renamed, sibling_id]);
+    const afterRename = await expandContextCandidates(anchor.rows, lecture_id, 10, version_id);
+    assert.ok(afterRename.some(c => c.id === sibling_id && c.question === renamed),
+      'Changing the display question must not break structural family expansion');
+  } finally {
+    await pool.query('UPDATE lecture_qna_chunks SET question=$1 WHERE id=$2',
+      [originalLabel.rows[0].question, sibling_id]);
+  }
+
+  // Verify every existing active family (including versions produced by
+  // MERGE/REPLACE) has consistent counts and valid same-version parent links.
+  const { rows: integrity } = await pool.query<{
+    bad_counts: string; bad_links: string; active_versions: string;
+  }>(`
+    SELECT
+      COUNT(*) FILTER (WHERE f.part_count IS DISTINCT FROM sizes.n
+        OR f.part_index >= f.part_count)::text AS bad_counts,
+      COUNT(*) FILTER (WHERE f.parent_chunk_id IS NOT NULL AND
+        (p.chunk_id IS NULL OR p.context_family_id IS DISTINCT FROM f.context_family_id
+          OR p.part_index <> 0))::text AS bad_links,
+      COUNT(DISTINCT f.version_id)::text AS active_versions
+    FROM dataset_chunk_families f
+    JOIN dataset_versions v ON v.id=f.version_id AND v.status='ACTIVE'
+    JOIN (
+      SELECT version_id,context_family_id,COUNT(*)::int AS n
+      FROM dataset_chunk_families GROUP BY version_id,context_family_id
+    ) sizes ON sizes.version_id=f.version_id
+           AND sizes.context_family_id=f.context_family_id
+    LEFT JOIN dataset_chunk_families p
+      ON p.version_id=f.version_id AND p.chunk_id=f.parent_chunk_id`);
+  assert.equal(Number(integrity[0].bad_counts), 0, 'Active family counts must match membership');
+  assert.equal(Number(integrity[0].bad_links), 0, 'Active parent links must remain in their family');
+  assert.ok(Number(integrity[0].active_versions) > 0, 'No active dataset versions found');
+
   console.log('Context-family database expansion checks passed');
 }
 
