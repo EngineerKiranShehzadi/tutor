@@ -20,7 +20,8 @@ export const supportedDatasetExtension = (filename: string): string | null => {
 
 type Unit = { locator: string; text: string };
 export type ExtractionResult = { units: Unit[]; warnings: string[] };
-export type DocumentRowsResult = { rows: RawRow[]; warnings: string[]; units: number };
+export type DocumentQualityReport = {sourceUnits:number;sourceCharacters:number;qaRecords:number;proseRecords:number;qaChildRecords:number;outputRecords:number;warnings:number};
+export type DocumentRowsResult = { rows: RawRow[]; warnings: string[]; units: number; quality: DocumentQualityReport };
 
 const PYTHON_BIN = process.env.DOCUMENT_EXTRACT_PYTHON || 'python3';
 const EXTRACT_SCRIPT = path.resolve(__dirname, '../../scripts/extract_document.py');
@@ -126,7 +127,7 @@ export const documentToRows = async (
     throw new AppError('No selectable text was found. Scanned files need OCR.', 422);
   }
   const rows: RawRow[] = [];
-  let unitNumber = 0;
+  let unitNumber = 0, qaRecords=0, proseRecords=0, qaChildRecords=0;
   for (const unit of extracted.units) {
     if (typeof unit?.text !== 'string' || typeof unit.locator !== 'string') {
       throw new AppError('Invalid document extraction result', 422);
@@ -156,6 +157,10 @@ export const documentToRows = async (
         : await splitPreservingQuestions(section.body);
       for (let part = 0; part < parts.length; part++) {
         const piece = parts[part];
+        if(piece.kind==='QA'){
+          qaChildRecords++;
+          if(piece.part===1)qaRecords++;
+        }else proseRecords++;
         const kind = section.isVisual ? 'Visual' : piece.kind === 'QA' ? 'QA' : 'Part';
         const question = piece.kind === 'QA'
           // Distinct stable question identities prevent ambiguous repeat uploads;
@@ -176,5 +181,8 @@ export const documentToRows = async (
     }
   }
   if (!rows.length) throw new AppError('Document does not contain usable text', 422);
-  return { rows, warnings: extracted.warnings.slice(0, 100), units: extracted.units.length };
+  const warnings=extracted.warnings.slice(0,100);
+  return { rows, warnings, units: extracted.units.length,
+    quality:{sourceUnits:extracted.units.length,sourceCharacters:extracted.units.reduce((n,u)=>n+u.text.length,0),
+      qaRecords,proseRecords,qaChildRecords,outputRecords:rows.length,warnings:warnings.length} };
 };
