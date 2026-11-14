@@ -9,7 +9,8 @@ const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:10*1024*102
  const ext=file.originalname.toLowerCase();
  const ok=(ext.endsWith('.pdf')&&['application/pdf','application/octet-stream',''].includes(file.mimetype))||
  (ext.endsWith('.docx')&&['application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/zip','application/octet-stream',''].includes(file.mimetype));
- cb(ok?null:new AppError('Only PDF/DOCX CLO documents are allowed',400),ok);
+ if (!ok) return cb(new AppError('Only PDF/DOCX CLO documents are allowed',400));
+ cb(null,true);
 }});
 router.use(protect,requireRole('ADMIN'));
 router.post('/preview/:courseId',upload.single('file'),async(req,res,next)=>{
