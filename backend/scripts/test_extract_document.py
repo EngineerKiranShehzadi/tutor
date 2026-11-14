@@ -49,6 +49,21 @@ class TestDocumentExtractor(unittest.TestCase):
         self.assertIn("A list is a mutable sequence.", text)
         self.assertIn("list | mutable", text)
 
+    def test_docx_question_answer_table_rows_stay_paired(self):
+        from docx import Document
+        doc = Document()
+        table = doc.add_table(rows=2, cols=2)
+        table.cell(0, 0).text = "Question"
+        table.cell(0, 1).text = "Answer"
+        table.cell(1, 0).text = "What is zero-shot prompting?"
+        table.cell(1, 1).text = "It uses no worked examples."
+        buf = io.BytesIO()
+        doc.save(buf)
+        result = extract(buf.getvalue(), ".docx")
+        text = result["units"][0]["text"]
+        self.assertIn("Question: What is zero-shot prompting?", text)
+        self.assertIn("Answer: It uses no worked examples.", text)
+
     def test_docx_slide_heading_preserves_question_answer_scope(self):
         from docx import Document
         doc = Document()
