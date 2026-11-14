@@ -97,8 +97,14 @@ export async function approveCloDocument(courseId:number,adminId:string,proposed
     const ins=await client.query<{id:string}>(`INSERT INTO course_learning_outcomes(course_id,code,description)
      VALUES($1,$2,$3) RETURNING id`,[courseId,item.code,item.description]);id=Number(ins.rows[0].id);
    }
-   // Approval is a replacement of this CLO's approved scope: unchecking a lecture
-   // revokes future automatic tags without deleting historical graded answers.
+   // Replace only lecture coverage previously introduced through this approved
+   // import workflow. Leave unrelated manually curated mappings untouched.
+   // Historical graded question/CLO evidence is never removed.
+   await client.query(`DELETE FROM lecture_learning_outcomes l
+      USING approved_clo_lecture_scopes s
+      WHERE l.lecture_id=s.lecture_id AND l.outcome_id=s.outcome_id
+        AND s.course_id=$1 AND s.outcome_id=$2
+        AND NOT (s.lecture_id=ANY($3::int[]))`,[courseId,id,item.lectureIds]);
    await client.query('DELETE FROM approved_clo_lecture_scopes WHERE course_id=$1 AND outcome_id=$2',[courseId,id]);
    for(const lectureId of item.lectureIds){
     await client.query(`INSERT INTO lecture_learning_outcomes(lecture_id,outcome_id) VALUES($1,$2) ON CONFLICT DO NOTHING`,[lectureId,id]);
