@@ -1,3 +1,4 @@
+import { AppError } from '../middleware/errorHandler';
 /** Trusted English-only pedagogical policy. Never taken from arbitrary client prompt text. */
 export const TUTORING_MODE_VERSION = '1';
 export const TUTORING_MODES = ['SIMPLE','ACADEMIC','REAL_LIFE_EXAMPLE','SOCRATIC','EXAM_PREP'] as const;
@@ -5,14 +6,18 @@ export type TutoringMode = typeof TUTORING_MODES[number];
 export function normalizeTutoringMode(value: unknown): TutoringMode | null {
   if (value === undefined || value === null || value === '') return null;
   if (typeof value !== 'string' || !TUTORING_MODES.includes(value as TutoringMode)) {
-    throw new Error('Invalid tutoring mode');
+    throw new AppError('Invalid tutoring mode', 400);
   }
   return value as TutoringMode;
 }
 export function effectiveTutoringMode(value: unknown): TutoringMode | null {
   const mode = normalizeTutoringMode(value);
   // Rollback: turning off the flag restores legacy prompting/cache behavior.
-  return process.env.ADAPTIVE_TUTORING_MODES_ENABLED === 'true' ? mode : null;
+  if (process.env.ADAPTIVE_TUTORING_MODES_ENABLED !== 'true') return null;
+  if (mode === 'SOCRATIC' && process.env.ADAPTIVE_TUTORING_SOCRATIC_ENABLED !== 'true') {
+    throw new AppError('Socratic tutoring is not enabled yet', 400);
+  }
+  return mode;
 }
 const instructions: Record<TutoringMode,string> = {
  SIMPLE:'Explain in clear English with short sentences, one idea at a time. Define necessary technical terms exactly. End with a brief takeaway.',

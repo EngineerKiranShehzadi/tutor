@@ -33,6 +33,9 @@ jobs:
       - name: Learning outcome evidence regression tests
         working-directory: backend
         run: npx ts-node --transpile-only src/scripts/test-learning-outcome-evidence.ts
+      - name: Tutor mode and prompt-cache isolation tests
+        working-directory: backend
+        run: npx ts-node --transpile-only src/scripts/test-tutoring-modes.ts
       - name: Backend TypeScript
         working-directory: backend
         run: npm run typecheck

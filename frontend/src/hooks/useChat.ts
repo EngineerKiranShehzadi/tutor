@@ -191,6 +191,8 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
     init();
   }, [lectureId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => { chooseTutoringMode('ACADEMIC'); }, [lectureId, chooseTutoringMode]);
+
   // ── Select an existing session ────────────────────────────
   const selectSession = useCallback(async (sessionId: number) => {
     // Mode is scoped to the active session; do not carry it into another session.
