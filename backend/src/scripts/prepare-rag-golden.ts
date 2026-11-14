@@ -32,11 +32,9 @@ async function main() {
     chunk_text: string; source_locator: string | null;
   }>(`
     SELECT d.qa_id,c.question,c.id AS chunk_id,d.chunk_index,c.chunk_text,
-           f.source_locator
+           c.start_time AS source_locator
     FROM dataset_version_chunks d
     JOIN lecture_qna_chunks c ON c.id=d.chunk_id
-    LEFT JOIN dataset_chunk_families f
-      ON f.version_id=d.version_id AND f.chunk_id=d.chunk_id
     WHERE d.version_id=$1 AND c.lecture_id=$2 AND c.local_embedding IS NOT NULL
     ORDER BY d.qa_id,d.chunk_index,c.id`, [versionId, lectureId]);
 
