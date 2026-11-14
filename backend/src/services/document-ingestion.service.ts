@@ -158,7 +158,10 @@ export const documentToRows = async (
         const piece = parts[part];
         const kind = section.isVisual ? 'Visual' : piece.kind === 'QA' ? 'QA' : 'Part';
         const question = piece.kind === 'QA'
-          ? piece.question!
+          // Distinct stable question identities prevent ambiguous repeat uploads;
+          // each child still embeds the full original question.
+          ? (parts.some(p=>p.kind==='QA' && p.question===piece.question && p.part>1)
+              ? `${piece.question} [Answer part ${piece.part}]` : piece.question!)
           : `Source excerpt: ${safeName} | ${locator} | ${kind} ${part + 1}`;
         rows.push({
           question,
