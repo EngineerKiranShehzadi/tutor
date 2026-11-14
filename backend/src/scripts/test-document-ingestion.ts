@@ -6,9 +6,21 @@ import {
   supportedDatasetExtension,
   runDocumentExtractor,
 } from '../services/document-ingestion.service';
-import { buildChunkPiecesReport } from '../services/chunk.service';
+import { buildChunkPieces, buildChunkPiecesReport, MAX_PIECES_PER_ROW } from '../services/chunk.service';
 
 async function run() {
+  // Shared indexing must never silently discard the tail of an oversized answer.
+  const shortRow = { question: 'What is a variable?', answer: 'A named storage location.' };
+  assert.deepEqual(await buildChunkPieces(shortRow), (await buildChunkPiecesReport(shortRow)).pieces);
+  const oversizedRow = {
+    question: 'Explain the full sequence.',
+    answer: Array.from({ length: 1800 }, (_, i) => `Distinct explanation segment ${i}: a complete detail for retrieval.`).join('\\n\\n'),
+  };
+  const preview = await buildChunkPiecesReport(oversizedRow);
+  assert.ok(preview.splitInto > MAX_PIECES_PER_ROW, 'oversized fixture must exceed the limit');
+  assert.equal(preview.pieces.length, MAX_PIECES_PER_ROW, 'preview retains bounded sample');
+  await assert.rejects(buildChunkPieces(oversizedRow), /exceeds the safe chunk limit/);
+
   assert.equal(supportedDatasetExtension('lecture.PDF'), '.pdf');
   assert.equal(supportedDatasetExtension('notes.docx'), '.docx');
   assert.equal(supportedDatasetExtension('slides.pptx'), '.pptx');
