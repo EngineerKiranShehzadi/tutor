@@ -1,5 +1,6 @@
 import {strict as assert} from 'assert';
 import {verifiedCloOutcomeId} from '../services/clo-alignment.service';
+import {completeCloDocumentText} from '../services/clo-document.service';
 const approved=[10,11];
 assert.equal(verifiedCloOutcomeId({grounded:true,unambiguous:true,outcomeId:10},approved),10);
 assert.equal(verifiedCloOutcomeId({grounded:true,unambiguous:true,outcomeId:11},approved),11);
@@ -9,4 +10,7 @@ assert.equal(verifiedCloOutcomeId({grounded:true,unambiguous:false,outcomeId:10}
 assert.equal(verifiedCloOutcomeId({grounded:true,unambiguous:true,outcomeId:0},approved),null);
 assert.equal(verifiedCloOutcomeId({grounded:true,unambiguous:true,outcomeId:10},[]),null);
 assert.equal(verifiedCloOutcomeId(null,approved),null);
+assert.equal(completeCloDocumentText([{text:'CLO1: Explain the fundamental concepts of Generative AI.'}]).includes('CLO1'),true);
+assert.throws(()=>completeCloDocumentText([{text:'CLO1: '+'Explain a concept. '.repeat(4000)}]),/exceeds the safe extraction context/);
+assert.throws(()=>completeCloDocumentText([{text:' '}]),/No readable CLO text/);
 console.log('CLO question alignment guards passed.');
