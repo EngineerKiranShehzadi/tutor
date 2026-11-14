@@ -54,6 +54,7 @@ async function main(){
  finally{
   // Only fake fixture rows on a verified disposable database.
   await query('DELETE FROM users WHERE id=ANY($1::uuid[])',[[student,other]]);
+  await query('DELETE FROM lectures WHERE id=$1',[lecture]);
   await query('DELETE FROM courses WHERE id=$1',[course]);
   await pool.end();
  }
