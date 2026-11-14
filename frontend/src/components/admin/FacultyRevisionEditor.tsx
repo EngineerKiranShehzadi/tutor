@@ -4,7 +4,7 @@ import {useMutation,useQuery} from '@apollo/client';
 import {GET_FACULTY_REVISION_PLANS,SAVE_REVISION_PLAN,WITHDRAW_REVISION_PLAN} from '@/graphql/revision-plan.queries';
 type Plan={outcomeId:number;lectureId:number;guidance:string;status:string};
 const input='w-full rounded-control border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-label text-[var(--text)] focus:border-[var(--accent)] outline-none';
-export function FacultyRevisionEditor({courseId,outcomeId,code,lectureIds}:{courseId:number;outcomeId:number;code:string;lectureIds:number[]}){
+export function FacultyRevisionEditor({courseId,outcomeId,code,lectureIds,lectureTitles}:{courseId:number;outcomeId:number;code:string;lectureIds:number[];lectureTitles?:Record<number,string>}){
  const plans=useQuery(GET_FACULTY_REVISION_PLANS,{variables:{courseId},fetchPolicy:'cache-and-network'});
  const current:Plan|undefined=(plans.data?.facultyRevisionPlans??[]).find((x:Plan)=>x.outcomeId===outcomeId);
  const [lectureId,setLectureId]=useState<number|null>(null);
@@ -31,7 +31,7 @@ export function FacultyRevisionEditor({courseId,outcomeId,code,lectureIds}:{cour
    <select className={input+' mt-1'} value={lectureId??''} disabled={pending||lectureIds.length===0}
     onChange={e=>{setDirty(true);setLectureId(Number(e.target.value));}}>
     {!lectureIds.length&&<option value="">Map a lecture first</option>}
-    {lectureIds.map(id=><option key={id} value={id}>Lecture {id}</option>)}
+    {lectureIds.map(id=><option key={id} value={id}>{lectureTitles?.[id]??`Lecture ${id}`}</option>)}
    </select>
   </label>
   <label className="block text-caption text-[var(--text)] mt-3">Admin guidance
