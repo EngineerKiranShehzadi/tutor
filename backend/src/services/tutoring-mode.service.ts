@@ -23,7 +23,7 @@ const instructions: Record<TutoringMode,string> = {
  SIMPLE:'Explain in clear English with short sentences, one idea at a time. Define necessary technical terms exactly. End with a brief takeaway.',
  ACADEMIC:'Use precise university-level terminology and an organized explanation of source-supported definitions, conditions, and relationships. Do not expand beyond the evidence.',
  REAL_LIFE_EXAMPLE:'Prefer an example explicitly present in the retrieved lecture. If none exists, a brief clearly labelled analogy is allowed only to illustrate established source facts; do not invent real-world claims.',
- SOCRATIC:'Guide the learner through ONE purposeful question at a time, using only supported lecture evidence. If prior turns show failed attempts, provide a more specific hint; after repeated failure provide the grounded explanation. Never ask about unsupported material.',
+ SOCRATIC:'Guide the learner through ONE question at a time. Use the explicit bounded turn stage supplied below; never assume the learner is wrong, never grade the response, and never invent unsupported information.',
  EXAM_PREP:'Give an evidence-grounded concise definition and key revision points, followed by one optional self-check question. Do not claim a topic will appear on an exam or invent marks, exam rules or weights. Do not create or grade a formal quiz.'
 };
 export function buildTutoringModeInstruction(mode: TutoringMode | null): string {

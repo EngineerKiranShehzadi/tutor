@@ -1,5 +1,6 @@
 import { query } from '../config/database';
 import { effectiveTutoringMode, modeAwarePromptVersion, type TutoringMode } from './tutoring-mode.service';
+import { getSocraticState, advanceSocraticState, type SocraticStage } from './socratic-state.service';
 import { env } from '../config/env';
 import { AppError } from '../middleware/errorHandler';
 import { ChatHistoryEntry, QnaChunk, LectureAgentProfile } from '../types';
@@ -71,7 +72,7 @@ export interface AskLectureAgentDeps {
   rerankChunks?:           (question: string, candidates: QnaChunk[], topN?: number) => Promise<QnaChunk[]>;
   dedupeAndSelect?:        (rankedChunks: QnaChunk[], desiredCount?: number, minRerankScore?: number) => DedupeResult;
   reorderForContext?:      (chunks: QnaChunk[]) => QnaChunk[];
-  generateAnswer?:         (question: string, chunks: QnaChunk[], lectureTitle: string, history?: ConversationTurn[], uncoveredAspects?: string[], attempt?: number, stream?: AnswerStreamHandlers, agentProfile?: LectureAgentProfile | null, unavailableAspects?: string[], tutoringMode?: TutoringMode | null) => Promise<string>;
+  generateAnswer?:         (question: string, chunks: QnaChunk[], lectureTitle: string, history?: ConversationTurn[], uncoveredAspects?: string[], attempt?: number, stream?: AnswerStreamHandlers, agentProfile?: LectureAgentProfile | null, unavailableAspects?: string[], tutoringMode?: TutoringMode | null, socraticTurn?: {stage:SocraticStage;anchorQuestion:string}) => Promise<string>;
   // Resolves the lecture's agent profile by lecture_id only (see
   // lecture-agent-profile.service.ts). Defaults to the real service.
   getAgentProfile?:        (lectureId: number) => Promise<AgentProfileLookup>;
@@ -498,6 +499,14 @@ export const askLectureAgent = async (
       ...(isContentCaptureEnabled() ? { [ATTR.INPUT_VALUE]: truncateContent(question, 500).value } : {}),
     });
 
+    // Socratic state belongs to the authenticated lecture-specific chat session.
+    // Read only after ownership + input guardrails. No cross-student/session mixing.
+    const socraticState = tutoringMode === 'SOCRATIC'
+      ? await getSocraticState(studentId, lectureId, sessionId) : null;
+    const socraticTurn = tutoringMode === 'SOCRATIC'
+      ? {stage: (socraticState?.stage ?? 0) as SocraticStage, anchorQuestion: socraticState?.anchorQuestion ?? question}
+      : undefined;
+
     // 2. Persist question for admin analytics before AI call
     currentStage = 'record-student-question';
     await query(
@@ -550,7 +559,9 @@ export const askLectureAgent = async (
     // request shapes use different processing paths instead of every
     // message going through the same vector-search pipeline.
     currentStage = 'classify-query-route';
-    const { route, source: routeSource } = await trace.span(
+    const { route, source: routeSource } = socraticState
+      ? {route:'FACT_QUESTION' as const,source:'rule' as const}
+      : await trace.span(
       'classify-query-route',
       () => classifyRoute(question),
       r => ({ route: r.route, routingMethod: mapRoutingMethod(r.source), routeFallbackUsed: r.source === 'llm-fallback' })
@@ -648,7 +659,7 @@ export const askLectureAgent = async (
     // ── CONTEXTUAL_FOLLOW_UP / FACT_QUESTION — shared fact-retrieval pipeline.
     // Only follow-ups pay for the rewrite step; plain fact questions embed
     // the original question directly.
-    let retrievalQuery = question;
+    let retrievalQuery = socraticState?.anchorQuestion ?? question;
     if (route === 'CONTEXTUAL_FOLLOW_UP') {
       currentStage = 'rewrite-contextual-query';
       const rewritten = await trace.span(
@@ -682,13 +693,13 @@ export const askLectureAgent = async (
     let memoryDatasetVersionId: number | null = null;
     let memoryResultAttr = 'NOT_ATTEMPTED';
 
-    if (route === 'FACT_QUESTION' && piiMasked) {
+    if (route === 'FACT_QUESTION' && piiMasked && tutoringMode !== 'SOCRATIC') {
       logger.info('[CHAT] 🛡️  Answer memory skipped: the question had PII masked');
       // memoryResult stays NOT_ATTEMPTED, as for routes that never use memory;
       // this says why, so the skip rate is measurable (rag_request_log, monitor).
       trace.setAttributes({ memorySkipReason: 'PII_MASKED' });
     }
-    if (route === 'FACT_QUESTION' && !piiMasked) {
+    if (route === 'FACT_QUESTION' && !piiMasked && tutoringMode !== 'SOCRATIC') {
       currentStage = 'exact-memory-lookup';
       const lookupAnswerMemory = deps.lookupAnswerMemory ?? (await import('./rag-answer-memory.service')).lookupAnswerMemory;
       const memoryResult = await trace.span(
@@ -1015,7 +1026,7 @@ export const askLectureAgent = async (
       // answer-generation.service.ts for how it's used (a note, never merged into
       // the grounded context itself).
       async () => {
-        const draft = await generateAnswer(question, contextChunks, lecture.title, historyTurns, uncoveredAspects, 1, draftStream, agentProfile, unavailableAspects, tutoringMode);
+        const draft = await generateAnswer(question, contextChunks, lecture.title, historyTurns, uncoveredAspects, 1, draftStream, agentProfile, unavailableAspects, tutoringMode, socraticTurn);
         piiSafeStream?.flush();
         return draft;
       },
@@ -1097,6 +1108,13 @@ export const askLectureAgent = async (
       return id;
     }, () => ({ sourceChunkCount: chunkIds.length }));
 
+    // Only a verified, complete Socratic stage advances the student's private topic.
+    // Hints are not grades or evidence of CLO mastery.
+    if (socraticTurn && guardrailOutcome.verified && answer.trim() !== LECTURE_NOT_FOUND_MESSAGE) {
+      await advanceSocraticState({studentId,lectureId,sessionId,
+        anchorQuestion:socraticTurn.anchorQuestion,stage:socraticTurn.stage});
+    }
+
     // 9. Answer-memory write — FACT_QUESTION only, after a successful,
     // grounded, chunk-backed answer is already saved, AND only once output
     // verification actually passed (guardrailOutcome.verified). A
@@ -1119,7 +1137,7 @@ export const askLectureAgent = async (
     // found the real answer never gets the chance — the cached refusal keeps
     // being served instead (2026-11-03 RAG test, Finding 2 follow-up).
     const isNotFoundAnswer = answer.trim() === LECTURE_NOT_FOUND_MESSAGE.trim();
-    if (route === 'FACT_QUESTION' && !piiMasked && guardrailOutcome.verified && !isNotFoundAnswer && unavailableAspects.length === 0) {
+    if (route === 'FACT_QUESTION' && tutoringMode !== 'SOCRATIC' && !piiMasked && guardrailOutcome.verified && !isNotFoundAnswer && unavailableAspects.length === 0) {
       currentStage = 'write-answer-memory';
       try {
         const memoryService = await import('./rag-answer-memory.service');
