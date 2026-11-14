@@ -427,6 +427,10 @@ const buildVersion = async (plan: Plan): Promise<{ versionId: number; versionNo:
       );
     }
 
+    // Resolve parent references after every membership is present, including MERGE carryovers.
+    // This is version-scoped and does not modify chunk text or embedding vectors.
+    await client.query('SELECT finalize_dataset_chunk_families($1)', [versionId]);
+
     // Progress bar / lecture status. A lecture that already has an active
     // version stays READY and keeps answering from it; only a first-ever
     // dataset shows the processing states.
