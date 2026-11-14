@@ -9,6 +9,12 @@ on:
       - 'backend/src/graphql/learning-outcome.schema.ts'
       - 'backend/src/graphql/resolvers/learning-outcome.resolver.ts'
       - 'backend/src/db/migrations/033_learning_outcomes.sql'
+      - 'backend/src/db/migrations/034_misconception_evidence.sql'
+      - 'backend/src/services/misconception.service.ts'
+      - 'backend/src/graphql/misconception.schema.ts'
+      - 'backend/src/graphql/resolvers/misconception.resolver.ts'
+      - 'frontend/src/components/admin/MisconceptionReview.tsx'
+      - 'frontend/src/components/student/PersonalLearningSignals.tsx'
       - 'frontend/src/app/(admin)/admin/learning-outcomes/**'
       - 'frontend/src/app/(dashboard)/learning-outcomes/**'
       - 'frontend/src/graphql/learning-outcome.queries.ts'
@@ -68,6 +74,8 @@ jobs:
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/023_practice_quizzes.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/033_learning_outcomes.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/033_learning_outcomes.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/034_misconception_evidence.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/034_misconception_evidence.sql
       - name: Check constraints and idempotence
         run: |
           psql -v ON_ERROR_STOP=1 <<'SQL'
@@ -80,3 +88,5 @@ jobs:
             IF count_tables<>3 THEN RAISE EXCEPTION 'Missing outcome tables'; END IF;
           END $$;
           SQL
+      - name: Verify faculty tagging constraints and student evidence isolation
+        run: psql -v ON_ERROR_STOP=1 -f backend/tests/learning-misconception.sql
