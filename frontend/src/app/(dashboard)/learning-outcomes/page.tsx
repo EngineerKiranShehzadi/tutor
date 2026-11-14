@@ -6,6 +6,7 @@ import { GET_COURSES } from '@/graphql/course.queries';
 import { GET_MY_OUTCOME_PROGRESS } from '@/graphql/learning-outcome.queries';
 import { PersonalLearningSignals } from '@/components/student/PersonalLearningSignals';
 import { MyFacultyRevisionPlans } from '@/components/student/MyFacultyRevisionPlans';
+import { MyObservedProgress } from '@/components/student/MyObservedProgress';
 
 type Course={id:string;title:string};
 type Progress={outcomeId:number;code:string;description:string;attempted:number;correct:number;percent:number|null;status:string;lectureIds:number[]};
@@ -44,6 +45,7 @@ export default function StudentLearningOutcomes(){
         {r.status==='NEEDS_REVISION'&&<p className="mt-3 text-caption text-[var(--muted)]">Review a mapped lecture before requesting another quiz.</p>}
       </article>)}
     </section>
+    {courseId!==null&&<MyObservedProgress courseId={courseId}/>}
     {courseId!==null&&<MyFacultyRevisionPlans courseId={courseId}/>}
     {courseId!==null&&<PersonalLearningSignals courseId={courseId} lectureLinks={Object.fromEntries(rows.map(r=>[r.outcomeId,r.lectureIds]))}/>}
     <p className="text-caption text-[var(--muted)] mt-5">At least three mapped graded answers are needed before a performance label is shown. These are learning indicators, not official university grades.</p>
