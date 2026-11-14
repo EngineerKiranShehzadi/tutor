@@ -6,6 +6,10 @@ on:
   pull_request:
     paths:
       - 'backend/src/services/learning-outcome*'
+      - 'backend/src/services/faculty-learning-gap*'
+      - 'backend/src/graphql/faculty-learning-gap.schema.ts'
+      - 'backend/src/graphql/resolvers/faculty-learning-gap.resolver.ts'
+      - 'frontend/src/app/(admin)/admin/faculty-gaps/**'
       - 'backend/src/graphql/learning-outcome.schema.ts'
       - 'backend/src/graphql/resolvers/learning-outcome.resolver.ts'
       - 'backend/src/db/migrations/033_learning_outcomes.sql'
@@ -50,6 +54,13 @@ jobs:
           JWT_SECRET: offline-test-access-secret-at-least-32-bytes
           JWT_REFRESH_SECRET: offline-test-refresh-secret-at-least-32-bytes
         run: npx ts-node --transpile-only src/scripts/test-socratic-stages.ts
+      - name: Faculty gap evidence and privacy threshold tests
+        working-directory: backend
+        env:
+          DB_PASSWORD: offline-test
+          JWT_SECRET: offline-test-access-secret-at-least-32-bytes
+          JWT_REFRESH_SECRET: offline-test-refresh-secret-at-least-32-bytes
+        run: npx ts-node --transpile-only src/scripts/test-faculty-learning-gaps.ts
       - name: Backend TypeScript
         working-directory: backend
         run: npm run typecheck
