@@ -110,10 +110,19 @@ def docx_units(data, warnings):
             else:
                 current.append(value)
         elif isinstance(element, Table):
-            # Preserve rows and their column relationships, never discard cell values.
-            for row in element.rows:
-                cells = [clean(cell.text) for cell in row.cells]
-                if any(cells):
+            # Recognize real Question/Answer tables rather than splitting a
+            # question column from the corresponding answer column.
+            table_rows = [[clean(cell.text) for cell in row.cells] for row in element.rows]
+            header = [v.lower().rstrip(":") for v in table_rows[0]] if table_rows else []
+            qa_table = len(header) >= 2 and header[0] in {"question", "questions", "q"} and header[1] in {"answer", "answers", "a"}
+            for index, cells in enumerate(table_rows):
+                if not any(cells):
+                    continue
+                if qa_table and index == 0:
+                    continue
+                if len(cells) >= 2 and (qa_table or (cells[0].endswith("?") and len(cells[0]) <= 350)):
+                    current.append("Question: " + cells[0] + "\nAnswer: " + cells[1])
+                else:
                     current.append(" | ".join(cells))
     flush()
     if len(sections) > MAX_UNITS:
