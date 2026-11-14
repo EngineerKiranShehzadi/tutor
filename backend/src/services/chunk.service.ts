@@ -74,7 +74,7 @@ export const MAX_PIECES_PER_ROW = 20;
 // also changes chunk_text (hence content_hash) of any row it affects, which is
 // what triggers re-embedding of exactly those rows.
 export const CHUNKING_CONFIG_VERSION =
-  `rcts:${SPLIT_THRESHOLD_CHARS}/${SPLIT_CHUNK_SIZE}/${SPLIT_CHUNK_OVERLAP}/${MAX_PIECES_PER_ROW}`;
+  `rcts:${SPLIT_THRESHOLD_CHARS}/${SPLIT_CHUNK_SIZE}/${SPLIT_CHUNK_OVERLAP}/${MAX_PIECES_PER_ROW}:document-context-v2`;
 
 const splitter = new RecursiveCharacterTextSplitter({
   chunkSize: SPLIT_CHUNK_SIZE,
