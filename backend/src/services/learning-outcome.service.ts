@@ -109,6 +109,8 @@ export async function studentOutcomeProgress(studentId:string,courseId:number){
   positive(courseId,'course');
   const {rows}=await query<any>(
     `SELECT o.id,o.code,o.description,
+      (SELECT COALESCE(array_agg(lo.lecture_id ORDER BY lo.lecture_id), ARRAY[]::int[])
+         FROM lecture_learning_outcomes lo WHERE lo.outcome_id=o.id) AS lecture_ids,
       COUNT(a.question_id)::int AS attempted,
       COUNT(a.question_id) FILTER(WHERE a.is_correct)::int AS correct
      FROM course_learning_outcomes o
@@ -121,7 +123,7 @@ export async function studentOutcomeProgress(studentId:string,courseId:number){
   return rows.map(r=>{
     const attempted=Number(r.attempted),correct=Number(r.correct);
     return {outcomeId:Number(r.id),code:r.code,description:r.description,attempted,correct,
-      percent:attempted?Math.round(correct*100/attempted):null,status:evaluateOutcomeStatus(attempted,correct)};
+      percent:attempted?Math.round(correct*100/attempted):null,status:evaluateOutcomeStatus(attempted,correct),lectureIds:(r.lecture_ids || []).map(Number)};
   });
 }
 export async function facultyOutcomeSummary(courseId:number){

@@ -23,6 +23,7 @@ export const learningOutcomeTypeDefs = `#graphql
     correct: Int!
     percent: Int
     status: String!
+    lectureIds: [Int!]!
   }
   type FacultyOutcomeSummary {
     outcomeId: Int!

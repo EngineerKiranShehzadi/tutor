@@ -6,7 +6,7 @@ import { GET_COURSES } from '@/graphql/course.queries';
 import { GET_MY_OUTCOME_PROGRESS } from '@/graphql/learning-outcome.queries';
 
 type Course={id:string;title:string};
-type Progress={outcomeId:number;code:string;description:string;attempted:number;correct:number;percent:number|null;status:string};
+type Progress={outcomeId:number;code:string;description:string;attempted:number;correct:number;percent:number|null;status:string;lectureIds:number[]};
 const labels:Record<string,string>={NOT_ASSESSED:'Not assessed',INSUFFICIENT_EVIDENCE:'More evidence needed',STRONG:'Strong performance',DEVELOPING:'Developing',NEEDS_REVISION:'Needs revision'};
 export default function StudentLearningOutcomes(){
   const courses=useQuery(GET_COURSES,{fetchPolicy:'cache-and-network'});
@@ -38,7 +38,8 @@ export default function StudentLearningOutcomes(){
         </div>
         <p className="mt-4 text-caption text-[var(--muted)]">{r.attempted} mapped quiz answers · {r.correct} correct · {r.percent===null?'No score yet':r.percent+'% correct'}</p>
         {r.percent!==null&&<div className="mt-2 h-2 rounded-full bg-[var(--surface)] border border-[var(--border)] overflow-hidden" role="progressbar" aria-label={r.code+' assessed accuracy'} aria-valuemin={0} aria-valuemax={100} aria-valuenow={r.percent}><div className="h-full bg-[var(--accent)]" style={{width:r.percent+'%'}}/></div>}
-        {r.status==='NEEDS_REVISION'&&<p className="mt-3 text-caption text-[var(--muted)]">Consider reviewing the related lectures and requesting another practice quiz.</p>}
+        {r.lectureIds.length>0&&<div className="mt-4 flex flex-wrap items-center gap-2"><span className="text-caption text-[var(--muted)]">Mapped lectures:</span>{r.lectureIds.map(id=><Link key={id} href={'/lecture/'+id} className="rounded-control border border-[var(--border)] px-3 py-1.5 text-caption font-semibold text-[var(--accent)] hover:bg-[var(--surface)]">Review lecture {id}</Link>)}</div>}
+        {r.status==='NEEDS_REVISION'&&<p className="mt-3 text-caption text-[var(--muted)]">Review a mapped lecture before requesting another quiz.</p>}
       </article>)}
     </section>
     <p className="text-caption text-[var(--muted)] mt-5">At least three mapped graded answers are needed before a performance label is shown. These are learning indicators, not official university grades.</p>

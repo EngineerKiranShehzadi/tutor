@@ -20,7 +20,7 @@ export const GET_OUTCOME_QUESTIONS = gql`
 export const GET_MY_OUTCOME_PROGRESS = gql`
   query MyOutcomeProgress($courseId:Int!) {
     myOutcomeProgress(courseId:$courseId) {
-      outcomeId code description attempted correct percent status
+      outcomeId code description attempted correct percent status lectureIds
     }
   }
 `;
