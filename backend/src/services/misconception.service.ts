@@ -96,7 +96,7 @@ export async function myOutcomeTimeline(studentId:string,courseId:number){
  FROM course_learning_outcomes o
  JOIN practice_question_outcomes qo ON qo.outcome_id=o.id
  JOIN practice_questions q ON q.id=qo.question_id
- JOIN practice_quizzes z ON z.id=q.quiz_id AND z.course_id=$1 AND z.student_id=$2 AND z.status='COMPLETED'
+ JOIN practice_quizzes z ON z.id=q.quiz_id AND z.course_id=$1 AND z.student_id=$2 AND z.status='COMPLETED' AND z.submitted_at IS NOT NULL
  JOIN practice_answers a ON a.quiz_id=z.id AND a.question_id=q.id
  WHERE o.course_id=$1
  GROUP BY o.id,z.id,z.submitted_at ORDER BY z.submitted_at DESC,z.id DESC LIMIT 200`,[courseId,studentId]);
