@@ -46,7 +46,59 @@ EXECUTE FUNCTION register_dataset_chunk_family();
 INSERT INTO dataset_chunk_families(version_id,chunk_id,source_unit_id,context_family_id,part_index,source_locator)
 SELECT d.version_id,d.chunk_id,md5(coalesce(c.start_time,'unknown-source')),
  md5(coalesce(c.start_time,'unknown-source')||'|'||
-   CASE WHEN c.question LIKE 'Source excerpt:%' AND c.question ~ '[|] (Part|Visual) [0-9]+$'
+   CASE WHEN coalesce(c.question,'') LIKE 'Source excerpt:%' AND coalesce(c.question,'') ~ '[|] (Part|Visual) [0-9]+
+     THEN regexp_replace(coalesce(c.question,''),'[|] (Part|Visual) [0-9]+
+     ELSE regexp_replace(coalesce(c.question,''),' \[Answer part [0-9]+\],
+ CASE WHEN c.question LIKE 'Source excerpt:%' AND c.question ~ '[|] (Part|Visual) [0-9]+$'
+   THEN greatest(substring(c.question FROM '([0-9]+)$')::int-1,0)
+   ELSE d.chunk_index END,c.start_time
+FROM dataset_version_chunks d JOIN lecture_qna_chunks c ON c.id=d.chunk_id
+ON CONFLICT(version_id,chunk_id) DO NOTHING;
+
+     THEN regexp_replace(c.question,'[|] (Part|Visual) [0-9]+$','')
+     ELSE regexp_replace(c.question,' \[Answer part [0-9]+\]$','') END),
+ CASE WHEN c.question LIKE 'Source excerpt:%' AND c.question ~ '[|] (Part|Visual) [0-9]+$'
+   THEN greatest(substring(c.question FROM '([0-9]+)$')::int-1,0)
+   ELSE d.chunk_index END,c.start_time
+FROM dataset_version_chunks d JOIN lecture_qna_chunks c ON c.id=d.chunk_id
+ON CONFLICT(version_id,chunk_id) DO NOTHING;
+,'')
+     ELSE regexp_replace(c.question,' \[Answer part [0-9]+\]$','') END),
+ CASE WHEN c.question LIKE 'Source excerpt:%' AND c.question ~ '[|] (Part|Visual) [0-9]+$'
+   THEN greatest(substring(c.question FROM '([0-9]+)$')::int-1,0)
+   ELSE d.chunk_index END,c.start_time
+FROM dataset_version_chunks d JOIN lecture_qna_chunks c ON c.id=d.chunk_id
+ON CONFLICT(version_id,chunk_id) DO NOTHING;
+
+     THEN regexp_replace(c.question,'[|] (Part|Visual) [0-9]+$','')
+     ELSE regexp_replace(c.question,' \[Answer part [0-9]+\]$','') END),
+ CASE WHEN c.question LIKE 'Source excerpt:%' AND c.question ~ '[|] (Part|Visual) [0-9]+$'
+   THEN greatest(substring(c.question FROM '([0-9]+)$')::int-1,0)
+   ELSE d.chunk_index END,c.start_time
+FROM dataset_version_chunks d JOIN lecture_qna_chunks c ON c.id=d.chunk_id
+ON CONFLICT(version_id,chunk_id) DO NOTHING;
+,'') END),
+ CASE WHEN c.question LIKE 'Source excerpt:%' AND c.question ~ '[|] (Part|Visual) [0-9]+$'
+   THEN greatest(substring(c.question FROM '([0-9]+)$')::int-1,0)
+   ELSE d.chunk_index END,c.start_time
+FROM dataset_version_chunks d JOIN lecture_qna_chunks c ON c.id=d.chunk_id
+ON CONFLICT(version_id,chunk_id) DO NOTHING;
+
+     THEN regexp_replace(c.question,'[|] (Part|Visual) [0-9]+$','')
+     ELSE regexp_replace(c.question,' \[Answer part [0-9]+\]$','') END),
+ CASE WHEN c.question LIKE 'Source excerpt:%' AND c.question ~ '[|] (Part|Visual) [0-9]+$'
+   THEN greatest(substring(c.question FROM '([0-9]+)$')::int-1,0)
+   ELSE d.chunk_index END,c.start_time
+FROM dataset_version_chunks d JOIN lecture_qna_chunks c ON c.id=d.chunk_id
+ON CONFLICT(version_id,chunk_id) DO NOTHING;
+,'')
+     ELSE regexp_replace(c.question,' \[Answer part [0-9]+\]$','') END),
+ CASE WHEN c.question LIKE 'Source excerpt:%' AND c.question ~ '[|] (Part|Visual) [0-9]+$'
+   THEN greatest(substring(c.question FROM '([0-9]+)$')::int-1,0)
+   ELSE d.chunk_index END,c.start_time
+FROM dataset_version_chunks d JOIN lecture_qna_chunks c ON c.id=d.chunk_id
+ON CONFLICT(version_id,chunk_id) DO NOTHING;
+
      THEN regexp_replace(c.question,'[|] (Part|Visual) [0-9]+$','')
      ELSE regexp_replace(c.question,' \[Answer part [0-9]+\]$','') END),
  CASE WHEN c.question LIKE 'Source excerpt:%' AND c.question ~ '[|] (Part|Visual) [0-9]+$'
