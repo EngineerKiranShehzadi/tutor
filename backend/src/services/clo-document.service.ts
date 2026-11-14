@@ -28,9 +28,11 @@ function validateDrafts(raw:unknown,lectures:Lecture[]):Draft[]{
   const description=typeof v?.description==='string'?v.description.trim():'';
   if(!codePattern.test(code)||seen.has(code)||description.length<5||description.length>1000)throw new AppError('Invalid or duplicate CLO code/description',422);
   seen.add(code);
-  const lectureIds=Array.isArray(v?.lectureIds)?[...new Set(v.lectureIds)]:[];
-  if(lectureIds.some(id=>!positive(id)||!allowed.has(id)))throw new AppError('Invalid proposed lecture mapping',422);
-  return {code,description,lectureIds:lectureIds as number[]};
+  const rawLectureIds: unknown[] = Array.isArray(v?.lectureIds) ? v.lectureIds : [];
+  if(rawLectureIds.some((id:unknown)=>typeof id!=='number'||!positive(id)||!allowed.has(id)))
+   throw new AppError('Invalid proposed lecture mapping',422);
+  const lectureIds = [...new Set(rawLectureIds as number[])];
+  return {code,description,lectureIds};
  });
 }
 const schema:LlmSchema={type:'OBJECT',properties:{outcomes:{type:'ARRAY',items:{type:'OBJECT',properties:{
