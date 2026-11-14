@@ -117,7 +117,7 @@ export async function studentOutcomeProgress(studentId:string,courseId:number){
      LEFT JOIN practice_question_outcomes m ON m.outcome_id=o.id
      LEFT JOIN practice_questions q ON q.id=m.question_id
      LEFT JOIN practice_quizzes z ON z.id=q.quiz_id AND z.student_id=$2
-        AND z.course_id=$1 AND z.status='COMPLETED'
+        AND z.course_id=$1 AND z.status='COMPLETED' AND z.submitted_at IS NOT NULL
      LEFT JOIN practice_answers a ON a.quiz_id=z.id AND a.question_id=q.id
      WHERE o.course_id=$1 GROUP BY o.id ORDER BY o.code`,[courseId,studentId]);
   return rows.map(r=>{
@@ -136,7 +136,7 @@ export async function facultyOutcomeSummary(courseId:number){
      FROM course_learning_outcomes o
      LEFT JOIN practice_question_outcomes m ON m.outcome_id=o.id
      LEFT JOIN practice_questions q ON q.id=m.question_id
-     LEFT JOIN practice_quizzes z ON z.id=q.quiz_id AND z.course_id=$1 AND z.status='COMPLETED'
+     LEFT JOIN practice_quizzes z ON z.id=q.quiz_id AND z.course_id=$1 AND z.status='COMPLETED' AND z.submitted_at IS NOT NULL
      LEFT JOIN practice_answers a ON a.quiz_id=z.id AND a.question_id=q.id
      WHERE o.course_id=$1 GROUP BY o.id ORDER BY o.code`,[courseId]);
   return rows.map(r=>{const attempted=Number(r.attempted),correct=Number(r.correct);return {
