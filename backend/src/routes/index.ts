@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import authRoutes    from './auth.routes';
 import datasetRoutes from './dataset.routes';
+import cloDocumentRoutes from './clo-document.routes';
 import youtubeRoutes from './youtube.routes';
 import observabilityRoutes from './observability.routes';
 import monitorRoutes from './monitor.routes';
@@ -13,6 +14,7 @@ const router = Router();
 
 router.use('/auth',     authRoutes);
 router.use('/datasets', datasetRoutes);
+router.use('/clo-documents', cloDocumentRoutes);
 router.use('/youtube', youtubeRoutes);
 router.use('/observability/monitor', monitorRoutes);
 router.use('/observability', observabilityRoutes);
