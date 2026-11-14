@@ -80,6 +80,7 @@ def docx_units(data, warnings):
     current = []
     locator = "Document"
     heading_count = 0
+    inside_slides = False
     slide_heading = re.compile(r"^(?:slide|page)\\s*(?:no\\.?|number|#)?\\s*[:.\\-]?\\s*(\\d+)\\b", re.I)
 
     def flush():
@@ -96,9 +97,10 @@ def docx_units(data, warnings):
             slide = slide_heading.match(value)
             style = (element.style.name or "").lower() if element.style else ""
             structured_heading = style.startswith("heading ") or style == "title"
-            if slide or structured_heading:
+            if slide or (structured_heading and not inside_slides):
                 flush()
                 if slide:
+                    inside_slides = True
                     locator = "Slide " + slide.group(1)
                 else:
                     heading_count += 1
