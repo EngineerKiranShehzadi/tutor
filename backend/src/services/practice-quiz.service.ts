@@ -11,6 +11,7 @@ import type { QuizSource as Source } from './quiz-evidence.service';
 import { loadQuizEvidencePools, selectQuizEvidence } from './quiz-evidence-pool.service';
 import { loadRetakeContext } from './quiz-retake-context';
 import { approvedCloScopes, type ApprovedClo } from './clo-document.service';
+import { verifiedCloOutcomeId } from './clo-alignment.service';
 import { normalizeQuestion, repeatsQuestion, type PreviousQuestion } from './quiz-novelty';
 
 type Category = 'FACTUAL' | 'CONCEPTUAL' | 'APPLICATION' | 'REASONING';
@@ -138,9 +139,10 @@ async function verifyQuestions(generated: Generated[], validSources: Map<number,
   return generated.filter((_, index) => validQuestions.has(index)).map(q=>{
     if(!hasApproved)return q;
     const index=generated.indexOf(q);
-    const outcomeId=parsed.checks.find((c:any)=>c.index===index)?.outcomeId;
-    const match=(approved.get(q.lectureId)??[]).find(o=>o.id===outcomeId);
-    return {...q,approvedOutcomeId:match?.id};
+    const allowed=(approved.get(q.lectureId)??[]).map(o=>o.id);
+    const verdict=parsed.checks.find((c:any)=>c.index===index);
+    const verified=verifiedCloOutcomeId(verdict,allowed);
+    return {...q,approvedOutcomeId:verified??undefined};
   });
 }
 export function allocateByLecture(lectureIds: number[]): Map<number, number> {
