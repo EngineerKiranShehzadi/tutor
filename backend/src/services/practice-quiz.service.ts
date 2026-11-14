@@ -313,15 +313,17 @@ async function createQuiz(studentId: string, selection: { courseId: number; requ
       savedQuiz = quizResult.rows[0];
       const questionRows = results.map((q, i) => ({ lecture_id: q.lectureId, position: i + 1, category: q.category,
         question: q.question, options: q.options, correct_index: q.correctIndex, explanation: q.explanation,
-        source_label: label(sources.get(q.sourceId)!), source_chunk_id: q.sourceId }));
+        source_label: label(sources.get(q.sourceId)!), source_chunk_id: q.sourceId,
+        evidence_quote: q.evidenceQuote, source_version_id: info.get(q.lectureId)!.active_version_id }));
       run.check();
       const inserted = await client.query<QuestionRow>(
-        `INSERT INTO practice_questions(quiz_id,lecture_id,position,category,question,options,correct_index,explanation,source_label,source_chunk_id)
+        `INSERT INTO practice_questions(quiz_id,lecture_id,position,category,question,options,correct_index,explanation,source_label,source_chunk_id,evidence_quote,source_version_id)
          SELECT $1::bigint, p.lecture_id, p.position, p.category, p.question, p.options,
-                p.correct_index, p.explanation, p.source_label, p.source_chunk_id
+                p.correct_index, p.explanation, p.source_label, p.source_chunk_id, p.evidence_quote, p.source_version_id
          FROM jsonb_to_recordset($2::jsonb) AS p(
            lecture_id int, position int, category text, question text, options jsonb,
-           correct_index int, explanation text, source_label text, source_chunk_id int
+           correct_index int, explanation text, source_label text, source_chunk_id int,
+           evidence_quote text, source_version_id int
          ) RETURNING *`, [savedQuiz.id, JSON.stringify(questionRows)]);
       // PostgreSQL RETURNING order is not a contractual match for the input
       // JSON array. Persisted question position is the stable association key.
