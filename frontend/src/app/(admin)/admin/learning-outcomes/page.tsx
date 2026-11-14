@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@apollo/client';
 import { AdminPageHero } from '@/components/admin/AdminPageHero';
 import { MisconceptionReview } from '@/components/admin/MisconceptionReview';
+import { FacultyRevisionEditor } from '@/components/admin/FacultyRevisionEditor';
 import { GET_COURSES } from '@/graphql/course.queries';
 import { GET_LECTURES } from '@/graphql/lecture.queries';
 import {
@@ -116,6 +117,7 @@ export default function LearningOutcomesAdmin() {
             </div>
             {!courseLectures.length&&<p className="text-caption text-[var(--muted)]">Add a lecture to this course before mapping.</p>}
           </fieldset>
+          {courseId!==null&&<FacultyRevisionEditor courseId={courseId} outcomeId={o.id} code={o.code} lectureIds={o.lectureIds}/>}
         </article>;
       })}
     </section>
