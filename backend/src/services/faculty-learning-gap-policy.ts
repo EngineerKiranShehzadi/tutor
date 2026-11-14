@@ -17,9 +17,9 @@ export function classifyFacultyGap(
 }
 export function facultyGapAction(status:FacultyGapStatus,hasLectures:boolean):string{
   if(status==='NOT_MAPPED')return 'Review and map existing quiz questions to this learning outcome.';
-  if(status==='INSUFFICIENT_EVIDENCE')return 'Gather more faculty-mapped quiz evidence before drawing class-level conclusions.';
+  if(status==='INSUFFICIENT_EVIDENCE')return 'Gather more admin-mapped quiz evidence before drawing class-level conclusions.';
   if(status==='REVIEW_RECOMMENDED')return hasLectures
-    ? 'Review the mapped lectures and consider adding a worked example or guided practice. Faculty approval required.'
+    ? 'Review the mapped lectures and consider adding a worked example or guided practice. Admin approval required.'
     : 'Map relevant lectures and review explanations before planning an intervention.';
   return 'Continue monitoring future completed quizzes. No intervention is triggered automatically.';
 }
