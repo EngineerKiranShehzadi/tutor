@@ -76,6 +76,9 @@ export async function approveCloDocument(courseId:number,adminId:string,proposed
     const ins=await client.query<{id:string}>(`INSERT INTO course_learning_outcomes(course_id,code,description)
      VALUES($1,$2,$3) RETURNING id`,[courseId,item.code,item.description]);id=Number(ins.rows[0].id);
    }
+   // Approval is a replacement of this CLO's approved scope: unchecking a lecture
+   // revokes future automatic tags without deleting historical graded answers.
+   await client.query('DELETE FROM approved_clo_lecture_scopes WHERE course_id=$1 AND outcome_id=$2',[courseId,id]);
    for(const lectureId of item.lectureIds){
     await client.query(`INSERT INTO lecture_learning_outcomes(lecture_id,outcome_id) VALUES($1,$2) ON CONFLICT DO NOTHING`,[lectureId,id]);
     await client.query(`INSERT INTO approved_clo_lecture_scopes(course_id,lecture_id,outcome_id,approved_by)
@@ -91,11 +94,20 @@ export type ApprovedClo={id:number;code:string;description:string};
 export async function approvedCloScopes(courseId:number,lectureIds:number[]):Promise<Map<number,ApprovedClo[]>>{
  const result=new Map<number,ApprovedClo[]>(lectureIds.map(id=>[id,[]]));
  if(!lectureIds.length)return result;
- const {rows}=await query<any>(`SELECT s.lecture_id,o.id,o.code,o.description
+ let rows:any[];
+ try{
+  const response=await query<any>(`SELECT s.lecture_id,o.id,o.code,o.description
  FROM approved_clo_lecture_scopes s
  JOIN course_learning_outcomes o ON o.id=s.outcome_id AND o.course_id=s.course_id
  JOIN lecture_learning_outcomes l ON l.lecture_id=s.lecture_id AND l.outcome_id=s.outcome_id
  WHERE s.course_id=$1 AND s.lecture_id=ANY($2::int[]) ORDER BY s.lecture_id,o.code`,[courseId,lectureIds]);
+  rows=response.rows;
+ }catch(e:any){
+  // Roll-forward compatibility: existing quizzes must remain usable before migration 038.
+  // Any other database failure remains an error rather than silently disabling alignment.
+  if(e?.code==='42P01')return result;
+  throw e;
+ }
  for(const row of rows)result.get(Number(row.lecture_id))?.push({id:Number(row.id),code:row.code,description:row.description});
  return result;
 }
