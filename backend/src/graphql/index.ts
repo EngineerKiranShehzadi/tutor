@@ -11,6 +11,7 @@ import { learningOutcomeTypeDefs } from './learning-outcome.schema';
 import { facultyLearningGapTypeDefs } from './faculty-learning-gap.schema';
 import { revisionPlanTypeDefs } from './revision-plan.schema';
 import { ragBenchmarkTypeDefs } from './rag-benchmark.schema';
+import { learningEffectivenessTypeDefs } from './learning-effectiveness.schema';
 import { misconceptionTypeDefs } from './misconception.schema';
 import { resolvers as authResolvers } from './resolvers/auth.resolver';
 import { chatResolvers } from './resolvers/chat.resolver';
@@ -24,6 +25,7 @@ import { learningOutcomeResolvers } from './resolvers/learning-outcome.resolver'
 import { facultyLearningGapResolvers } from './resolvers/faculty-learning-gap.resolver';
 import { revisionPlanResolvers } from './resolvers/revision-plan.resolver';
 import { ragBenchmarkResolvers } from './resolvers/rag-benchmark.resolver';
+import { learningEffectivenessResolvers } from './resolvers/learning-effectiveness.resolver';
 import { misconceptionResolvers } from './resolvers/misconception.resolver';
 import { GraphQLContext } from './context';
 import { verifyAccessToken } from '../utils/jwt';
@@ -47,6 +49,7 @@ const mergedResolvers = {
     ...facultyLearningGapResolvers.Query,
     ...revisionPlanResolvers.Query,
     ...ragBenchmarkResolvers.Query,
+    ...learningEffectivenessResolvers.Query,
     ...misconceptionResolvers.Query,
   },
   Mutation: {
@@ -83,7 +86,7 @@ export function formatGraphQLError(err: GraphQLFormattedError, originalError: un
 
 export const setupApollo = async (app: Express): Promise<void> => {
   const server = new ApolloServer<GraphQLContext>({
-    typeDefs: [typeDefs, practiceQuizRetakeTypeDefs, learningOutcomeTypeDefs, misconceptionTypeDefs, facultyLearningGapTypeDefs, revisionPlanTypeDefs, ragBenchmarkTypeDefs],
+    typeDefs: [typeDefs, practiceQuizRetakeTypeDefs, learningOutcomeTypeDefs, misconceptionTypeDefs, facultyLearningGapTypeDefs, revisionPlanTypeDefs, ragBenchmarkTypeDefs, learningEffectivenessTypeDefs],
     resolvers: mergedResolvers,
     // Apollo Server 4 leaves introspection on regardless of NODE_ENV; the
     // schema is not published in production (GRAPHQL_INTROSPECTION overrides).
