@@ -1,4 +1,5 @@
 import {Router} from 'express';
+import type {AuthenticatedRequest} from '../types';
 import multer from 'multer';
 import {protect,requireRole} from '../middleware/auth.middleware';
 import {previewCloDocument,approveCloDocument} from '../services/clo-document.service';
@@ -20,8 +21,9 @@ router.post('/preview/:courseId',upload.single('file'),async(req,res,next)=>{
 });
 router.post('/approve/:courseId',async(req,res,next)=>{
  try{
-  if(!req.user)throw new AppError('Unauthorized',401);
-  const result=await approveCloDocument(Number(req.params.courseId),req.user.id,req.body?.outcomes);
+  const admin=(req as AuthenticatedRequest).user;
+  if(!admin)throw new AppError('Unauthorized',401);
+  const result=await approveCloDocument(Number(req.params.courseId),admin.id,req.body?.outcomes);
   res.json({success:true,data:result});
  }catch(e){next(e)}
 });
