@@ -76,18 +76,47 @@ def docx_units(data, warnings):
     from docx.text.paragraph import Paragraph
     zip_guard(data)
     document = Document(io.BytesIO(data))
-    blocks = []
+    sections = []
+    current = []
+    locator = "Document"
+    heading_count = 0
+    slide_heading = re.compile(r"^(?:slide|page)\\s*(?:no\\.?|number|#)?\\s*[:.\\-]?\\s*(\\d+)\\b", re.I)
+
+    def flush():
+        nonlocal current
+        if current:
+            sections.append({"locator": locator, "text": "\n\n".join(current)})
+            current = []
+
     for element in document.iter_inner_content():
         if isinstance(element, Paragraph):
             value = clean(element.text)
-            if value:
-                blocks.append(value)
+            if not value:
+                continue
+            slide = slide_heading.match(value)
+            style = (element.style.name or "").lower() if element.style else ""
+            structured_heading = style.startswith("heading ") or style == "title"
+            if slide or structured_heading:
+                flush()
+                if slide:
+                    locator = "Slide " + slide.group(1)
+                else:
+                    heading_count += 1
+                    locator = "Section " + str(heading_count) + ": " + value[:75]
+                # Retain the heading itself as searchable evidence.
+                current.append(value)
+            else:
+                current.append(value)
         elif isinstance(element, Table):
+            # Preserve rows and their column relationships, never discard cell values.
             for row in element.rows:
                 cells = [clean(cell.text) for cell in row.cells]
                 if any(cells):
-                    blocks.append(" | ".join(cells))
-    return [{"locator": "Document", "text": "\n\n".join(blocks)}] if blocks else []
+                    current.append(" | ".join(cells))
+    flush()
+    if len(sections) > MAX_UNITS:
+        raise ValueError("Word document has too many logical sections")
+    return sections
 
 
 def pptx_units(data, warnings, include_empty=False, max_bytes=MAX_BYTES):
