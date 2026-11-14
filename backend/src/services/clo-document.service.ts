@@ -40,7 +40,8 @@ export async function previewCloDocument(courseId:number,filename:string,buffer:
   COALESCE((SELECT string_agg(left(c.chunk_text,300),' ' ORDER BY c.id)
    FROM (SELECT c.id,c.chunk_text FROM dataset_version_chunks d
      JOIN lecture_qna_chunks c ON c.id=d.chunk_id
-     WHERE d.version_id=l.active_version_id AND c.lecture_id=l.id ORDER BY c.id LIMIT 15) c),'') AS excerpt
+     WHERE d.version_id=l.active_version_id AND c.lecture_id=l.id
+     ORDER BY md5(c.id::text) LIMIT 18) c),'') AS excerpt
   FROM lectures l WHERE l.course_id=$1 AND l.archived_at IS NULL ORDER BY l.id LIMIT 100`,[courseId]);
  const lectures:Lecture[]=rows.map(r=>({id:Number(r.id),title:r.title,excerpt:String(r.excerpt??'').slice(0,2400)}));
  const provider=resolveLlmProvider('gemini');
