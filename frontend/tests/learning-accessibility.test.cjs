@@ -51,3 +51,12 @@ test('faculty revision approval editor is mounted for each mapped course outcome
  assert.match(editor,/SAVE_REVISION_PLAN/);
  assert.match(editor,/WITHDRAW_REVISION_PLAN/);
 });
+
+test('admin learning outcomes reports unavailable courses separately from empty outcomes',()=>{
+ const page=read('app/(admin)/admin/learning-outcomes/page.tsx');
+ assert.match(page,/if\(allCourses\.length===0\)\{setCourseId\(null\);return;\}/);
+ assert.match(page,/courses\.error&&/);
+ assert.match(page,/No courses available\. Add a course/);
+ assert.match(page,/courseId!==null&&!outcomesQuery\.loading&&!outcomesQuery\.error&&!outcomes\.length/);
+ assert.match(page,/disabled=\{courses\.loading\|\|!!courses\.error\|\|allCourses\.length===0\|\|pending\}/);
+});
