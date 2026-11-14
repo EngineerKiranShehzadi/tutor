@@ -135,14 +135,31 @@ async function verifyQuestions(generated: Generated[], validSources: Map<number,
   let parsed: unknown;
   try { parsed = JSON.parse(response.raw); } catch { return []; }
   const validQuestions = verifiedQuestionIndexes(parsed, generated.length, novelty);
-  if(hasApproved && (!Array.isArray(parsed?.checks)||parsed.checks.length!==generated.length || parsed.checks.some((c:any)=>!Number.isSafeInteger(c?.outcomeId))))return [];
-  return generated.filter((_, index) => validQuestions.has(index)).map(q=>{
-    if(!hasApproved)return q;
-    const index=generated.indexOf(q);
+  // The response is untrusted JSON. Validate the complete verifier index set
+  // before associating ANY CLO with a generated question.
+  const checks = typeof parsed === 'object' && parsed !== null && 'checks' in parsed
+    ? (parsed as { checks?: unknown }).checks : undefined;
+  if (hasApproved && (!Array.isArray(checks) || checks.length !== generated.length ||
+      checks.some((c:unknown) => !c || typeof c !== 'object' ||
+        !('outcomeId' in c) || !Number.isSafeInteger(c.outcomeId)))) return [];
+  const verdicts = new Map<number, {grounded:boolean;unambiguous:boolean;outcomeId:number}>();
+  if (hasApproved) {
+    for (const check of checks as unknown[]) {
+      if (!check || typeof check !== 'object' || !('index' in check) ||
+          !Number.isSafeInteger(check.index) || !('grounded' in check) ||
+          !('unambiguous' in check) || !('outcomeId' in check) ||
+          typeof check.grounded !== 'boolean' || typeof check.unambiguous !== 'boolean' ||
+          typeof check.outcomeId !== 'number') return [];
+      verdicts.set(check.index as number, check as {grounded:boolean;unambiguous:boolean;outcomeId:number});
+    }
+    if (verdicts.size !== generated.length) return [];
+  }
+  return generated.flatMap((q,index)=>{
+    if(!validQuestions.has(index))return [];
+    if(!hasApproved)return [q];
     const allowed=(approved.get(q.lectureId)??[]).map(o=>o.id);
-    const verdict=parsed.checks.find((c:any)=>c.index===index);
-    const verified=verifiedCloOutcomeId(verdict,allowed);
-    return {...q,approvedOutcomeId:verified??undefined};
+    const verified=verifiedCloOutcomeId(verdicts.get(index),allowed);
+    return [{...q,approvedOutcomeId:verified??undefined}];
   });
 }
 export function allocateByLecture(lectureIds: number[]): Map<number, number> {
