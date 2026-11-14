@@ -39,6 +39,13 @@ async function run(){
  await assert.rejects(saveVerifiedSocraticTurn({studentId:other,lectureId:lecture,sessionId:session,
   anchorQuestion:anchor,stage:1,question:'Wrong owner',answer:'No',sourceChunkIds:[]}),/not found/);
  assert.equal(await savedBefore(),1);
+ // A database failure after advancing the stage must roll back both state and history.
+ await assert.rejects(saveVerifiedSocraticTurn({studentId:student,lectureId:lecture,sessionId:session,
+  anchorQuestion:anchor,stage:1,question:null as unknown as string,
+  answer:'This history write must fail',sourceChunkIds:[]}),/null value|not-null constraint/i);
+ assert.deepEqual(await getSocraticState(student,lecture,session),{anchorQuestion:anchor,stage:1},
+  'A failed history write must not consume the next guided hint');
+ assert.equal(await savedBefore(),1,'A failed history write must leave no partial chat record');
  for(const stage of [1,2,3] as const){
   await saveVerifiedSocraticTurn({studentId:student,lectureId:lecture,sessionId:session,
    anchorQuestion:anchor,stage,question:'My attempt '+stage,answer:'Guided reply '+stage,sourceChunkIds:[]});
