@@ -24,14 +24,13 @@ const chunkToSource = (c: QnaChunk) => ({
 
 // POST /api/v1/chat/ask-stream — Server-Sent Events version of the
 // askLectureAgent mutation. Same pipeline, same persistence, same guardrails;
-// the only difference is that the grounded-answer draft is pushed to the
-// client as it is generated.
+// Keep a live SSE connection, but NEVER expose the unverified generation
+// draft: the output guardrail may revise or replace it (including a temporary
+// "not found" with a supported answer). Students only see authoritative text.
 //
 // Events:
-//   delta  {text}      — next piece of the draft answer
-//   reset  {}          — discard the draft so far (generation retried)
-//   final  {answer, sources} — authoritative result; replaces any streamed
-//                        draft (the output guardrail may have revised it)
+//   processing {}      — request accepted; show a loading state, not draft text
+//   final  {answer, sources} — authoritative guardrail-settled result
 //   error  {message}   — request failed
 router.post('/ask-stream', protect, async (req: AuthenticatedRequest, res: Response) => {
   const student = req.user;
@@ -93,6 +92,9 @@ router.post('/ask-stream', protect, async (req: AuthenticatedRequest, res: Respo
 
   logger.info(`[CHAT-STREAM] "${student.email}" → session #${sessionId}: "${logSafeText(question, 80)}"`);
 
+  // Make the request visible to the client immediately; a disconnect after
+  // acceptance must not trigger a duplicate GraphQL question/charge.
+  send('processing', {});
   try {
     const { answer, sources } = await askLectureAgent({
       studentId: student.id,
@@ -100,9 +102,11 @@ router.post('/ask-stream', protect, async (req: AuthenticatedRequest, res: Respo
       question:  question.trim(),
       sessionId: sessionId as number,
       tutoringMode,
+      // Preserve the internal streaming generation path and its PII checks,
+      // but never send provisional tokens before verification settles.
       stream: {
-        onDelta: text => send('delta', { text }),
-        onReset: () => send('reset', {}),
+        onDelta: () => {},
+        onReset: () => {},
       },
     });
     send('final', { answer, sources: sources.map(chunkToSource) });
