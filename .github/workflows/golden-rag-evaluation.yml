@@ -14,6 +14,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+      - name: Install backend dependencies for isolated benchmark import test
+        working-directory: backend
+        run: npm ci --ignore-scripts
+      - name: Test server-side recomputation and non-persistence of question text
+        working-directory: backend
+        run: node --test tests/rag-benchmark-import.test.cjs
       - name: Run deterministic benchmark tests (no DB or LLM)
         working-directory: backend
         run: node --test evaluation/golden-evaluator.test.cjs
