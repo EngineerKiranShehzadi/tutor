@@ -13,10 +13,10 @@ export function PersonalLearningSignals({courseId,lectureLinks}:{courseId:number
  return <>
   <section className="mt-5 rounded-card border border-[var(--border)] bg-[var(--card)] p-5">
    <h2 className="text-h3 font-semibold text-[var(--text)]">Concepts to review</h2>
-   <p className="text-caption text-[var(--muted)] mt-1 mb-4">Signals come only from completed quiz choices linked to faculty-approved misconceptions. One occurrence is not a confirmed learning difficulty.</p>
+   <p className="text-caption text-[var(--muted)] mt-1 mb-4">Signals come only from completed quiz choices linked to admin-approved misconceptions. One occurrence is not a confirmed learning difficulty.</p>
    {signals.loading&&!items.length&&<p role="status" className="text-label text-[var(--muted)]">Loading review signals…</p>}
    {signals.error&&<p role="alert" className="text-label text-red-700">Could not load review signals.</p>}
-   {!signals.loading&&!signals.error&&!items.length&&<p className="text-label text-[var(--muted)]">No faculty-reviewed misconception signals for this course yet.</p>}
+   {!signals.loading&&!signals.error&&!items.length&&<p className="text-label text-[var(--muted)]">No admin-reviewed misconception signals for this course yet.</p>}
    {items.map(m=><article key={m.id} className="border-t border-[var(--border)] py-3 first:border-0">
     <div className="flex justify-between gap-3"><p className="text-label font-semibold text-[var(--text)]">{m.outcomeCode}: {m.description}</p>
       <span className="text-caption text-[var(--muted)] shrink-0">{m.occurrences} {m.occurrences===1?'occurrence':'occurrences'}</span></div>
@@ -26,7 +26,7 @@ export function PersonalLearningSignals({courseId,lectureLinks}:{courseId:number
   </section>
   <section className="mt-5 rounded-card border border-[var(--border)] bg-[var(--card)] p-5">
    <h2 className="text-h3 font-semibold text-[var(--text)]">Learning evidence history</h2>
-   <p className="text-caption text-[var(--muted)] mt-1 mb-4">Your submitted quiz results, grouped by faculty-mapped outcome. No official grades or inferred mastery scores.</p>
+   <p className="text-caption text-[var(--muted)] mt-1 mb-4">Your submitted quiz results, grouped by admin-mapped outcome. No official grades or inferred mastery scores.</p>
    {timeline.loading&&!dates.length&&<p role="status" className="text-label text-[var(--muted)]">Loading history…</p>}
    {timeline.error&&<p role="alert" className="text-label text-red-700">Could not load learning history.</p>}
    {!timeline.loading&&!timeline.error&&!dates.length&&<p className="text-label text-[var(--muted)]">No mapped quiz history available yet.</p>}
