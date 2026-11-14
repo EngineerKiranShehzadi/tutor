@@ -21,7 +21,7 @@ export async function upsertRevisionPlan(adminId:string,courseId:number,outcomeI
  // Enforce course membership AND explicit faculty-approved lecture coverage.
  const {rows}=await query(`INSERT INTO approved_revision_plans
  (outcome_id,lecture_id,guidance,status,approved_by,approved_at,updated_at)
- SELECT o.id,l.id,$5,$6,$7,CASE WHEN $8::boolean THEN NOW() ELSE NULL END,NOW()
+ SELECT o.id,l.id,$4,$5,$6,CASE WHEN $7::boolean THEN NOW() ELSE NULL END,NOW()
  FROM course_learning_outcomes o
  JOIN lecture_learning_outcomes x ON x.outcome_id=o.id
  JOIN lectures l ON l.id=x.lecture_id
@@ -30,7 +30,7 @@ export async function upsertRevisionPlan(adminId:string,courseId:number,outcomeI
  ON CONFLICT(outcome_id) DO UPDATE SET lecture_id=EXCLUDED.lecture_id,
  guidance=EXCLUDED.guidance,status=EXCLUDED.status,approved_by=EXCLUDED.approved_by,
  approved_at=EXCLUDED.approved_at,updated_at=NOW()
- RETURNING outcome_id`,[courseId,outcomeId,lectureId,adminId,note,approve?'APPROVED':'DRAFT',approve?adminId:null,approve]);
+ RETURNING outcome_id`,[courseId,outcomeId,lectureId,note,approve?'APPROVED':'DRAFT',approve?adminId:null,approve]);
  if(!rows.length)throw new AppError('Select a non-archived lecture explicitly mapped to this course outcome',400);
  return listFacultyRevisionPlans(courseId);
 }
