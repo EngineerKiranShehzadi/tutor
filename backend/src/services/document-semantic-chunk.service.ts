@@ -8,7 +8,7 @@ import { AppError } from '../middleware/errorHandler';
  * answers the question is repeated on each child. No generative restructuring.
  */
 export type LogicalSection =
-  | {kind:'QA';question:string;answer:string}
+  | {kind:'QA';question:string;answer:string;heading?:string}
   | {kind:'TEXT';text:string};
 
 const slideLine=/^(?:slide|page)\s*(?:no\.?|number|#)?\s*[:.\-]?\s*\d+\s*(?:[:.\-].*)?$/i;
@@ -38,7 +38,7 @@ export function parseLogicalSections(text:string):LogicalSection[] {
  };
  const flushQA=()=>{
   if(question!==null){
-   if(answer.some(x=>x.trim()))result.push({kind:'QA',question,answer:answer.join('\n').trim()});
+   if(answer.some(x=>x.trim()))result.push({kind:'QA',question,answer:answer.join('\n').trim(),heading:sectionHeading??undefined});
    else if(explicitQuestion)throw new AppError('An explicit Question has no matching Answer. Keep each question and its answer in the same slide or section.',422);
    else result.push({kind:'TEXT',text:question});
   }
@@ -59,7 +59,7 @@ export function parseLogicalSections(text:string):LogicalSection[] {
   const inline=inlinePair.exec(line);
   if(inline){
    flushQA();flushProse();
-   result.push({kind:'QA',question:inline[1].trim(),answer:inline[2].trim()});
+   result.push({kind:'QA',question:inline[1].trim(),answer:inline[2].trim(),heading:sectionHeading??undefined});
    continue;
   }
   const matchQ=qLine.exec(line);
@@ -81,7 +81,7 @@ export function parseLogicalSections(text:string):LogicalSection[] {
  return result;
 }
 export interface PreservedPart {
- kind:'QA'|'TEXT';question?:string;text:string;part:number;
+ kind:'QA'|'TEXT';question?:string;text:string;part:number;heading?:string;
 }
 export async function splitPreservingQuestions(text:string):Promise<PreservedPart[]> {
  const sections=parseLogicalSections(text);
@@ -112,7 +112,7 @@ export async function splitPreservingQuestions(text:string):Promise<PreservedPar
   const parts=await answerSplitter.splitText(section.answer);
   if(!parts.length)throw new AppError('Question has no answer in document',422);
   if(parts.length>20)throw new AppError('A long answer needs smaller logical sections before upload',422);
-  for(const [i,part] of parts.entries())out.push({kind:'QA',question:section.question,text:part,part:i+1});
+  for(const [i,part] of parts.entries())out.push({kind:'QA',question:section.question,text:part,part:i+1,heading:section.heading});
  }
  return out;
 }
