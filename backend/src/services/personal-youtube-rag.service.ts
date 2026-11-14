@@ -7,7 +7,7 @@ import { getPlaylistMetadata } from './youtube-discovery.service';
 import { pilotEnabled, fetchPilotCaptions } from './youtube-import.service';
 import { captionCuesToRows } from './subtitle-ingestion.service';
 import type { CaptionCue } from './subtitle-ingestion.service';
-import { buildChunkPiecesReport } from './chunk.service';
+import { buildChunkPieces } from './chunk.service';
 import { generateEmbedding, generateEmbeddingsBatch, EMBEDDING_MODEL_VERSION } from './embedding.service';
 import { rerankChunks, dedupeAndSelect } from './rerank.service';
 import { generateAnswer } from './answer-generation.service';
@@ -80,7 +80,7 @@ export async function indexPersonalVideo(courseId: number, video: Video, deps: P
   const sourceRows = captionCuesToRows(video.video_id + '.vtt',captions.cues).rows;
   const prepared: Array<Omit<IndexedChunk,'vector'>> = [];
   for (const row of sourceRows) {
-    const { pieces } = await buildChunkPiecesReport(row);
+    const pieces = await buildChunkPieces(row);
     for (const piece of pieces) {
       prepared.push({
         question: row.question || 'Source excerpt',
