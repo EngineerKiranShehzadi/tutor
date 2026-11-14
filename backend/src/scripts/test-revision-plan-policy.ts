@@ -1,0 +1,13 @@
+import {strict as assert} from 'assert';
+import {revisionEligible,normalizeRevisionGuidance} from '../services/revision-plan-policy';
+assert.equal(revisionEligible(2,0),false);
+assert.equal(revisionEligible(3,0),true);
+assert.equal(revisionEligible(3,1),true);
+assert.equal(revisionEligible(5,3),false);
+assert.equal(revisionEligible(5,4),false);
+assert.equal(revisionEligible(5,2),true);
+assert.throws(()=>revisionEligible(1,2));
+assert.throws(()=>revisionEligible(-1,0));
+assert.throws(()=>normalizeRevisionGuidance('short'));
+assert.equal(normalizeRevisionGuidance('  Review the mapped lecture and practice key concepts.  '),'Review the mapped lecture and practice key concepts.');
+console.log('Faculty-approved revision evidence thresholds pass.');
