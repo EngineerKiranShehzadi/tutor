@@ -18,6 +18,7 @@ on:
       - 'backend/src/db/migrations/036_approved_revision_plans.sql'
       - 'backend/src/db/migrations/037_rag_benchmark_runs.sql'
       - 'backend/src/db/migrations/038_clo_document_approvals.sql'
+      - 'backend/src/db/migrations/039_quiz_evidence_provenance.sql'
       - 'backend/src/services/clo-document.service.ts'
       - 'backend/src/services/clo-alignment.service.ts'
       - 'backend/src/routes/clo-document.routes.ts'
@@ -169,6 +170,7 @@ jobs:
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/037_rag_benchmark_runs.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/037_rag_benchmark_runs.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/038_clo_document_approvals.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/039_quiz_evidence_provenance.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/038_clo_document_approvals.sql
       - name: Check constraints and idempotence
         run: |
