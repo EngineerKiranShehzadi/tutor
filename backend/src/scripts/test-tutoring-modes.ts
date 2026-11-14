@@ -27,5 +27,14 @@ for(const mode of TUTORING_MODES){
  assert.match(block,/hide citations/);
  assert.match(block,/bypass verification/);
 }
+const simpleInstruction=buildTutoringModeInstruction('SIMPLE');
+const examInstruction=buildTutoringModeInstruction('EXAM_PREP');
+assert.match(simpleInstruction,/beginner-friendly explanation/);
+assert.match(simpleInstruction,/avoid an exam revision table/);
+assert.match(examInstruction,/clearly labelled key revision points/);
+assert.match(examInstruction,/exactly one short, optional self-check question/);
+assert.match(examInstruction,/If no answer is supported/);
+assert.notEqual(simpleInstruction,examInstruction);
+assert.equal(modeAwarePromptVersion('v4','EXAM_PREP'),'v4+mode:EXAM_PREP:2');
 assert.equal(buildTutoringModeInstruction(null),'');
 console.log('Trusted tutoring-mode guard and cache-isolation checks passed.');
