@@ -30,8 +30,9 @@ export function parseLogicalSections(text:string):LogicalSection[] {
  let explicitQuestion=false;
  let answer:string[]=[];
  let prose:string[]=[];
+ let sectionHeading:string|null=null;
  const flushProse=()=>{
-  if(prose.some(x=>x.trim()))result.push({kind:'TEXT',text:prose.join('\n').trim()});
+  if(prose.some(x=>x.trim()))result.push({kind:'TEXT',text:[sectionHeading,...prose].filter(Boolean).join('\n').trim()});
   prose=[];
  };
  const flushQA=()=>{
@@ -51,7 +52,7 @@ export function parseLogicalSections(text:string):LogicalSection[] {
   }
   if(isSlideBoundary(line)){
    flushQA();flushProse();
-   prose.push(line);
+   sectionHeading=line;
    continue;
   }
   const matchQ=qLine.exec(line);
@@ -80,8 +81,19 @@ export async function splitPreservingQuestions(text:string):Promise<PreservedPar
  const out:PreservedPart[]=[];
  for(const section of sections){
   if(section.kind==='TEXT'){
-   const parts=await splitter.splitText(section.text);
-   for(const [i,part] of parts.entries())out.push({kind:'TEXT',text:part,part:i+1});
+   // Preserve the section title on EVERY child rather than allowing the
+   // definition and explanation to lose their subject after a character split.
+   const [first,...rest]=section.text.split('\n');
+   const title=first.trim().length<=110 && /^(?:slide|page|chapter|section|unit)\s*(?:\d+|[:#.-])|^#{1,4}\s+/i.test(first.trim())
+     ? first.trim() : null;
+   const body=title?rest.join('\n').trim():section.text;
+   if(!body)continue;
+   const scopedSplitter=title?new RecursiveCharacterTextSplitter({
+     chunkSize:MAX_UNIT-title.length-20,chunkOverlap:OVERLAP,
+     separators:['\n\n','\n','. ',' ','']
+   }):splitter;
+   const parts=await scopedSplitter.splitText(body);
+   for(const [i,part] of parts.entries())out.push({kind:'TEXT',text:title?title+'\n'+part:part,part:i+1});
    continue;
   }
   if(section.question.length>350)throw new AppError('Question text exceeds safe chunk budget',422);
