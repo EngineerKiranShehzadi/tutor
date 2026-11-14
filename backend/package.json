@@ -14,6 +14,7 @@
     "seed:request-log": "ts-node --transpile-only src/scripts/seed-request-log.ts",
     "seed:retry": "ts-node --transpile-only src/scripts/retry-missing-embeddings.ts",
     "reembed:all": "ts-node --transpile-only src/scripts/reembed-all.ts",
+    "eval:review-worksheet": "ts-node --transpile-only src/scripts/build-rag-review-worksheet.ts",
     "eval:prepare-golden": "ts-node --transpile-only src/scripts/prepare-rag-golden.ts",
     "eval:rag": "ts-node --transpile-only src/scripts/evaluate-rag.ts",
     "diagnose:duplicates": "ts-node --transpile-only src/scripts/diagnose-duplicate-answers.ts",
