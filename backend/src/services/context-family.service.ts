@@ -62,7 +62,7 @@ export async function expandContextCandidates(
  SELECT id,lecture_id,topic,question,answer,chunk_text,chunk_index,
   start_time,end_time,keywords FROM neighbors ORDER BY distance,id LIMIT $4`,[lectureId,ids,datasetVersionId??null,cap]);
  return [...candidates,...boundedNewNeighbors(candidates,rows,cap)];
- } catch(error) {
+ } catch {
   // Context expansion is auxiliary; never make an otherwise-valid RAG search
   // unavailable if this new optional query fails in a partially migrated DB.
   logger.warn('[CONTEXT EXPANSION] Supplemental neighbor query failed; using original reranked candidate pool');
