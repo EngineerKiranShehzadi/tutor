@@ -120,13 +120,13 @@ export default function LearningOutcomesAdmin() {
             </div>
             {!courseLectures.length&&<p className="text-caption text-[var(--muted)]">Add a lecture to this course before mapping.</p>}
           </fieldset>
-          {courseId!==null&&<FacultyRevisionEditor courseId={courseId} outcomeId={o.id} code={o.code} lectureIds={o.lectureIds}/>}
+          {courseId!==null&&<FacultyRevisionEditor courseId={courseId} outcomeId={o.id} code={o.code} lectureIds={o.lectureIds} lectureTitles={Object.fromEntries(courseLectures.map(l=>[Number(l.id),l.title]))}/>}
         </article>;
       })}
     </section>
     <section className="rounded-card border border-[var(--border)] bg-[var(--card)] p-5 mt-5">
       <div className="flex flex-wrap gap-3 justify-between items-center">
-        <div><h2 className="text-h3 font-semibold text-[var(--text)]">Review quiz evidence mappings</h2><p className="text-caption text-[var(--muted)] mt-1">Question-level tags require manual review. A lecture's CLO mapping does not automatically tag its MCQs.</p></div>
+        <div><h2 className="text-h3 font-semibold text-[var(--text)]">Review quiz evidence mappings</h2><p className="text-caption text-[var(--muted)] mt-1">Quiz questions are assigned new IDs each time. Review and map only questions that genuinely assess the selected CLO; lecture mapping alone does not count as quiz evidence.</p></div>
         <button type="button" className={outline} onClick={()=>setShowQuestions(v=>!v)}>{showQuestions?'Hide questions':'Review latest 50 questions'}</button>
       </div>
       {showQuestions&&<div className="mt-4 space-y-3">
