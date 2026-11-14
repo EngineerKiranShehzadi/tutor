@@ -6,6 +6,7 @@ import type { RawRow } from './chunk.service';
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 import { env } from '../config/env';
 import { enrichDocumentWithVision } from './document-vision.service';
+import { splitPreservingQuestions } from './document-semantic-chunk.service';
 
 // The document boundary is isolated from the existing Excel parser and version
 // planner. No remote conversion services are used; the child process reads only
@@ -145,14 +146,24 @@ export const documentToRows = async (
       const visualTopic = section.isVisual
         ? /^Visual topic:\s*(.+)$/m.exec(section.body)?.[1]?.trim().slice(0, 200)
         : undefined;
-      const parts = await splitter.splitText(section.body);
+      // Keep explicit Question/Answer lines together in each retrieval record.
+      // For a long answer, every child repeats the ORIGINAL question. No
+      // model-based inference or rewriting of lecture material is involved.
+      const parts = section.isVisual
+        ? (await splitter.splitText(section.body)).map((text, index) => ({
+            kind: 'TEXT' as const, text, part: index + 1
+          }))
+        : await splitPreservingQuestions(section.body);
       for (let part = 0; part < parts.length; part++) {
-        const kind = section.isVisual ? 'Visual' : 'Part';
-        const question = `Source excerpt: ${safeName} | ${locator} | ${kind} ${part + 1}`;
+        const piece = parts[part];
+        const kind = section.isVisual ? 'Visual' : piece.kind === 'QA' ? 'QA' : 'Part';
+        const question = piece.kind === 'QA'
+          ? piece.question!
+          : `Source excerpt: ${safeName} | ${locator} | ${kind} ${part + 1}`;
         rows.push({
           question,
-          answer: parts[part],
-          topic: visualTopic || undefined,
+          answer: piece.text,
+          topic: piece.kind === 'QA' ? locator : visualTopic || undefined,
           start_time: `${safeName} | ${locator}`,
         });
         if (rows.length > env.DATASET.MAX_ROWS) {
