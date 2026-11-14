@@ -1,6 +1,7 @@
 import {strict as assert} from 'assert';
 import pool,{query} from '../config/database';
 import {upsertRevisionPlan,withdrawRevisionPlan,myRevisionRecommendations,listFacultyRevisionPlans} from '../services/revision-plan.service';
+import {studentOutcomeProgress,facultyOutcomeSummary} from '../services/learning-outcome.service';
 // Disposable database only. Never run this against Neon or another developer's data.
 if(process.env.NODE_ENV!=='test'||process.env.DB_NAME!=='outcomes_test'||!['localhost','127.0.0.1'].includes(process.env.DB_HOST||'')){
  throw new Error('Refusing revision test outside localhost outcomes_test');
@@ -37,6 +38,19 @@ async function main(){
   assert.equal(recommendation[0].attempted,3);
   assert.equal(recommendation[0].correct,0);
   assert.deepEqual(await myRevisionRecommendations(b,course),[],'Student B must not see student A evidence');
+  // A COMPLETED flag without a submission timestamp must not count as graded evidence.
+  assert.equal((await studentOutcomeProgress(a,course))[0].attempted,3);
+  assert.equal((await facultyOutcomeSummary(course))[0].attempted,3);
+  await query('UPDATE practice_quizzes SET submitted_at=NULL WHERE id=$1',[quiz]);
+  assert.deepEqual(await myRevisionRecommendations(a,course),[],
+   'A quiz without a submission timestamp must not trigger revision guidance');
+  const incompleteStudent=(await studentOutcomeProgress(a,course))[0];
+  assert.equal(incompleteStudent.attempted,0);
+  assert.equal(incompleteStudent.status,'NOT_ASSESSED');
+  assert.equal((await facultyOutcomeSummary(course))[0].attempted,0);
+  await query('UPDATE practice_quizzes SET submitted_at=NOW() WHERE id=$1',[quiz]);
+  assert.equal((await myRevisionRecommendations(a,course)).length,1,
+   'Restoring the timestamp must restore eligible evidence');
   await assert.rejects(upsertRevisionPlan(a,course,outcome,lecture+3,'Review source concepts and test your understanding.',true),/mapped/);
   await withdrawRevisionPlan(course,outcome);
   assert.deepEqual(await myRevisionRecommendations(a,course),[],'Withdrawn plan must disappear');
