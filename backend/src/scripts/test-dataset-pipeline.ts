@@ -784,14 +784,35 @@ const run = async () => {
     if (p2.kind === 'CREATED') await fin(p2.versionId);
     const nowActive = (await lectureState(L8)).active_version_id!;
     const editedProbe = (await query<{ chunk_text: string }>('SELECT c.chunk_text FROM lecture_qna_chunks c JOIN dataset_version_chunks d ON d.chunk_id=c.id WHERE d.version_id=$1 AND c.question=$2', [nowActive, baseRows()[1].question])).rows[0].chunk_text;
-    const step2Pinned = await searchChunks(vecFor(probe), L8, 3, pinned);        // "retrieval step 2" of the SAME request (pinned)
+    const step2Pinned = await searchChunks(vecFor(probe), L8, 3, pinned);        // same request, still pinned
     const step2PinnedNew = await searchChunks(vecFor(editedProbe), L8, 3, pinned);
-    const freshOld = await searchChunks(vecFor(probe), L8, 3);                   // a NEW request (not pinned): sees the new version
+    const freshOld = await searchChunks(vecFor(probe), L8, 3);                   // new request, active version
     const freshNew = await searchChunks(vecFor(editedProbe), L8, 3);
+
+    // Vector search returns the nearest chunks even for an embedding generated
+    // from a different version. A nonempty result is NOT evidence of leakage.
+    // Assert actual returned chunk membership instead of expecting empty arrays.
+    const belongsOnlyTo = async (chunks: { id: number }[], versionId: number): Promise<boolean> => {
+      if (!chunks.length) return false;
+      const ids = chunks.map(c => c.id);
+      const { rows } = await query<{ id: number }>(
+        'SELECT chunk_id AS id FROM dataset_version_chunks WHERE version_id=$1 AND chunk_id=ANY($2::int[])',
+        [versionId, ids]
+      );
+      return new Set(rows.map(r => r.id)).size === new Set(ids).size;
+    };
+    const pinnedScoped = (await Promise.all([step1, step2Pinned, step2PinnedNew].map(r => belongsOnlyTo(r, pinned)))).every(Boolean);
+    const freshScoped = (await Promise.all([freshOld, freshNew].map(r => belongsOnlyTo(r, nowActive)))).every(Boolean);
+    const oldAnswer = baseRows()[1].answer;
+    const newAnswer = 'Concept 2 now says something different.';
+    const pinnedHasNoNewAnswer = [...step1, ...step2Pinned, ...step2PinnedNew].every(c => c.answer !== newAnswer);
+    const freshHasNoOldAnswer = [...freshOld, ...freshNew].every(c => c.answer !== oldAnswer);
     check('16. Pinned request keeps seeing its own version after a publish (no mixing); a new request sees the new version',
-      nowActive !== pinned && step1[0]?.answer === baseRows()[1].answer && step2Pinned[0]?.answer === baseRows()[1].answer && step2PinnedNew.length === 0
-        && freshOld.length === 0 && freshNew[0]?.answer === 'Concept 2 now says something different.',
-      `pinnedBefore=${step1[0]?.answer === baseRows()[1].answer} pinnedAfterPublish=old:${step2Pinned[0]?.answer === baseRows()[1].answer}/seesNew:${step2PinnedNew.length > 0} newRequest=sees old:${freshOld.length > 0}/sees new:${freshNew.length > 0}`);
+      nowActive !== pinned && step1[0]?.answer === oldAnswer && step2Pinned[0]?.answer === oldAnswer
+        && freshNew[0]?.answer === newAnswer && pinnedScoped && freshScoped
+        && pinnedHasNoNewAnswer && freshHasNoOldAnswer,
+      `pinnedBefore=${step1[0]?.answer === oldAnswer} pinnedAfterPublish=old:${step2Pinned[0]?.answer === oldAnswer}/noNewAnswer:${pinnedHasNoNewAnswer}/allPinnedMembers:${pinnedScoped} newRequest=new:${freshNew[0]?.answer === newAnswer}/noOldAnswer:${freshHasNoOldAnswer}/allActiveMembers:${freshScoped}`);
+
   }
 
   // ─────────────────────────────────────────────────────────────────────
