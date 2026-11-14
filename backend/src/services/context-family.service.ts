@@ -18,7 +18,7 @@ export function contextFamilyKey(chunk: Pick<QnaChunk,'question'|'start_time'>):
   if(base===q)return null;
   return locator+'|'+base;
  }
- return locator+'|Q:'+q.replace(/\s+/g,' ').toLowerCase();
+ return locator+'|Q:'+q.replace(/ \[Answer part \d+\]$/,'').replace(/\s+/g,' ').toLowerCase();
 }
 export function boundedNewNeighbors<T extends {id:number}>(original:readonly T[],neighbors:readonly T[],cap:number):T[]{
  if(cap<=0)return [];
@@ -58,7 +58,74 @@ export async function expandContextCandidates(
      AND (
        (d.qa_id=a.qa_id AND a.qa_id IS NOT NULL)
        OR (a.start_time IS NOT NULL AND c.start_time=a.start_time
-           AND c.question=a.question AND c.question NOT LIKE 'Source excerpt:%')
+           AND c.question NOT LIKE 'Source excerpt:%'
+           AND (c.question=a.question
+             OR (
+               regexp_replace(c.question,' \\[Answer part [0-9]+\\]
+       OR (a.part_number IS NOT NULL
+           AND c.start_time=a.start_time
+           AND c.question LIKE 'Source excerpt:%'
+           AND regexp_replace(c.question,'[|] (Part|Visual) [0-9]+$','')=a.section_name
+           AND c.question ~ '[|] (Part|Visual) [0-9]+$'
+           AND ABS(substring(c.question FROM '([0-9]+)$')::int-a.part_number)<=1)
+     )
+   ORDER BY c.id,LEAST(ABS(d.chunk_index-a.chunk_index),3)
+ )
+ SELECT id,lecture_id,topic,question,answer,chunk_text,chunk_index,
+   start_time,end_time,keywords FROM neighbors ORDER BY distance,id LIMIT $4`,
+ [lectureId,ids,datasetVersionId??null,maxExtras]);
+ return [...candidates,...boundedNewNeighbors(candidates,rows,maxExtras)];
+}
+,'')=
+               regexp_replace(a.question,' \\[Answer part [0-9]+\\]
+       OR (a.part_number IS NOT NULL
+           AND c.start_time=a.start_time
+           AND c.question LIKE 'Source excerpt:%'
+           AND regexp_replace(c.question,'[|] (Part|Visual) [0-9]+$','')=a.section_name
+           AND c.question ~ '[|] (Part|Visual) [0-9]+$'
+           AND ABS(substring(c.question FROM '([0-9]+)$')::int-a.part_number)<=1)
+     )
+   ORDER BY c.id,LEAST(ABS(d.chunk_index-a.chunk_index),3)
+ )
+ SELECT id,lecture_id,topic,question,answer,chunk_text,chunk_index,
+   start_time,end_time,keywords FROM neighbors ORDER BY distance,id LIMIT $4`,
+ [lectureId,ids,datasetVersionId??null,maxExtras]);
+ return [...candidates,...boundedNewNeighbors(candidates,rows,maxExtras)];
+}
+,'')
+               AND c.question ~ ' \\[Answer part [0-9]+\\]
+       OR (a.part_number IS NOT NULL
+           AND c.start_time=a.start_time
+           AND c.question LIKE 'Source excerpt:%'
+           AND regexp_replace(c.question,'[|] (Part|Visual) [0-9]+$','')=a.section_name
+           AND c.question ~ '[|] (Part|Visual) [0-9]+$'
+           AND ABS(substring(c.question FROM '([0-9]+)$')::int-a.part_number)<=1)
+     )
+   ORDER BY c.id,LEAST(ABS(d.chunk_index-a.chunk_index),3)
+ )
+ SELECT id,lecture_id,topic,question,answer,chunk_text,chunk_index,
+   start_time,end_time,keywords FROM neighbors ORDER BY distance,id LIMIT $4`,
+ [lectureId,ids,datasetVersionId??null,maxExtras]);
+ return [...candidates,...boundedNewNeighbors(candidates,rows,maxExtras)];
+}
+
+               AND a.question ~ ' \\[Answer part [0-9]+\\]
+       OR (a.part_number IS NOT NULL
+           AND c.start_time=a.start_time
+           AND c.question LIKE 'Source excerpt:%'
+           AND regexp_replace(c.question,'[|] (Part|Visual) [0-9]+$','')=a.section_name
+           AND c.question ~ '[|] (Part|Visual) [0-9]+$'
+           AND ABS(substring(c.question FROM '([0-9]+)$')::int-a.part_number)<=1)
+     )
+   ORDER BY c.id,LEAST(ABS(d.chunk_index-a.chunk_index),3)
+ )
+ SELECT id,lecture_id,topic,question,answer,chunk_text,chunk_index,
+   start_time,end_time,keywords FROM neighbors ORDER BY distance,id LIMIT $4`,
+ [lectureId,ids,datasetVersionId??null,maxExtras]);
+ return [...candidates,...boundedNewNeighbors(candidates,rows,maxExtras)];
+}
+
+             )))
        OR (a.part_number IS NOT NULL
            AND c.start_time=a.start_time
            AND c.question LIKE 'Source excerpt:%'
