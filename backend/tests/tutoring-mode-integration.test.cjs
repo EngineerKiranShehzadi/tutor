@@ -52,6 +52,11 @@ test('all four released modes preserve identical trusted retrieval evidence in g
  const context=seen.map(x=>x.userPrompt.match(/Lecture Q&A Context:\n([\s\S]*?)\nCurrent Student Question:/)?.[1]);
  assert.equal(new Set(context).size,1,'mode must not change the evidence block');
  assert.equal(new Set(seen.map(x=>x.userPrompt)).size,4,'each teaching strategy must differ');
+ assert.match(seen[0].userPrompt,/beginner-friendly explanation/);
+ assert.match(seen[0].userPrompt,/avoid an exam revision table/);
+ assert.match(seen[3].userPrompt,/clearly labelled key revision points/);
+ assert.match(seen[3].userPrompt,/exactly one short, optional self-check question/);
+ assert.match(seen[3].userPrompt,/If no answer is supported/);
 });
 test('Socratic stages are explicit, bounded, and retain the original anchor',async()=>{
  seen.length=0;
