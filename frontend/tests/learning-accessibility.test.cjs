@@ -60,3 +60,12 @@ test('admin learning outcomes reports unavailable courses separately from empty 
  assert.match(page,/courseId!==null&&!outcomesQuery\.loading&&!outcomesQuery\.error&&!outcomes\.length/);
  assert.match(page,/disabled=\{courses\.loading\|\|!!courses\.error\|\|allCourses\.length===0\|\|pending\}/);
 });
+
+test('student faculty guidance can refresh after approval or withdrawal',()=>{
+ const component=read('components/student/MyFacultyRevisionPlans.tsx');
+ assert.match(component,/visibilitychange/);
+ assert.match(component,/document\.visibilityState==='visible'/);
+ assert.match(component,/result\.refetch\(\)/);
+ assert.match(component,/aria-label="Refresh faculty revision guidance"/);
+ assert.match(component,/result\.error\?\[\]:/);
+});
