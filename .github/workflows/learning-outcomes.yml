@@ -177,6 +177,8 @@ jobs:
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/039_quiz_evidence_provenance.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/040_clo_course_integrity.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/041_explicit_context_families.sql
+      - name: Verify explicit context-family coverage on disposable DB
+        run: psql -v ON_ERROR_STOP=1 -f backend/tests/context-family-migration.sql
       - name: Check constraints and idempotence
         run: |
           psql -v ON_ERROR_STOP=1 <<'SQL'
