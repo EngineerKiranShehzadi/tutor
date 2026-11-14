@@ -196,7 +196,7 @@ async function generateBatch(lecture: PlannedLecture, accepted: Generated[], run
   return valid.filter(q => { const slot = remaining.indexOf(q.category); if (slot < 0) return false; remaining.splice(slot, 1); return true; });
 }
 async function generateVerifiedQuiz(lectures: PlannedLecture[], run: QuizRun, previous: PreviousQuestion[]): Promise<Generated[]> {
-  const approved=new Map<number,ApprovedClo[]>(lectures.map(l=>[l.id,l.outcomes]));
+  const approvedScopesByLecture=new Map<number,ApprovedClo[]>(lectures.map(l=>[l.id,l.outcomes]));
   const accepted = new Map(lectures.map(l => [l.id, [] as Generated[]]));
   const sources = new Map(lectures.flatMap(l => l.sources).map(s => [s.id, s]));
   for (let round = 0; round < 2; round++) {
@@ -214,10 +214,10 @@ async function generateVerifiedQuiz(lectures: PlannedLecture[], run: QuizRun, pr
     });
     const batches: Generated[][] = [];
     for (let i = 0; i < candidates.length; i += VERIFY_BATCH_SIZE) batches.push(candidates.slice(i, i + VERIFY_BATCH_SIZE));
-    const approved = (await run.measure('verification', () => mapWithConcurrency(batches, 2,
-      batch => verifyQuestions(batch, sources, run, previous,approved)))).flat();
-    for (const q of approved) accepted.get(q.lectureId)!.push(q);
-    logger.info(`[QUIZ-VALIDATION] request=${run.id} round=${round + 1} repeatRejected=${repeats} candidates=${candidates.length} approved=${approved.length} rejected=${candidates.length - approved.length}`);
+    const verifiedQuestions = (await run.measure('verification', () => mapWithConcurrency(batches, 2,
+      batch => verifyQuestions(batch, sources, run, previous, approvedScopesByLecture)))).flat();
+    for (const q of verifiedQuestions) accepted.get(q.lectureId)!.push(q);
+    logger.info(`[QUIZ-VALIDATION] request=${run.id} round=${round + 1} repeatRejected=${repeats} candidates=${candidates.length} approved=${verifiedQuestions.length} rejected=${candidates.length - verifiedQuestions.length}`);
   }
   if (lectures.some(l => accepted.get(l.id)!.length !== l.count)) {
     throw new AppError(previous.length
