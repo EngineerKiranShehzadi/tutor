@@ -171,7 +171,7 @@ export const documentToRows = async (
         rows.push({
           question,
           answer: piece.text,
-          topic: piece.kind === 'QA' ? (piece.heading ?? locator) : visualTopic || undefined,
+          topic: piece.kind === 'QA' ? (piece.heading ?? locator) : (visualTopic ?? locator),
           start_time: `${safeName} | ${locator}`,
         });
         if (rows.length > env.DATASET.MAX_ROWS) {
