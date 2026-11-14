@@ -17,6 +17,12 @@ on:
       - 'backend/src/db/migrations/035_socratic_chat_state.sql'
       - 'backend/src/db/migrations/036_approved_revision_plans.sql'
       - 'backend/src/db/migrations/037_rag_benchmark_runs.sql'
+      - 'backend/src/db/migrations/038_clo_document_approvals.sql'
+      - 'backend/src/services/clo-document.service.ts'
+      - 'backend/src/services/clo-alignment.service.ts'
+      - 'backend/src/routes/clo-document.routes.ts'
+      - 'backend/src/services/practice-quiz.service.ts'
+      - 'frontend/src/components/admin/CloDocumentImport.tsx'
       - 'backend/src/services/rag-benchmark-report.service.ts'
       - 'backend/src/graphql/rag-benchmark.schema.ts'
       - 'backend/src/graphql/resolvers/rag-benchmark.resolver.ts'
@@ -82,6 +88,9 @@ jobs:
       - name: Observed learning progress evidence tests
         working-directory: backend
         run: npx ts-node --transpile-only src/scripts/test-learning-effectiveness.ts
+      - name: Approved CLO question alignment policy
+        working-directory: backend
+        run: npx ts-node --transpile-only src/scripts/test-clo-alignment.ts
       - name: Backend TypeScript
         working-directory: backend
         run: npm run typecheck
@@ -131,6 +140,8 @@ jobs:
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/036_approved_revision_plans.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/037_rag_benchmark_runs.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/037_rag_benchmark_runs.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/038_clo_document_approvals.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/038_clo_document_approvals.sql
       - name: Check constraints and idempotence
         run: |
           psql -v ON_ERROR_STOP=1 <<'SQL'
@@ -139,8 +150,8 @@ jobs:
           BEGIN
             SELECT COUNT(*) INTO count_tables FROM information_schema.tables
               WHERE table_schema='public' AND table_name IN
-              ('course_learning_outcomes','lecture_learning_outcomes','practice_question_outcomes');
-            IF count_tables<>3 THEN RAISE EXCEPTION 'Missing outcome tables'; END IF;
+              ('course_learning_outcomes','lecture_learning_outcomes','practice_question_outcomes','approved_clo_lecture_scopes');
+            IF count_tables<>4 THEN RAISE EXCEPTION 'Missing outcome tables'; END IF;
           END $$;
           SQL
       - name: Verify faculty tagging constraints and student evidence isolation
