@@ -15,6 +15,7 @@ const NAV = [
   { href: '/admin/students',      icon: 'fas fa-user-graduate',         label: 'Students'         },
   { href: '/admin/questions',     icon: 'fas fa-comments',              label: 'Questions'        },
   { href: '/admin/content-gaps',  icon: 'fas fa-magnifying-glass-chart', label: 'Content Gaps'    },
+  { href: '/admin/learning-outcomes',icon: 'fas fa-bullseye', label: 'Learning Outcomes' },
   { href: '/admin/users',         icon: 'fas fa-users-gear',            label: 'User Management'  },
   { href: '/admin/agents',        icon: 'fas fa-robot',                 label: 'AI Agents'        },
   { href: '/admin/monitor',       icon: 'fas fa-heart-pulse',           label: 'Tutor Monitor'    },
@@ -83,9 +84,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
         <nav className="sidebar-scroll flex-1 px-3 pt-1 pb-4 overflow-y-auto">
           <p className="px-3 mb-1.5 text-[11.5px] font-semibold text-white/55">Analytics</p>
-          {NAV.slice(0, 6).map(({ href, icon, label }) => navLink(href, icon, label))}
+          {NAV.slice(0, 7).map(({ href, icon, label }) => navLink(href, icon, label))}
           <p className="px-3 mt-4 mb-1.5 text-[11.5px] font-semibold text-white/55">Management</p>
-          {NAV.slice(6).map(({ href, icon, label }) => navLink(href, icon, label))}
+          {NAV.slice(7).map(({ href, icon, label }) => navLink(href, icon, label))}
         </nav>
 
         {/* A "System Online — all services operational" card used to sit here.
