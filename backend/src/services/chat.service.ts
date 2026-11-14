@@ -1,6 +1,6 @@
 import { query } from '../config/database';
 import { effectiveTutoringMode, modeAwarePromptVersion, type TutoringMode } from './tutoring-mode.service';
-import { getSocraticState, advanceSocraticState, type SocraticStage } from './socratic-state.service';
+import { getSocraticState, saveVerifiedSocraticTurn, type SocraticStage } from './socratic-state.service';
 import { env } from '../config/env';
 import { AppError } from '../middleware/errorHandler';
 import { ChatHistoryEntry, QnaChunk, LectureAgentProfile } from '../types';
@@ -559,7 +559,7 @@ export const askLectureAgent = async (
     // request shapes use different processing paths instead of every
     // message going through the same vector-search pipeline.
     currentStage = 'classify-query-route';
-    const { route, source: routeSource } = socraticState
+    const { route, source: routeSource } = socraticTurn
       ? {route:'FACT_QUESTION' as const,source:'rule' as const}
       : await trace.span(
       'classify-query-route',
@@ -1103,17 +1103,17 @@ export const askLectureAgent = async (
     const chunkIds = chunks.map((c: QnaChunk) => c.id);
     currentStage = 'save-chat-entry';
     const savedEntryId = await trace.span('save-chat-entry', async () => {
+      if (socraticTurn && guardrailOutcome.verified && answer.trim() !== LECTURE_NOT_FOUND_MESSAGE) {
+        // Verified Socratic turns advance and persist atomically. No partial chat
+        // row survives a stale stage or a failed database transaction.
+        return saveVerifiedSocraticTurn({studentId,lectureId,sessionId,question,answer,
+          sourceChunkIds:chunkIds,traceId:trace.traceId,
+          anchorQuestion:socraticTurn.anchorQuestion,stage:socraticTurn.stage});
+      }
       const id = await saveChatEntry({ studentId, lectureId, question, answer, sourceChunkIds: chunkIds, sessionId, traceId: trace.traceId });
       await touchSession(studentId, sessionId, question);
       return id;
     }, () => ({ sourceChunkCount: chunkIds.length }));
-
-    // Only a verified, complete Socratic stage advances the student's private topic.
-    // Hints are not grades or evidence of CLO mastery.
-    if (socraticTurn && guardrailOutcome.verified && answer.trim() !== LECTURE_NOT_FOUND_MESSAGE) {
-      await advanceSocraticState({studentId,lectureId,sessionId,
-        anchorQuestion:socraticTurn.anchorQuestion,stage:socraticTurn.stage});
-    }
 
     // 9. Answer-memory write — FACT_QUESTION only, after a successful,
     // grounded, chunk-backed answer is already saved, AND only once output
