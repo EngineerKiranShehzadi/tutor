@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@apollo/client';
 import { AdminPageHero } from '@/components/admin/AdminPageHero';
 import { MisconceptionReview } from '@/components/admin/MisconceptionReview';
+import { CloDocumentImport } from '@/components/admin/CloDocumentImport';
 import { FacultyRevisionEditor } from '@/components/admin/FacultyRevisionEditor';
 import { GET_COURSES } from '@/graphql/course.queries';
 import { GET_LECTURES } from '@/graphql/lecture.queries';
@@ -80,6 +81,7 @@ export default function LearningOutcomesAdmin() {
     {!courses.loading&&!courses.error&&!allCourses.length&&<p role="status" className="mb-4 text-label text-[var(--muted)]">No courses available. Add a course before creating learning outcomes.</p>}
     {error&&<p role="alert" className="mb-4 rounded-card border border-[var(--border)] border-l-[3px] border-l-red-600 bg-[var(--card)] p-4 text-label text-[var(--text)]">{error}</p>}
     {notice&&<p role="status" className="mb-4 rounded-card border border-[var(--border)] border-l-[3px] border-l-[var(--accent)] bg-[var(--card)] p-4 text-label text-[var(--text)]">{notice}</p>}
+    <CloDocumentImport courseId={courseId} onApproved={async()=>{await Promise.all([outcomesQuery.refetch(),summaryQuery.refetch()]);}}/>
     <div className="rounded-card border border-[var(--border)] bg-[var(--card)] p-6 mb-5">
       <h2 className="text-h3 font-semibold text-[var(--text)] mb-2">Add a course learning outcome</h2>
       <p className="text-caption text-[var(--muted)] mb-4">Use a stable code, such as CLO1. This record is English-only for the current pilot.</p>
