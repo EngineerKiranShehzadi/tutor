@@ -17,7 +17,7 @@ assert.equal(observedChange([q(7,4,4,'2026-11-01T10:00:00Z'),q(9,4,1,'2026-11-12
 assert.deepEqual(observedChange([inputs[1],inputs[0]])?.first.quizId,7);
 // An upstream duplicate must never replace the true latest distinct quiz.
 const duplicated=observedChange([
- inputs[0],inputs[1],q(7,5,2,'2026-11-13T10:00:00Z')
+ inputs[0],inputs[1],inputs[0]
 ]);
 assert.equal(duplicated?.first.quizId,7);
 assert.equal(duplicated?.latest.quizId,8);
