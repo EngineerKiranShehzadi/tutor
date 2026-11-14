@@ -7,7 +7,14 @@ export function observedChange(rows:ProgressAssessment[]):ObservedChange|null {
    Number.isSafeInteger(r.attempted)&&r.attempted>=MIN_COMPARABLE_QUESTIONS_PER_QUIZ&&
    Number.isSafeInteger(r.correct)&&r.correct>=0&&r.correct<=r.attempted&&
    typeof r.submittedAt==='string'&&Number.isFinite(Date.parse(r.submittedAt)));
- const sorted=[...eligible].sort((a,b)=>
+ // Each submitted quiz is one observation, even if an upstream join repeats it.
+ // Prefer the latest timestamp for duplicate IDs, then compare distinct quizzes.
+ const unique=new Map<number,ProgressAssessment>();
+ for(const row of eligible){
+  const previous=unique.get(row.quizId);
+  if(!previous||Date.parse(row.submittedAt)>Date.parse(previous.submittedAt))unique.set(row.quizId,row);
+ }
+ const sorted=[...unique.values()].sort((a,b)=>
   new Date(a.submittedAt).getTime()-new Date(b.submittedAt).getTime()||a.quizId-b.quizId);
  if(sorted.length<2||new Set(sorted.map(r=>r.quizId)).size<2)return null;
  const first=sorted[0],latest=sorted[sorted.length-1];
