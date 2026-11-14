@@ -81,7 +81,7 @@ def docx_units(data, warnings):
     locator = "Document"
     heading_count = 0
     inside_slides = False
-    slide_heading = re.compile(r"^(?:slide|page)\\s*(?:no\\.?|number|#)?\\s*[:.\\-]?\\s*(\\d+)\\b", re.I)
+    slide_heading = re.compile(r"^(?:slide|page)\s*(?:no\.?|number|#)?\s*[:.\\-]?\s*(\d+)\b", re.I)
 
     def flush():
         nonlocal current
