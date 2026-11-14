@@ -89,7 +89,14 @@ const splitter = new RecursiveCharacterTextSplitter({
 // row's topic/question re-prefixed onto every piece so each one is still
 // self-contained if retrieved on its own.
 export async function buildChunkPieces(row: RawRow): Promise<ChunkPiece[]> {
-  return (await buildChunkPiecesReport(row)).pieces;
+  const { pieces, splitInto } = await buildChunkPiecesReport(row);
+  if (splitInto > MAX_PIECES_PER_ROW) {
+    throw new AppError(
+      `Answer exceeds the safe chunk limit (${splitInto} pieces; maximum ${MAX_PIECES_PER_ROW}). Split the source into smaller sections before indexing. No content was indexed.`,
+      422
+    );
+  }
+  return pieces;
 }
 
 // Same as buildChunkPieces, plus how many pieces the answer split into before
