@@ -79,7 +79,7 @@ export async function myMisconceptionEvidence(studentId:string,courseId:number){
  JOIN course_learning_outcomes o ON o.id=m.outcome_id
  LEFT JOIN practice_distractor_misconceptions d ON d.misconception_id=m.id
  LEFT JOIN practice_questions q ON q.id=d.question_id
- LEFT JOIN practice_quizzes z ON z.id=q.quiz_id AND z.student_id=$2 AND z.course_id=$1 AND z.status='COMPLETED'
+ LEFT JOIN practice_quizzes z ON z.id=q.quiz_id AND z.student_id=$2 AND z.course_id=$1 AND z.status='COMPLETED' AND z.submitted_at IS NOT NULL
  LEFT JOIN practice_answers a ON a.quiz_id=z.id AND a.question_id=q.id
  AND a.selected_index=d.selected_index AND a.is_correct=FALSE
  WHERE o.course_id=$1 GROUP BY m.id,o.code
