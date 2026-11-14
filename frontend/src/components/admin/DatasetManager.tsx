@@ -58,6 +58,7 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
   const [mode, setMode] = useState<DatasetMode>('MERGE');
   const [file, setFile] = useState<File | null>(null);
   const [extractionWarnings, setExtractionWarnings] = useState<string[]>([]);
+  const [documentQuality,setDocumentQuality]=useState<{sourceUnits:number;sourceCharacters:number;qaRecords:number;proseRecords:number;qaChildRecords:number;outputRecords:number;warnings:number}|null>(null);
   const [phase, setPhase] = useState<Phase>('idle');
   const [preview, setPreview] = useState<DatasetPreview | null>(null);
   // The dry run plans the file in both modes; switching mode reads from here
@@ -131,12 +132,13 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
   }, [inFlight, versions]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const analyse = useCallback(async (f: File, m: DatasetMode) => {
-    setPhase('analysing'); setError(''); setNotice(''); setPreview(null); setPreviews({}); setConfirmed(false); setExtractionWarnings([]);
+    setPhase('analysing'); setError(''); setNotice(''); setPreview(null); setPreviews({}); setConfirmed(false); setExtractionWarnings([]);setDocumentQuality(null);
     try {
       const res = await datasetApi.upload(lectureId, f, { mode: m, dryRun: true });
-      const data = res.data.data as { preview: DatasetPreview; previews?: Record<DatasetMode, DatasetPreview>; extractionWarnings?: string[] };
+      const data = res.data.data as { preview: DatasetPreview; previews?: Record<DatasetMode, DatasetPreview>; extractionWarnings?: string[];documentQuality?: {sourceUnits:number;sourceCharacters:number;qaRecords:number;proseRecords:number;qaChildRecords:number;outputRecords:number;warnings:number}|null };
       setPreviews(data.previews ?? { [m]: data.preview });
-    setExtractionWarnings(data.extractionWarnings ?? []);
+      setExtractionWarnings(data.extractionWarnings ?? []);
+      setDocumentQuality(data.documentQuality??null);
       setPreview(data.preview);
       setPhase('preview');
     } catch (err) {
@@ -371,6 +373,15 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
         </>
         )}
 
+        {/* Document chunk integrity report (measured counts, never unverified accuracy claims). */}
+        {documentQuality&&(
+          <section className="my-3 rounded-control border border-[var(--border)] bg-[var(--card)] p-4 text-caption text-[var(--text)]" data-testid="document-chunk-quality">
+            <h3 className="font-semibold">Document chunking quality report</h3>
+            <p className="mt-2">{documentQuality.sourceUnits} source sections · {documentQuality.qaRecords} Q&amp;A groups · {documentQuality.qaChildRecords} Q&amp;A pieces · {documentQuality.proseRecords} prose/visual pieces</p>
+            <p className="mt-1">{documentQuality.outputRecords} searchable records prepared from {documentQuality.sourceCharacters.toLocaleString()} extracted characters.</p>
+            <p className="mt-2 text-[var(--muted)]">Each detected Q&amp;A keeps its question in the same retrieval record. Complex tables, implicit relationships and scanned pages still require review. This report measures processing, not answer accuracy.</p>
+          </section>
+        )}
         {/* Preview */}
         {extractionWarnings.length > 0 && (
             <div role="alert" className="my-3 rounded-control border border-[var(--border)] border-l-[3px] border-l-[var(--gold)] bg-[var(--card)] px-5 py-4 text-caption text-[var(--text)]" data-testid="extraction-warnings">
