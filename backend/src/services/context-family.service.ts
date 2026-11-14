@@ -44,6 +44,14 @@ export async function expandContextCandidates(
    JOIN lecture_qna_chunks c ON c.id=d.chunk_id AND c.lecture_id=$1
    WHERE c.id<>a.id AND c.local_embedding IS NOT NULL AND (
      (a.qa_id IS NOT NULL AND d.qa_id=a.qa_id)
+     OR EXISTS (
+       SELECT 1 FROM dataset_chunk_families af
+       JOIN dataset_chunk_families nf
+         ON nf.version_id=af.version_id AND nf.context_family_id=af.context_family_id
+       WHERE af.version_id=d.version_id AND af.chunk_id=a.id
+         AND nf.chunk_id=c.id AND af.chunk_id<>nf.chunk_id
+         AND abs(nf.part_index-af.part_index)<=2
+     )
      OR (a.start_time IS NOT NULL AND c.start_time=a.start_time
        AND c.question NOT LIKE 'Source excerpt:%'
        AND (c.question=a.question OR (
