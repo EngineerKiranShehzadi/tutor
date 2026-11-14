@@ -16,7 +16,7 @@ export default function StudentLearningOutcomes(){
   const all:Course[]=courses.data?.courses??[];
   const [courseId,setCourseId]=useState<number|null>(null);
   useEffect(()=>{
-    if(!all.length)return;
+    if(!all.length){setCourseId(null);return;}
     if(courseId!==null&&all.some(c=>Number(c.id)===courseId))return;
     setCourseId(Number(all[0].id));
   },[all,courseId]);
@@ -27,12 +27,16 @@ export default function StudentLearningOutcomes(){
     <h1 className="text-h1 font-semibold text-[var(--text)]">Learning Outcomes</h1>
     <p className="text-body text-[var(--muted)] mt-2 mb-6">See what your completed quizzes show about each course goal. This uses faculty-approved question mappings, not chat activity.</p>
     <label htmlFor="student-outcome-course" className="text-label font-semibold text-[var(--text)]">Select course</label>
-    <select id="student-outcome-course" value={courseId??''} onChange={e=>setCourseId(Number(e.target.value))} className="mt-2 mb-6 w-full rounded-control border border-[var(--border)] bg-[var(--card)] px-4 py-3 text-label text-[var(--text)]">
+    <select id="student-outcome-course" value={courseId??''} disabled={courses.loading||!!courses.error||all.length===0} onChange={e=>setCourseId(Number(e.target.value))} className="mt-2 mb-6 w-full rounded-control border border-[var(--border)] bg-[var(--card)] px-4 py-3 text-label text-[var(--text)]">
+      {courseId===null&&<option value="">{courses.loading?'Loading courses…':'Select a course'}</option>}
       {all.map(c=><option key={c.id} value={c.id}>{c.title}</option>)}
     </select>
-    {progress.loading&&!rows.length&&<p role="status" className="text-label text-[var(--muted)]">Loading course outcomes…</p>}
-    {progress.error&&<div role="alert" className="rounded-card border border-[var(--border)] bg-[var(--card)] p-5 text-label text-[var(--text)]">Could not load learning outcomes. Please try again. <button onClick={()=>void progress.refetch()} className="underline">Retry</button></div>}
-    {!progress.loading&&!progress.error&&!rows.length&&<section className="rounded-card border border-[var(--border)] bg-[var(--card)] p-6"><h2 className="text-h3 font-semibold text-[var(--text)]">No learning outcomes yet</h2><p className="mt-2 text-label text-[var(--muted)]">Your teacher can add course learning outcomes. Meanwhile, you can continue practicing.</p><Link href="/practice" className="inline-block mt-4 font-semibold text-[var(--accent)] hover:underline">Open Practice Quizzes</Link></section>}
+    {courses.loading&&!courses.data&&<p role="status" className="text-label text-[var(--muted)]">Loading your courses…</p>}
+    {courses.error&&<p role="alert" className="text-label text-[var(--text)]">Could not load courses. <button type="button" onClick={()=>void courses.refetch()} className="font-semibold underline">Retry</button></p>}
+    {!courses.loading&&!courses.error&&all.length===0&&<p role="status" className="text-label text-[var(--muted)]">No courses are available yet. Check back when your teacher has added a course.</p>}
+    {courseId!==null&&progress.loading&&!rows.length&&<p role="status" className="text-label text-[var(--muted)]">Loading course outcomes…</p>}
+    {courseId!==null&&progress.error&&<div role="alert" className="rounded-card border border-[var(--border)] bg-[var(--card)] p-5 text-label text-[var(--text)]">Could not load learning outcomes. Please try again. <button onClick={()=>void progress.refetch()} className="underline">Retry</button></div>}
+    {courseId!==null&&!progress.loading&&!progress.error&&!rows.length&&<section className="rounded-card border border-[var(--border)] bg-[var(--card)] p-6"><h2 className="text-h3 font-semibold text-[var(--text)]">No learning outcomes yet</h2><p className="mt-2 text-label text-[var(--muted)]">Your teacher can add course learning outcomes. Meanwhile, you can continue practicing.</p><Link href="/practice" className="inline-block mt-4 font-semibold text-[var(--accent)] hover:underline">Open Practice Quizzes</Link></section>}
     <section className="space-y-4" aria-label="Course learning outcomes">
       {rows.map(r=><article key={r.outcomeId} className="rounded-card border border-[var(--border)] bg-[var(--card)] p-5">
         <div className="flex flex-wrap justify-between gap-3">
