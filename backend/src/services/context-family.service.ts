@@ -43,8 +43,8 @@ export async function expandContextCandidates(
    JOIN dataset_version_chunks d ON d.version_id=COALESCE($3::int,(SELECT active_version_id FROM lectures WHERE id=$1))
    JOIN lecture_qna_chunks c ON c.id=d.chunk_id AND c.lecture_id=$1
    WHERE c.id<>a.id AND c.local_embedding IS NOT NULL AND (
-     (a.qa_id IS NOT NULL AND d.qa_id=a.qa_id)
-     OR EXISTS (
+     -- Prefer version-scoped structural identity when both chunks are registered.
+     EXISTS (
        SELECT 1 FROM dataset_chunk_families af
        JOIN dataset_chunk_families nf
          ON nf.version_id=af.version_id AND nf.context_family_id=af.context_family_id
@@ -52,18 +52,26 @@ export async function expandContextCandidates(
          AND nf.chunk_id=c.id AND af.chunk_id<>nf.chunk_id
          AND abs(nf.part_index-af.part_index)<=2
      )
-     OR (a.start_time IS NOT NULL AND c.start_time=a.start_time
-       AND c.question NOT LIKE 'Source excerpt:%'
-       AND (c.question=a.question OR (
-        position(' [Answer part ' in c.question)>0
-        AND position(' [Answer part ' in a.question)>0
-        AND split_part(c.question,' [Answer part ',1)=split_part(a.question,' [Answer part ',1)
-       )))
-     OR (a.part_number IS NOT NULL AND c.start_time=a.start_time
-       AND c.question LIKE 'Source excerpt:%'
-       AND regexp_replace(c.question,'[|] (Part|Visual) [0-9]+$','')=a.section_name
-       AND c.question ~ '[|] (Part|Visual) [0-9]+$'
-       AND ABS(substring(c.question FROM '([0-9]+)$')::int-a.part_number)<=1)
+     OR (
+       -- Legacy fallback only for memberships without explicit family metadata.
+       NOT EXISTS (SELECT 1 FROM dataset_chunk_families af
+                   WHERE af.version_id=d.version_id AND af.chunk_id=a.id)
+       AND (
+         (a.qa_id IS NOT NULL AND d.qa_id=a.qa_id)
+         OR (a.start_time IS NOT NULL AND c.start_time=a.start_time
+           AND c.question NOT LIKE 'Source excerpt:%'
+           AND (c.question=a.question OR (
+             position(' [Answer part ' in c.question)>0
+             AND position(' [Answer part ' in a.question)>0
+             AND split_part(c.question,' [Answer part ',1)=split_part(a.question,' [Answer part ',1)
+           )))
+         OR (a.part_number IS NOT NULL AND c.start_time=a.start_time
+           AND c.question LIKE 'Source excerpt:%'
+           AND regexp_replace(c.question,'[|] (Part|Visual) [0-9]+$','')=a.section_name
+           AND c.question ~ '[|] (Part|Visual) [0-9]+$'
+           AND ABS(substring(c.question FROM '([0-9]+)$')::int-a.part_number)<=1)
+       )
+     )
    )
    ORDER BY c.id,ABS(d.chunk_index-a.chunk_index)
  )
