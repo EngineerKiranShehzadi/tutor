@@ -26,7 +26,7 @@ export default function FacultyLearningGaps(){
  const rows:Gap[]=query.data?.facultyLearningGaps??[];
  const review=rows.filter(x=>x.status==='REVIEW_RECOMMENDED').length;
  const insufficient=rows.filter(x=>x.status==='INSUFFICIENT_EVIDENCE'||x.status==='NOT_MAPPED').length;
- return <div className="max-w-[1180px]">
+ return <div className="learning-form-a11y max-w-[1180px]">
   <AdminPageHero title="Faculty Learning Gaps"
    subtitle="Evidence-based review of course learning outcomes. No student identity or automated academic decisions."/>
   <section className="bg-[var(--card)] rounded-card border border-[var(--border)] p-5 mb-5">

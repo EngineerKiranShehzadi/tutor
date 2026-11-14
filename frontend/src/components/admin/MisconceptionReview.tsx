@@ -36,9 +36,10 @@ export function MisconceptionReview({courseId,outcomes}:{courseId:number;outcome
    setCode('');setDescription('');
   },'Misconception definition saved.');
  };
- return <section className="rounded-card border border-[var(--border)] bg-[var(--card)] px-5 py-6 mt-5">
+ return <section className="learning-form-a11y rounded-card border border-[var(--border)] bg-[var(--card)] px-5 py-6 mt-5">
   <h2 className="text-h3 font-semibold text-[var(--text)]">Misconception review</h2>
   <p className="text-caption text-[var(--muted)] mt-1 mb-5">Define a specific misunderstanding and approve which wrong MCQ option shows it. Wrong answers alone never prove a misconception.</p>
+  {busy&&<p role="status" className="sr-only">Saving faculty review…</p>}
   {error&&<div role="alert" className="text-label text-red-700 mb-3">{error}</div>}
   {success&&<div role="status" className="text-label text-[var(--accent)] mb-3">{success}</div>}
   <form onSubmit={e=>void submit(e)} className="grid gap-3 sm:grid-cols-2 mb-6">

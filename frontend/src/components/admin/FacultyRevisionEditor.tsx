@@ -20,10 +20,11 @@ export function FacultyRevisionEditor({courseId,outcomeId,code,lectureIds}:{cour
   catch(e){setError(e instanceof Error?e.message:'Could not save guidance.');}
   finally{setPending(false);}
  }
- return <section className="mt-4 border-t border-[var(--border)] pt-4">
+ return <section className="learning-form-a11y mt-4 border-t border-[var(--border)] pt-4">
   <h3 className="text-label font-semibold text-[var(--text)]">Approved revision · {code}</h3>
   <p className="text-caption text-[var(--muted)] mt-1">Drafts are private. Only approved guidance is shown to eligible students.</p>
   {current&&<p className="text-caption text-[var(--muted)] mt-2">Status: {current.status}</p>}
+  {pending&&<p role="status" className="sr-only">Saving revision guidance…</p>}
   {error&&<p role="alert" className="text-caption text-red-700 mt-2">{error}</p>}
   {notice&&<p role="status" className="text-caption text-[var(--accent)] mt-2">{notice}</p>}
   <label className="block text-caption text-[var(--text)] mt-3">Mapped lecture

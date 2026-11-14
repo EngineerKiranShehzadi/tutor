@@ -22,7 +22,7 @@ export default function StudentLearningOutcomes(){
   },[all,courseId]);
   const progress=useQuery(GET_MY_OUTCOME_PROGRESS,{variables:{courseId:courseId??0},skip:courseId===null,fetchPolicy:'cache-and-network'});
   const rows:Progress[]=progress.data?.myOutcomeProgress??[];
-  return <main className="mx-auto max-w-[1000px] px-6 py-10">
+  return <main className="learning-form-a11y mx-auto max-w-[1000px] px-6 py-10">
     <nav className="text-caption text-[var(--muted)] mb-4"><Link href="/profile/activity" className="hover:text-[var(--accent)]">My Activity</Link> / Learning Outcomes</nav>
     <h1 className="text-h1 font-semibold text-[var(--text)]">Learning Outcomes</h1>
     <p className="text-body text-[var(--muted)] mt-2 mb-6">See what your completed quizzes show about each course goal. This uses faculty-approved question mappings, not chat activity.</p>

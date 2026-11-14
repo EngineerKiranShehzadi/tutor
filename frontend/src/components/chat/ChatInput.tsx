@@ -54,7 +54,7 @@ export const ChatInput = ({ onSend, value, onChange, isRecording, onToggleRecord
           the moment listening starts again. Without this, every failure looked
           the same: "Listening", then silence. */}
       {!isRecording && voiceError && (
-        <div className="flex items-start gap-2.5 bg-[var(--gold-soft)] border border-[#e6dcc0] rounded-card px-3 py-2.5 mb-2">
+        <div role="alert" className="flex items-start gap-2.5 bg-[var(--gold-soft)] border border-[#e6dcc0] rounded-card px-3 py-2.5 mb-2">
           <i className="fas fa-microphone-slash text-[var(--gold)] text-[12px] mt-0.5 shrink-0" />
           <span className="flex-1 text-[12px] leading-relaxed text-[var(--gold)]">{voiceError}</span>
           {onDismissVoiceError && (
@@ -80,6 +80,8 @@ export const ChatInput = ({ onSend, value, onChange, isRecording, onToggleRecord
           </span>
           <span className="text-[12px] text-[var(--muted)] tabular-nums">{fmt(recSeconds)}</span>
           <button
+            type="button"
+            aria-label="Stop recording"
             onClick={onToggleRecord}
             className="flex items-center gap-1.5 h-7 px-3 rounded-control bg-white border border-[var(--border)] text-[var(--text)] text-[12px] font-semibold transition-colors hover:bg-[var(--surface)]"
           >
@@ -103,6 +105,9 @@ export const ChatInput = ({ onSend, value, onChange, isRecording, onToggleRecord
             already shows focus through focus-within. */}
         <textarea
           ref={textareaRef}
+          id="lecture-chat-message"
+          aria-label="Ask a question about this lecture"
+          aria-describedby="lecture-chat-keyboard-help"
           rows={1}
           value={displayValue}
           onChange={(e) => { if (!isRecording) onChange(e.target.value.slice(0, MAX)); }}
@@ -123,6 +128,7 @@ export const ChatInput = ({ onSend, value, onChange, isRecording, onToggleRecord
         />
         <div className="flex items-center gap-1.5 shrink-0">
           <button
+            type="button"
             onClick={isSpeechSupported ? onToggleRecord : undefined}
             disabled={!isSpeechSupported}
             title={!isSpeechSupported ? 'Voice input requires Chrome or Edge' : isRecording ? 'Stop recording' : 'Start voice input'}
@@ -140,6 +146,7 @@ export const ChatInput = ({ onSend, value, onChange, isRecording, onToggleRecord
           </button>
 
           <button
+            type="button"
             onClick={handleSend}
             disabled={isRecording || isAnswerPending || !value.trim()}
             title={isAnswerPending ? 'Wait for the current answer to finish' : undefined}
@@ -153,7 +160,7 @@ export const ChatInput = ({ onSend, value, onChange, isRecording, onToggleRecord
 
       {/* Hints row */}
       <div className="flex justify-between items-center px-1 mt-1.5">
-        <span className="text-[11px] text-[var(--muted2)]">
+        <span id="lecture-chat-keyboard-help" className="text-[11px] text-[var(--muted2)]">
           {isRecording
             ? <span>Press Enter or Stop when you finish, then Enter again to send</span>
             : <>

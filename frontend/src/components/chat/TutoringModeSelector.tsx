@@ -7,7 +7,7 @@ export function TutoringModeSelector({value,onChange,disabled=false}:Props){
    <label htmlFor="tutoring-mode-selector" className="text-caption font-semibold text-[var(--muted)]">Teaching style</label>
    <select id="tutoring-mode-selector" value={value} disabled={disabled}
      onChange={e=>onChange(e.target.value as TutoringMode)}
-     className="max-w-full min-w-0 rounded-control border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-caption font-semibold text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-50"
+     className="max-w-full min-w-0 rounded-control border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-caption font-semibold text-[var(--text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:opacity-50"
      aria-describedby="tutoring-mode-help">
      {TUTORING_MODES.filter(m=>m.id!=='SOCRATIC' || process.env.NEXT_PUBLIC_ADAPTIVE_TUTORING_SOCRATIC_ENABLED==='true').map(m=><option key={m.id} value={m.id}>{m.label}</option>)}
    </select>
