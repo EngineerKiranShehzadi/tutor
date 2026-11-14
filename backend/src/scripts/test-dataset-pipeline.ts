@@ -482,6 +482,15 @@ const run = async () => {
       embeddedAfterKill > 0 && embeddedAfterKill < total && vAfterKill.length === 1 && vAfterKill[0].status === 'BUILDING' && stAfterKill.active_version_id === null,
       `embedded=${embeddedAfterKill}/${total} versionStatus=${vAfterKill[0]?.status} lectureStatus=${stAfterKill.status}`);
 
+    // Capture the exact pending texts for THIS lecture. The production resume
+    // worker deliberately resumes ALL BUILDING versions in the database, so its
+    // global embed call count may also include unfinished versions left by
+    // earlier scenarios or previous test runs.
+    const pendingTexts = (await query<{ chunk_text: string }>(
+      'SELECT chunk_text FROM lecture_qna_chunks WHERE lecture_id=$1 AND local_embedding IS NULL ORDER BY id',
+      [L3]
+    )).rows.map(r => r.chunk_text);
+
     // "restart": a fresh process resumes
     const resumed = await new Promise<string>((resolve) => {
       const c2 = spawn(TSNODE, ['--transpile-only', __filename, '--worker', 'resume', '0'], { env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -493,9 +502,24 @@ const run = async () => {
     const dupRows = await countOne(`SELECT COUNT(*) n FROM (SELECT qa_id, chunk_index FROM dataset_version_chunks d JOIN dataset_versions v ON v.id = d.version_id WHERE v.lecture_id = $1 GROUP BY 1,2 HAVING COUNT(*) > 1) t`, [L3]);
     const totalRows = await countOne(`SELECT COUNT(*) n FROM lecture_qna_chunks WHERE lecture_id = $1`, [L3]);
     const st3 = await lectureState(L3);
+    // Compare the exact multiset of calls for the restarted lecture, not the
+    // worker's global call count (which can include other pending lectures).
+    // This still catches any re-embedding of completed chunks or duplicate
+    // calls for the same pending chunk.
+    const expectedCalls = new Map<string, number>();
+    for (const text of pendingTexts) expectedCalls.set(text, (expectedCalls.get(text) ?? 0) + 1);
+    const actualCalls = new Map<string, number>();
+    for (const text of info.texts) {
+      if (!text.includes('Resume question ')) continue;
+      actualCalls.set(text, (actualCalls.get(text) ?? 0) + 1);
+    }
+    const exactPendingCalls = actualCalls.size === expectedCalls.size
+      && [...expectedCalls].every(([text, count]) => actualCalls.get(text) === count);
+    const targetResumed = info.versionIds.includes(vAfterKill[0].id);
     check('7b. After restart the build resumes from the pending chunks only (finished chunks are not embedded again)',
-      info.embedCalls === total - embeddedAfterKill && embeddedFinal === total && st3.status === 'READY' && st3.active_version_id !== null,
-      `pendingBeforeResume=${total - embeddedAfterKill} embedCallsAfterRestart=${info.embedCalls} embeddedNow=${embeddedFinal}/${total} lectureStatus=${st3.status}`);
+      targetResumed && exactPendingCalls && pendingTexts.length === total - embeddedAfterKill
+        && embeddedFinal === total && st3.status === 'READY' && st3.active_version_id !== null,
+      `pendingBeforeResume=${pendingTexts.length} embedCallsForLecture=${[...actualCalls.values()].reduce((a, b) => a + b, 0)} workerTotalCalls=${info.embedCalls} exactPendingCalls=${exactPendingCalls} targetResumed=${targetResumed} embeddedNow=${embeddedFinal}/${total} lectureStatus=${st3.status}`);
     check('7c. Resume created no duplicate rows', dupRows === 0 && totalRows === total, `duplicateQaPieces=${dupRows} chunkRows ${total}→${totalRows}`);
   }
 
