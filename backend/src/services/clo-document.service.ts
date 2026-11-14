@@ -11,6 +11,15 @@ export type CloPreview = { outcomes:Draft[]; warnings:string[]; lectures:{id:num
 const MAX_CLOS=30;
 const codePattern=/^[A-Z0-9][A-Z0-9._-]{0,31}$/;
 const positive=(x:number)=>Number.isSafeInteger(x)&&x>0;
+/** Never silently omit later CLOs. Explicit rejection is safer than a
+ * plausible-looking but incomplete curriculum mapping preview. */
+export function completeCloDocumentText(units:readonly {text:string}[],maxChars=45000):string{
+ const content=units.map(u=>u.text).join('\n');
+ if(content.trim().length<30)throw new AppError('No readable CLO text found. Check document text layer.',422);
+ if(content.length>maxChars)throw new AppError(
+  'CLO document exceeds the safe extraction context. Split it into smaller CLO documents and import them separately; no content was discarded.',422);
+ return content;
+}
 function validateDrafts(raw:unknown,lectures:Lecture[]):Draft[]{
  if(!Array.isArray(raw)||raw.length===0||raw.length>MAX_CLOS)throw new AppError('Document must contain between 1 and 30 learning outcomes',422);
  const allowed=new Set(lectures.map(l=>l.id));const seen=new Set<string>();
@@ -34,8 +43,7 @@ export async function previewCloDocument(courseId:number,filename:string,buffer:
  const {rows:course}=await query('SELECT id FROM courses WHERE id=$1 AND archived_at IS NULL',[courseId]);
  if(!course.length)throw new AppError('Course not found',404);
  const extraction=await runDocumentExtractor(buffer,ext);
- const text=extraction.units.map(x=>x.text).join('\n').slice(0,45000);
- if(text.trim().length<30)throw new AppError('No readable CLO text found. Check document text layer.',422);
+ const text=completeCloDocumentText(extraction.units);
  const {rows}=await query<any>(`SELECT l.id,l.title,
   COALESCE((SELECT string_agg(left(c.chunk_text,300),' ' ORDER BY c.id)
    FROM (SELECT c.id,c.chunk_text FROM dataset_version_chunks d
