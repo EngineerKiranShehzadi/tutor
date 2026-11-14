@@ -1,0 +1,26 @@
+name: Learning UI accessibility regression checks
+on:
+  push:
+    branches: [feature/adaptive-learning-foundation]
+  pull_request:
+    paths:
+      - 'frontend/src/components/chat/**'
+      - 'frontend/src/components/admin/**'
+      - 'frontend/src/app/(dashboard)/learning-outcomes/**'
+      - 'frontend/src/app/(admin)/admin/faculty-gaps/**'
+      - 'frontend/src/app/globals.css'
+      - 'frontend/tests/learning-accessibility.test.cjs'
+      - '.github/workflows/learning-accessibility.yml'
+permissions:
+  contents: read
+jobs:
+  static-a11y:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check new learning UI accessibility contracts
+        working-directory: frontend
+        run: node --test tests/learning-accessibility.test.cjs
