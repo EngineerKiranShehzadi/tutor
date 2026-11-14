@@ -143,6 +143,8 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Prepare chat trace column expected by current runtime
         run: psql -v ON_ERROR_STOP=1 -c "ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS trace_id text"
+      - name: Align disposable lecture schema with current archival checks
+        run: psql -v ON_ERROR_STOP=1 -c "ALTER TABLE lectures ADD COLUMN IF NOT EXISTS archived_at timestamptz"
       - name: Exercise faculty-approved revision lifecycle in disposable DB
         working-directory: backend
         env:

@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS approved_revision_plans (
   approved_by UUID REFERENCES users(id) ON DELETE SET NULL,
   approved_at TIMESTAMPTZ,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  CHECK ((status='APPROVED' AND approved_at IS NOT NULL AND approved_by IS NOT NULL)
+  CHECK ((status='APPROVED' AND approved_at IS NOT NULL)
      OR (status='DRAFT' AND approved_at IS NULL))
 );
 CREATE INDEX IF NOT EXISTS idx_approved_revision_plans_lecture ON approved_revision_plans(lecture_id);
