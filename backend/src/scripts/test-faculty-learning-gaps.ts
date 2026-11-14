@@ -8,6 +8,6 @@ assert.equal(classify(5,5,2),'REVIEW_RECOMMENDED');
 assert.equal(classify(5,10,3),'REVIEW_RECOMMENDED');
 assert.equal(classify(5,5,1),'MONITOR');
 for(const a of [[1,-1,0],[1,2,3],[1,1.5,0]] as number[][])assert.throws(()=>classify(a[0],a[1],a[2]));
-assert.match(facultyGapAction('REVIEW_RECOMMENDED',true),/Faculty approval required/);
+assert.match(facultyGapAction('REVIEW_RECOMMENDED',true),/Admin approval required/);
 assert.match(facultyGapAction('NOT_MAPPED',false),/map/);
-console.log('Faculty learning gap policy checks passed.');
+console.log('Admin learning gap policy checks passed.');
