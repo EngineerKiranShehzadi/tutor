@@ -34,7 +34,7 @@ export function FacultyRevisionEditor({courseId,outcomeId,code,lectureIds}:{cour
     {lectureIds.map(id=><option key={id} value={id}>Lecture {id}</option>)}
    </select>
   </label>
-  <label className="block text-caption text-[var(--text)] mt-3">Faculty guidance
+  <label className="block text-caption text-[var(--text)] mt-3">Admin guidance
    <textarea className={input+' mt-1'} rows={2} value={guidance} maxLength={600} disabled={pending}
     onChange={e=>{setDirty(true);setGuidance(e.target.value);}} placeholder="Review this lecture and practise the concept again when ready."/>
   </label>
