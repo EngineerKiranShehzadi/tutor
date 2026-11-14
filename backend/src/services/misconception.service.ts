@@ -1,6 +1,14 @@
 import { query } from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 const id=(v:number)=>{if(!Number.isSafeInteger(v)||v<1)throw new AppError('Invalid ID',400);return v;};
+const toIsoTimestamp=(value:unknown):string|null=>{
+ if(value instanceof Date)return Number.isFinite(value.getTime())?value.toISOString():null;
+ if(typeof value==='string'){
+  const time=Date.parse(value);
+  return Number.isFinite(time)?new Date(time).toISOString():null;
+ }
+ return null;
+};
 export async function getMisconceptions(courseId:number){
  id(courseId);
  const {rows}=await query<any>(`SELECT m.id,m.outcome_id,m.code,m.description FROM learning_misconceptions m
@@ -78,7 +86,7 @@ export async function myMisconceptionEvidence(studentId:string,courseId:number){
  HAVING COUNT(a.question_id)>0 ORDER BY occurrences DESC,m.code`,[courseId,studentId]);
  return rows.map(r=>({id:Number(r.id),outcomeId:Number(r.outcome_id),outcomeCode:r.outcome_code,
  code:r.code,description:r.description,occurrences:Number(r.occurrences),attempts:Number(r.attempts),
- repeated:Number(r.occurrences)>=2,lastSeen:r.last_seen?.toISOString?.()??null}));
+ repeated:Number(r.occurrences)>=2,lastSeen:toIsoTimestamp(r.last_seen)}));
 }
 export async function myOutcomeTimeline(studentId:string,courseId:number){
  id(courseId);
@@ -93,5 +101,5 @@ export async function myOutcomeTimeline(studentId:string,courseId:number){
  WHERE o.course_id=$1
  GROUP BY o.id,z.id,z.submitted_at ORDER BY z.submitted_at DESC,z.id DESC LIMIT 200`,[courseId,studentId]);
  return rows.map(r=>({outcomeId:Number(r.outcome_id),code:r.code,quizId:Number(r.quiz_id),
- submittedAt:r.submitted_at?.toISOString?.()??'',attempted:Number(r.attempted),correct:Number(r.correct)}));
+ submittedAt:toIsoTimestamp(r.submitted_at)??'',attempted:Number(r.attempted),correct:Number(r.correct)}));
 }
