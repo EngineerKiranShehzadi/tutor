@@ -323,8 +323,18 @@ async function createQuiz(studentId: string, selection: { courseId: number; requ
            lecture_id int, position int, category text, question text, options jsonb,
            correct_index int, explanation text, source_label text, source_chunk_id int
          ) RETURNING *`, [savedQuiz.id, JSON.stringify(questionRows)]);
-      savedQuestions = inserted.rows.map(q => ({ ...q, title: info.get(q.lecture_id)!.title, selected_index: null }));
-      if (savedQuestions.length !== results.length) throw new Error('Quiz save returned an incomplete question set');
+      // PostgreSQL RETURNING order is not a contractual match for the input
+      // JSON array. Persisted question position is the stable association key.
+      const byPosition = new Map(inserted.rows.map(q => [q.position, q]));
+      if (inserted.rows.length !== results.length || byPosition.size !== results.length ||
+          results.some((_, i) => !byPosition.has(i + 1))) {
+        throw new Error('Quiz save returned an incomplete or ambiguous question set');
+      }
+      savedQuestions = results.map((_, i) => {
+        const q = byPosition.get(i + 1)!;
+        if (q.lecture_id !== results[i].lectureId) throw new Error('Quiz question position/lecture mismatch');
+        return { ...q, title: info.get(q.lecture_id)!.title, selected_index: null };
+      });
       // Only verifier-confirmed question-level alignment within approved lecture/CLO scope counts.
       // This is transactional with question insertion: failures roll back the whole new quiz.
       for (let i=0;i<results.length;i++) {
