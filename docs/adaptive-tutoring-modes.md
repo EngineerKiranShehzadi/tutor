@@ -28,3 +28,14 @@ Available first-release modes: SIMPLE, ACADEMIC, REAL_LIFE_EXAMPLE, EXAM_PREP. S
 Run `npx ts-node --transpile-only src/scripts/test-tutoring-modes.ts` in backend plus full typecheck. Human end-to-end browser checks should include: same question under Simple and Academic produces distinct style but same evidence IDs; same-mode cache reuses eligible verified answers; unsupported questions return the same refusal; prompt-injected materials never override rules; SSE fallback carries the same mode; session change resets choice; Source IDs/citations remain correct.
 
 Socratic mode requires distinct guided-turn state and bounded hint progression before public enablement. Do not enable it based on prompt-only differentiation.
+
+## Bounded Socratic pilot (migration 035)
+
+- Additional backend and frontend Socratic flags must both be enabled; otherwise Socratic remains inaccessible.
+- The student begins a topic in an owned lecture/chat session. First turn asks one source-supported question, next two turns offer progressively clearer hints, fourth turn reveals a grounded explanation.
+- The current implementation is a bounded instructional sequence; it does not grade correctness or infer student mastery.
+- A student's follow-up attempts use the **original topic** for retrieval, while the actual student response and history remain in the generation prompt. The same RAG evidence/verification applies.
+- Progress is scoped to student, lecture and session; state + verified answer are committed in a single SQL transaction under a session row lock.
+- Deleting a chat session cascades its guided state. Clearing a lecture's chat removes the related guided state.
+- Socratic turns do not enter fact-answer memory and do not generate formal practice quizzes automatically.
+- The experimental feature must be tested with actual AI replies for helpfulness, false hints and answer leakage before university-facing enablement.

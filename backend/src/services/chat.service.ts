@@ -1226,11 +1226,28 @@ export const getChatHistory = async (
 };
 
 export const clearChat = async (studentId: string, lectureId: number): Promise<void> => {
-  await query(
-    `UPDATE chat_history SET cleared_by_student = TRUE
-     WHERE student_id = $1 AND lecture_id = $2 AND cleared_by_student = FALSE`,
-    [studentId, lectureId]
-  );
+  // Hide old history and remove the matching Socratic topics as one unit.
+  // Student ownership and lecture scope are enforced in BOTH statements.
+  const { default: pool } = await import('../config/database');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      `UPDATE chat_history SET cleared_by_student = TRUE
+       WHERE student_id = $1 AND lecture_id = $2 AND cleared_by_student = FALSE`,
+      [studentId, lectureId]
+    );
+    if (process.env.ADAPTIVE_TUTORING_SOCRATIC_ENABLED === 'true') {
+      await client.query(
+        'DELETE FROM socratic_chat_state WHERE student_id=$1 AND lecture_id=$2',
+        [studentId, lectureId]
+      );
+    }
+    await client.query('COMMIT');
+  } catch(err) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw err;
+  } finally { client.release(); }
 };
 
 export const deleteChatEntry = async (studentId: string, entryId: number): Promise<boolean> => {
