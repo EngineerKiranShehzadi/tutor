@@ -1,5 +1,6 @@
 import { query } from '../config/database';
 import { AppError } from '../middleware/errorHandler';
+import { evaluateOutcomeStatus } from './learning-outcome-evidence';
 
 // Mastery is NEVER inferred from chat volume or a lecture-level association.
 // Only faculty-tagged, submitted, deterministically graded questions count.
@@ -104,12 +105,6 @@ export async function outcomeQuestions(courseId:number,limit=50) {
     question:r.question,outcomeId:r.outcome_id===null?null:Number(r.outcome_id)
   }));
 }
-const status = (attempted:number,correct:number):string => {
-  if(attempted===0)return 'NOT_ASSESSED';
-  if(attempted<3)return 'INSUFFICIENT_EVIDENCE';
-  const accuracy=correct/attempted;
-  return accuracy>=0.8?'STRONG':accuracy>=0.6?'DEVELOPING':'NEEDS_REVISION';
-};
 export async function studentOutcomeProgress(studentId:string,courseId:number){
   positive(courseId,'course');
   const {rows}=await query<any>(
@@ -126,7 +121,7 @@ export async function studentOutcomeProgress(studentId:string,courseId:number){
   return rows.map(r=>{
     const attempted=Number(r.attempted),correct=Number(r.correct);
     return {outcomeId:Number(r.id),code:r.code,description:r.description,attempted,correct,
-      percent:attempted?Math.round(correct*100/attempted):null,status:status(attempted,correct)};
+      percent:attempted?Math.round(correct*100/attempted):null,status:evaluateOutcomeStatus(attempted,correct)};
   });
 }
 export async function facultyOutcomeSummary(courseId:number){

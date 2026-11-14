@@ -1,0 +1,82 @@
+name: Learning outcome foundation checks
+on:
+  push:
+    branches:
+      - feature/adaptive-learning-foundation
+  pull_request:
+    paths:
+      - 'backend/src/services/learning-outcome*'
+      - 'backend/src/graphql/learning-outcome.schema.ts'
+      - 'backend/src/graphql/resolvers/learning-outcome.resolver.ts'
+      - 'backend/src/db/migrations/033_learning_outcomes.sql'
+      - 'frontend/src/app/(admin)/admin/learning-outcomes/**'
+      - 'frontend/src/app/(dashboard)/learning-outcomes/**'
+      - 'frontend/src/graphql/learning-outcome.queries.ts'
+      - '.github/workflows/learning-outcomes.yml'
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci --ignore-scripts
+      - name: Learning outcome evidence regression tests
+        working-directory: backend
+        run: npx ts-node --transpile-only src/scripts/test-learning-outcome-evidence.ts
+      - name: Backend TypeScript
+        working-directory: backend
+        run: npm run typecheck
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci --ignore-scripts
+      - name: Frontend TypeScript
+        working-directory: frontend
+        run: npm run typecheck
+  migration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: offline-test
+          POSTGRES_DB: outcomes_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d outcomes_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGPASSWORD: offline-test
+      PGDATABASE: outcomes_test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply disposable prerequisites and outcomes schema
+        run: |
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/schema.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrate.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/022_courses.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/023_practice_quizzes.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/033_learning_outcomes.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/033_learning_outcomes.sql
+      - name: Check constraints and idempotence
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          DECLARE count_tables integer;
+          BEGIN
+            SELECT COUNT(*) INTO count_tables FROM information_schema.tables
+              WHERE table_schema='public' AND table_name IN
+              ('course_learning_outcomes','lecture_learning_outcomes','practice_question_outcomes');
+            IF count_tables<>3 THEN RAISE EXCEPTION 'Missing outcome tables'; END IF;
+          END $$;
+          SQL
