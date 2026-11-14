@@ -15,6 +15,7 @@ const slideLine=/^(?:slide|page)\s*(?:no\.?|number|#)?\s*[:.\-]?\s*\d+\s*(?:[:.\
 const qLine=/^(?:q(?:uestion)?\s*(?:#?\d+)?\s*[:.\-])\s*(.+)$/i;
 const aLine=/^(?:a(?:nswer)?\s*(?:#?\d+)?\s*[:.\-])\s*(.*)$/i;
 const naturalQuestion=/^.{5,350}\?$/;
+const inlinePair=/^(?:Q(?:uestion)?\s*(?:#?\d+)?\s*[:.\-])\s*(.+?)\s+(?:A(?:nswer)?\s*(?:#?\d+)?\s*[:.\-])\s*(.+)$/i;
 const MAX_UNIT=1050;
 const OVERLAP=130;
 const splitter=new RecursiveCharacterTextSplitter({
@@ -53,6 +54,12 @@ export function parseLogicalSections(text:string):LogicalSection[] {
   if(isSlideBoundary(line)){
    flushQA();flushProse();
    sectionHeading=line;
+   continue;
+  }
+  const inline=inlinePair.exec(line);
+  if(inline){
+   flushQA();flushProse();
+   result.push({kind:'QA',question:inline[1].trim(),answer:inline[2].trim()});
    continue;
   }
   const matchQ=qLine.exec(line);
