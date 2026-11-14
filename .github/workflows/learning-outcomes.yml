@@ -111,3 +111,23 @@ jobs:
         run: psql -v ON_ERROR_STOP=1 -f backend/tests/learning-misconception.sql
       - name: Verify Socratic ownership, state constraints and cascade
         run: psql -v ON_ERROR_STOP=1 -f backend/tests/socratic-state.sql
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Install backend dependencies for real database test
+        working-directory: backend
+        run: npm ci --ignore-scripts
+      - name: Exercise Socratic transactional service against disposable DB
+        working-directory: backend
+        env:
+          NODE_ENV: test
+          DB_HOST: 127.0.0.1
+          DB_PORT: '5432'
+          DB_NAME: outcomes_test
+          DB_USER: postgres
+          DB_PASSWORD: offline-test
+          JWT_SECRET: offline-test-access-secret-at-least-32-bytes
+          JWT_REFRESH_SECRET: offline-test-refresh-secret-at-least-32-bytes
+        run: npx ts-node --transpile-only src/scripts/test-socratic-db-transaction.ts
