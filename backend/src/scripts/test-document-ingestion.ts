@@ -111,6 +111,21 @@ async function run() {
     documentToRows('broken.docx',{units:[{locator:'Slide 8',text:'Answer: a missing question.'}],warnings:[]}),
     /without its Question/
   );
+  const inlineQA=await documentToRows('inline.docx',{
+    units:[{locator:'Slide 11',text:'Question: Define zero-shot prompting. Answer: Prompting without worked examples.'}],warnings:[]
+  });
+  assert.equal(inlineQA.quality.qaRecords,1);
+  assert.match(inlineQA.rows[0].question!,/Define zero-shot/);
+  assert.match(inlineQA.rows[0].answer!,/without worked examples/);
+
+  const titleScoped=await documentToRows('lecture.docx',{
+    units:[{locator:'Slide 12',text:'Slide 12: Semantic Context\n'+
+      'Definition: a logical group of related material. '.repeat(90)}],warnings:[]
+  });
+  assert.ok(titleScoped.rows.length>1);
+  for(const item of titleScoped.rows)assert.match(item.answer!,/^Slide 12: Semantic Context/);
+  assert.equal(new Set(titleScoped.rows.map(r=>r.start_time)).size,1);
+  
   const repeatedLong = await documentToRows('long-explanation.docx',{
     units:[{locator:'Slide 10',text:[
       'Q: How does a zero-shot prompt work?',
