@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useQuery } from '@apollo/client';
 import { GET_COURSES } from '@/graphql/course.queries';
 import { GET_MY_OUTCOME_PROGRESS } from '@/graphql/learning-outcome.queries';
+import { GET_LECTURES } from '@/graphql/lecture.queries';
 import { PersonalLearningSignals } from '@/components/student/PersonalLearningSignals';
 import { MyFacultyRevisionPlans } from '@/components/student/MyFacultyRevisionPlans';
 import { MyObservedProgress } from '@/components/student/MyObservedProgress';
@@ -20,12 +21,16 @@ export default function StudentLearningOutcomes(){
     if(courseId!==null&&all.some(c=>Number(c.id)===courseId))return;
     setCourseId(Number(all[0].id));
   },[all,courseId]);
+  const lectures=useQuery(GET_LECTURES,{fetchPolicy:'cache-and-network'});
+  const lectureTitles=new Map<string,string>(((lectures.data?.lectures??[]) as {id:string;title:string}[]).map(l=>[l.id,l.title]));
   const progress=useQuery(GET_MY_OUTCOME_PROGRESS,{variables:{courseId:courseId??0},skip:courseId===null,fetchPolicy:'cache-and-network'});
   const rows:Progress[]=progress.data?.myOutcomeProgress??[];
+  const refreshProgress=()=>{void progress.refetch();};
+  useEffect(()=>{const refresh=()=>{if(document.visibilityState==='visible'&&courseId!==null)refreshProgress();};document.addEventListener('visibilitychange',refresh);return ()=>document.removeEventListener('visibilitychange',refresh);},[courseId,progress.refetch]);
   return <main className="learning-form-a11y mx-auto max-w-[1000px] px-6 py-10">
     <nav className="text-caption text-[var(--muted)] mb-4"><Link href="/profile/activity" className="hover:text-[var(--accent)]">My Activity</Link> / Learning Outcomes</nav>
     <h1 className="text-h1 font-semibold text-[var(--text)]">Learning Outcomes</h1>
-    <p className="text-body text-[var(--muted)] mt-2 mb-6">See what your completed quizzes show about each course goal. This uses faculty-approved question mappings, not chat activity.</p>
+    <p className="text-body text-[var(--muted)] mt-2 mb-6">See what your completed quizzes show about each course goal. This uses admin-reviewed question mappings, not chat activity.</p>
     <label htmlFor="student-outcome-course" className="text-label font-semibold text-[var(--text)]">Select course</label>
     <select id="student-outcome-course" value={courseId??''} disabled={courses.loading||!!courses.error||all.length===0} onChange={e=>setCourseId(Number(e.target.value))} className="mt-2 mb-6 w-full rounded-control border border-[var(--border)] bg-[var(--card)] px-4 py-3 text-label text-[var(--text)]">
       {courseId===null&&<option value="">{courses.loading?'Loading courses…':'Select a course'}</option>}
@@ -33,10 +38,11 @@ export default function StudentLearningOutcomes(){
     </select>
     {courses.loading&&!courses.data&&<p role="status" className="text-label text-[var(--muted)]">Loading your courses…</p>}
     {courses.error&&<p role="alert" className="text-label text-[var(--text)]">Could not load courses. <button type="button" onClick={()=>void courses.refetch()} className="font-semibold underline">Retry</button></p>}
-    {!courses.loading&&!courses.error&&all.length===0&&<p role="status" className="text-label text-[var(--muted)]">No courses are available yet. Check back when your teacher has added a course.</p>}
+    {!courses.loading&&!courses.error&&all.length===0&&<p role="status" className="text-label text-[var(--muted)]">No courses are available yet. Check back when your admin has added a course.</p>}
     {courseId!==null&&progress.loading&&!rows.length&&<p role="status" className="text-label text-[var(--muted)]">Loading course outcomes…</p>}
     {courseId!==null&&progress.error&&<div role="alert" className="rounded-card border border-[var(--border)] bg-[var(--card)] p-5 text-label text-[var(--text)]">Could not load learning outcomes. Please try again. <button onClick={()=>void progress.refetch()} className="underline">Retry</button></div>}
-    {courseId!==null&&!progress.loading&&!progress.error&&!rows.length&&<section className="rounded-card border border-[var(--border)] bg-[var(--card)] p-6"><h2 className="text-h3 font-semibold text-[var(--text)]">No learning outcomes yet</h2><p className="mt-2 text-label text-[var(--muted)]">Your teacher can add course learning outcomes. Meanwhile, you can continue practicing.</p><Link href="/practice" className="inline-block mt-4 font-semibold text-[var(--accent)] hover:underline">Open Practice Quizzes</Link></section>}
+    {courseId!==null&&!progress.loading&&!progress.error&&!rows.length&&<section className="rounded-card border border-[var(--border)] bg-[var(--card)] p-6"><h2 className="text-h3 font-semibold text-[var(--text)]">No learning outcomes yet</h2><p className="mt-2 text-label text-[var(--muted)]">Your admin can add course learning outcomes. Meanwhile, you can continue practicing.</p><Link href="/practice" className="inline-block mt-4 font-semibold text-[var(--accent)] hover:underline">Open Practice Quizzes</Link></section>}
+    <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><p className="text-caption text-[var(--muted)]">Only admin-reviewed, individually mapped quiz answers contribute to CLO progress. Your overall quiz score may differ.</p><button type="button" onClick={refreshProgress} disabled={progress.loading||courseId===null} className="text-caption font-semibold text-[var(--accent)] underline disabled:opacity-50">Refresh progress</button></div>
     <section className="space-y-4" aria-label="Course learning outcomes">
       {rows.map(r=><article key={r.outcomeId} className="rounded-card border border-[var(--border)] bg-[var(--card)] p-5">
         <div className="flex flex-wrap justify-between gap-3">
@@ -45,7 +51,7 @@ export default function StudentLearningOutcomes(){
         </div>
         <p className="mt-4 text-caption text-[var(--muted)]">{r.attempted} mapped quiz answers · {r.correct} correct · {r.percent===null?'No score yet':r.percent+'% correct'}</p>
         {r.percent!==null&&<div className="mt-2 h-2 rounded-full bg-[var(--surface)] border border-[var(--border)] overflow-hidden" role="progressbar" aria-label={r.code+' assessed accuracy'} aria-valuemin={0} aria-valuemax={100} aria-valuenow={r.percent}><div className="h-full bg-[var(--accent)]" style={{width:r.percent+'%'}}/></div>}
-        {r.lectureIds.length>0&&<div className="mt-4 flex flex-wrap items-center gap-2"><span className="text-caption text-[var(--muted)]">Mapped lectures:</span>{r.lectureIds.map(id=><Link key={id} href={'/lecture/'+id} className="rounded-control border border-[var(--border)] px-3 py-1.5 text-caption font-semibold text-[var(--accent)] hover:bg-[var(--surface)]">Review lecture {id}</Link>)}</div>}
+        {r.lectureIds.length>0&&<div className="mt-4 flex flex-wrap items-center gap-2"><span className="text-caption text-[var(--muted)]">Mapped lectures:</span>{r.lectureIds.map(id=><Link key={id} href={'/lecture/'+id} className="rounded-control border border-[var(--border)] px-3 py-1.5 text-caption font-semibold text-[var(--accent)] hover:bg-[var(--surface)]">Review {lectureTitles.get(String(id))??'lecture '+id}</Link>)}</div>}
         {r.status==='NEEDS_REVISION'&&<p className="mt-3 text-caption text-[var(--muted)]">Review a mapped lecture before requesting another quiz.</p>}
       </article>)}
     </section>
