@@ -1,4 +1,5 @@
 'use client';
+import { TutoringModeSelector } from '@/components/chat/TutoringModeSelector';
 import { notFound } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@apollo/client';
@@ -447,6 +448,7 @@ export default function LecturePage({ params }: Props) {
                 <div ref={bottomRef} />
               </div>
 
+              <TutoringModeSelector value={chat.tutoringMode} onChange={chat.setTutoringMode} disabled={chat.isAnswerPending}/>
               <ChatInput
                 onSend={chat.sendMessage}
                 value={chat.inputText}

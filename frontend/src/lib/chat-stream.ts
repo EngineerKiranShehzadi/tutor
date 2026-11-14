@@ -1,4 +1,5 @@
 import type { ChunkSource } from '@/types';
+import type { TutoringMode } from './tutoring-mode';
 import { getAccessToken, refreshAccessToken } from './auth-token';
 
 // Client for POST /chat/ask-stream (Server-Sent Events). EventSource can't
@@ -9,6 +10,7 @@ export interface AskStreamParams {
   lectureId: number;
   sessionId: number;
   question:  string;
+  tutoringMode?: TutoringMode;
 }
 
 export interface AskStreamHandlers {

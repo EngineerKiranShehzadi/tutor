@@ -6,6 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { streamAsk, StreamUnavailableError } from '@/lib/chat-stream';
 import { serverMessage, FALLBACK_REPLY } from '@/lib/chat-errors';
 import { ChatSessionGuard } from '@/lib/chat-session-guard';
+import type { TutoringMode } from '@/lib/tutoring-mode';
 import { useVoice } from './useVoice';
 import {
   ASK_LECTURE_AGENT_MUTATION,
@@ -79,6 +80,12 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
   optionsRef.current       = options;
   const [sessionsRefreshKey, setSessionsRefreshKey] = useState(0);
   const [inputText,         setInputText]         = useState('');
+  const [tutoringMode, setTutoringMode] = useState<TutoringMode>('ACADEMIC');
+  const tutoringModeRef = useRef<TutoringMode>('ACADEMIC');
+  const chooseTutoringMode = useCallback((mode:TutoringMode)=>{
+    tutoringModeRef.current=mode;
+    setTutoringMode(mode);
+  },[]);
   const [autoSpeak,         setAutoSpeak]         = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     return localStorage.getItem('askaitutor_autospeak') === 'true';
@@ -186,6 +193,8 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
 
   // ── Select an existing session ────────────────────────────
   const selectSession = useCallback(async (sessionId: number) => {
+    // Mode is scoped to the active session; do not carry it into another session.
+    chooseTutoringMode('ACADEMIC');
     if (sessionId === sessionGuardRef.current.activeSessionId()) return;
     if (streamTimerRef.current) {
       clearInterval(streamTimerRef.current);
@@ -203,10 +212,11 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
     } finally {
       setIsLoadingSession(false);
     }
-  }, [loadSessionMessages]);
+  }, [loadSessionMessages, chooseTutoringMode]);
 
   // ── Create a new session and switch to it ─────────────────
   const createNewSession = useCallback(async () => {
+    chooseTutoringMode('ACADEMIC');
     if (streamTimerRef.current) {
       clearInterval(streamTimerRef.current);
       streamTimerRef.current = null;
@@ -229,7 +239,7 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
     } catch (err) {
       console.error('[CHAT] Create session error:', err);
     }
-  }, [lectureId, createSessionMut]);
+  }, [lectureId, createSessionMut, chooseTutoringMode]);
 
   // Typewriter animation for answers that arrive whole (greetings, summaries,
   // cached answers, guardrail fallbacks, or the GraphQL fallback path).
@@ -290,6 +300,8 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
       // Read once per request and cleared immediately, so a later typed
       // question is never treated as spoken.
       const spokenQuestion = cameFromVoiceRef.current;
+      const requestedMode = process.env.NEXT_PUBLIC_ADAPTIVE_TUTORING_MODES_ENABLED === 'true'
+        ? tutoringModeRef.current : undefined;
       cameFromVoiceRef.current = false;
 
       if (streamTimerRef.current) {
@@ -318,7 +330,7 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
 
       try {
         const result = await streamAsk(
-          { lectureId, sessionId, question: content },
+          { lectureId, sessionId, question: content, tutoringMode: requestedMode },
           {
             onDelta: text => {
               liveText += text;
@@ -375,7 +387,7 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
           console.warn('[CHAT] ⚠️ Stream unavailable, falling back to GraphQL:', (err as Error).message);
           try {
             const { data } = await askLectureAgent({
-              variables: { input: { lectureId, question: content, sessionId } },
+              variables: { input: { lectureId, question: content, sessionId, tutoringMode: requestedMode } },
             });
             if (!sessionGuardRef.current.isCurrent(requestToken)) return;
             const response = data?.askLectureAgent;
@@ -447,6 +459,8 @@ export const useChat = (lectureTitle: string, lectureId: number, agentName: stri
   }, []);
 
   return {
+    tutoringMode,
+    setTutoringMode: chooseTutoringMode,
     messages,
     isTyping,
     isLoadingSession,
