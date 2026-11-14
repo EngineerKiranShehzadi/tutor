@@ -33,7 +33,7 @@ export default function LearningOutcomesAdmin() {
   const [pending,setPending]=useState(false);
   const [showQuestions,setShowQuestions]=useState(false);
   useEffect(()=>{
-    if(allCourses.length===0)return;
+    if(allCourses.length===0){setCourseId(null);return;}
     if(courseId!==null&&allCourses.some(c=>Number(c.id)===courseId))return;
     setCourseId(Number(allCourses[0].id));
   },[allCourses,courseId]);
@@ -65,16 +65,19 @@ export default function LearningOutcomesAdmin() {
     e.preventDefault();
     if(courseId===null)return;
     await execute(()=>create({variables:{courseId,code:code.trim(),description:description.trim()}}),'Learning outcome saved.');
-    // Reset only on a confirmed success; execute handles the errors.
   }
   return <div className="max-w-[1180px]">
     <AdminPageHero title="Learning Outcomes" subtitle="Map course goals to lectures and reviewed quiz questions. Progress is based only on graded evidence."/>
     <div className="mb-5 rounded-card border border-[var(--border)] bg-[var(--card)] p-5">
       <label htmlFor="outcome-course" className="block text-label font-semibold text-[var(--text)] mb-2">Course</label>
-      <select id="outcome-course" className={input} value={courseId??''} onChange={e=>{setCourseId(Number(e.target.value));setNotice('');setError('');}}>
+      <select id="outcome-course" className={input} value={courseId??''} disabled={courses.loading||!!courses.error||allCourses.length===0||pending} onChange={e=>{setCourseId(Number(e.target.value));setNotice('');setError('');}}>
+        {courseId===null&&<option value="">{courses.loading?'Loading courses…':'Select a course'}</option>}
         {allCourses.map(c=><option key={c.id} value={c.id}>{c.title}</option>)}
       </select>
     </div>
+    {courses.loading&&!courses.data&&<p role="status" className="mb-4 text-label text-[var(--muted)]">Loading courses…</p>}
+    {courses.error&&<p role="alert" className="mb-4 text-label text-[var(--text)]">Could not load courses. <button type="button" className="font-semibold underline" onClick={()=>void courses.refetch()}>Retry</button></p>}
+    {!courses.loading&&!courses.error&&!allCourses.length&&<p role="status" className="mb-4 text-label text-[var(--muted)]">No courses available. Add a course before creating learning outcomes.</p>}
     {error&&<p role="alert" className="mb-4 rounded-card border border-[var(--border)] border-l-[3px] border-l-red-600 bg-[var(--card)] p-4 text-label text-[var(--text)]">{error}</p>}
     {notice&&<p role="status" className="mb-4 rounded-card border border-[var(--border)] border-l-[3px] border-l-[var(--accent)] bg-[var(--card)] p-4 text-label text-[var(--text)]">{notice}</p>}
     <div className="rounded-card border border-[var(--border)] bg-[var(--card)] p-6 mb-5">
@@ -91,9 +94,9 @@ export default function LearningOutcomesAdmin() {
       </form>
     </div>
     <section className="space-y-4" aria-label="Learning outcomes">
-      {outcomesQuery.loading&&!outcomes.length&&<p role="status" className="text-label text-[var(--muted)]">Loading outcomes…</p>}
-      {outcomesQuery.error&&<p role="alert" className="text-label text-[var(--text)]">Could not load outcomes; apply migration 033 to your development database first.</p>}
-      {!outcomesQuery.loading&&!outcomes.length&&<p className="text-label text-[var(--muted)]">No learning outcomes defined for this course yet.</p>}
+      {courseId!==null&&outcomesQuery.loading&&!outcomes.length&&<p role="status" className="text-label text-[var(--muted)]">Loading outcomes…</p>}
+      {courseId!==null&&outcomesQuery.error&&<p role="alert" className="text-label text-[var(--text)]">Could not load outcomes; apply migration 033 to your development database first.</p>}
+      {courseId!==null&&!outcomesQuery.loading&&!outcomesQuery.error&&!outcomes.length&&<p className="text-label text-[var(--muted)]">No learning outcomes defined for this course yet.</p>}
       {outcomes.map(o=>{
         const s=summaryById.get(o.id);
         return <article key={o.id} className="rounded-card border border-[var(--border)] bg-[var(--card)] p-5">
