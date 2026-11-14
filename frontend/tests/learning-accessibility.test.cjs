@@ -42,3 +42,12 @@ test('student course loading and failed course fetch do not masquerade as missin
  assert.match(page,/courseId!==null&&!progress\.loading&&!progress\.error&&!rows\.length/);
  assert.match(page,/disabled=\{courses\.loading\|\|!!courses\.error\|\|all\.length===0\}/);
 });
+
+test('faculty revision approval editor is mounted for each mapped course outcome',()=>{
+ const admin=read('app/(admin)/admin/learning-outcomes/page.tsx');
+ assert.match(admin,/import \{ FacultyRevisionEditor \} from '@\/components\/admin\/FacultyRevisionEditor'/);
+ assert.match(admin,/<FacultyRevisionEditor courseId=\{courseId\} outcomeId=\{o\.id\} code=\{o\.code\} lectureIds=\{o\.lectureIds\}\/>/);
+ const editor=read('components/admin/FacultyRevisionEditor.tsx');
+ assert.match(editor,/SAVE_REVISION_PLAN/);
+ assert.match(editor,/WITHDRAW_REVISION_PLAN/);
+});
