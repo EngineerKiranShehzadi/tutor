@@ -98,6 +98,29 @@ async function run() {
     assert.equal(built.splitInto,1,'no second Q/A split is allowed');
   }
 
+  assert.equal(questionAnswer.quality.qaRecords,2);
+  assert.equal(questionAnswer.quality.qaChildRecords,2);
+  assert.equal(longQA.quality.qaRecords,1);
+  assert.equal(longQA.quality.qaChildRecords,longQA.rows.length);
+  assert.equal(longQA.quality.outputRecords,longQA.rows.length);
+  await assert.rejects(
+    documentToRows('broken.docx',{units:[{locator:'Slide 8',text:'Question: What is AI?'}],warnings:[]}),
+    /no matching Answer/
+  );
+  await assert.rejects(
+    documentToRows('broken.docx',{units:[{locator:'Slide 8',text:'Answer: a missing question.'}],warnings:[]}),
+    /without its Question/
+  );
+  const repeatedLong = await documentToRows('long-explanation.docx',{
+    units:[{locator:'Slide 10',text:[
+      'Q: How does a zero-shot prompt work?',
+      'A: A zero-shot prompt gives instructions without examples. '+
+      'It focuses on explicit tasks. '.repeat(80)
+    ].join('\\n\\n')}],warnings:[]
+  });
+  assert.equal(new Set(repeatedLong.rows.map(r=>r.question)).size,repeatedLong.rows.length,
+    'long Q/A children require stable unique question identities on repeat uploads');
+
   const same = await documentToRows('chapter-one.pdf', {
     units: [{ locator: 'Page 3', text: 'Python variables store values. '.repeat(95) }],
     warnings: [],
