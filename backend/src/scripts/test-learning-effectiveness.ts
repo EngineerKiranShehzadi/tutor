@@ -15,4 +15,11 @@ assert.equal(observedChange([q(1,3,2,'invalid'),inputs[1]]),null);
 assert.equal(observedChange([inputs[0],inputs[0]]),null);
 assert.equal(observedChange([q(7,4,4,'2026-11-01T10:00:00Z'),q(9,4,1,'2026-11-12T10:00:00Z')])?.changePoints,-75);
 assert.deepEqual(observedChange([inputs[1],inputs[0]])?.first.quizId,7);
+// An upstream duplicate must never replace the true latest distinct quiz.
+const duplicated=observedChange([
+ inputs[0],inputs[1],q(7,5,2,'2026-11-13T10:00:00Z')
+]);
+assert.equal(duplicated?.first.quizId,7);
+assert.equal(duplicated?.latest.quizId,8);
+assert.equal(duplicated?.changePoints,40);
 console.log('Observed quiz change and insufficient evidence policy tests passed.');
