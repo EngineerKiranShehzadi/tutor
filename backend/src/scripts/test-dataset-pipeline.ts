@@ -95,6 +95,35 @@ const versionRows = async (lectureId: number) =>
   (await query<{ id: number; version_no: number; status: string; last_error: string | null }>(
     'SELECT id, version_no, status, last_error FROM dataset_versions WHERE lecture_id = $1 ORDER BY version_no', [lectureId])).rows;
 
+// Check structural parent-child metadata after real MERGE/REPLACE publishes.
+const activeFamilyIntegrity = async (lectureId: number) => {
+  const { rows } = await query<{ members: number; bad: number }>(`
+    WITH active_members AS (
+      SELECT d.version_id,d.chunk_id,d.chunk_index,
+             f.context_family_id,f.part_index,f.part_count,f.parent_chunk_id
+      FROM lectures l
+      JOIN dataset_version_chunks d ON d.version_id=l.active_version_id
+      LEFT JOIN dataset_chunk_families f
+        ON f.version_id=d.version_id AND f.chunk_id=d.chunk_id
+      WHERE l.id=$1
+    ), counts AS (
+      SELECT context_family_id,COUNT(*)::int AS n
+      FROM active_members GROUP BY context_family_id
+    )
+    SELECT COUNT(*)::int AS members,
+           COUNT(*) FILTER (WHERE a.context_family_id IS NULL
+             OR a.part_index IS DISTINCT FROM a.chunk_index
+             OR a.part_count IS DISTINCT FROM counts.n
+             OR (a.part_index>0 AND a.parent_chunk_id IS NULL)
+             OR (a.parent_chunk_id IS NOT NULL AND
+                (p.chunk_id IS NULL OR p.context_family_id IS DISTINCT FROM a.context_family_id
+                 OR p.part_index<>0)))::int AS bad
+    FROM active_members a
+    LEFT JOIN counts ON counts.context_family_id=a.context_family_id
+    LEFT JOIN active_members p ON p.chunk_id=a.parent_chunk_id`, [lectureId]);
+  return rows[0];
+};
+
 const activeChunks = async (lectureId: number) =>
   (await query<{ id: number; qa_id: string; chunk_index: number; question: string; answer: string; has_vec: boolean }>(
     `SELECT c.id, d.qa_id, d.chunk_index, c.question, c.answer, (c.local_embedding IS NOT NULL) AS has_vec
@@ -406,6 +435,10 @@ const run = async () => {
     if (ok.kind === 'CREATED') await fin(ok.versionId);
     const after = await activeChunks(L);
     const qas = new Set(after.map(c => c.qa_id)).size;
+    const replaceFamily = await activeFamilyIntegrity(L);
+    check('5c. REPLACE publishes valid version-scoped parent-child metadata',
+      replaceFamily.members === after.length && replaceFamily.bad === 0,
+      `members=${replaceFamily.members} bad=${replaceFamily.bad}`);
     check('5b. Confirmed REPLACE drops exactly the missing Q&As; previous version is kept for rollback',
       ok.kind === 'CREATED' && qas === 9 && ok.preview.removed === 4 && (await versionRows(L)).some(v => v.id === vBeforeReplace && v.status === 'SUPERSEDED'),
       `qaCount=${qas} (expected 9) statuses=${(await versionRows(L)).map(v => `v${v.version_no}:${v.status}`).join(' ')}`);
@@ -984,6 +1017,10 @@ const run = async () => {
     const pc2 = await prepareDatasetVersion(Lc2, makeXlsx(edited));
     if (pc2.kind === 'CREATED') await fin(pc2.versionId);
     const afterC = await activeChunks(Lc2);
+    const mergeFamily = await activeFamilyIntegrity(Lc2);
+    check('18d. MERGE preserves parent-child metadata for reused and updated chunks',
+      mergeFamily.members === afterC.length && mergeFamily.bad === 0,
+      `members=${mergeFamily.members} bad=${mergeFamily.bad}`);
     const carriedIds = new Set(beforeC.filter(c => c.question !== edited[0].question).map(c => c.id));
     const carriedStill = afterC.filter(c => carriedIds.has(c.id)).length;
     const carriedTexts = new Set((await query<{ chunk_text: string }>(
