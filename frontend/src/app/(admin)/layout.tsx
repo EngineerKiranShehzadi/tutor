@@ -16,7 +16,7 @@ const NAV = [
   { href: '/admin/questions',     icon: 'fas fa-comments',              label: 'Questions'        },
   { href: '/admin/content-gaps',  icon: 'fas fa-magnifying-glass-chart', label: 'Content Gaps'    },
   { href: '/admin/learning-outcomes',icon: 'fas fa-bullseye', label: 'Learning Outcomes' },
-  { href: '/admin/faculty-gaps', icon: 'fas fa-chart-column', label: 'Faculty Learning Gaps' },
+  { href: '/admin/faculty-gaps', icon: 'fas fa-chart-column', label: 'Learning Gaps' },
   { href: '/admin/rag-evaluation', icon: 'fas fa-flask', label: 'RAG Evaluation' },
   { href: '/admin/users',         icon: 'fas fa-users-gear',            label: 'User Management'  },
   { href: '/admin/agents',        icon: 'fas fa-robot',                 label: 'AI Agents'        },
