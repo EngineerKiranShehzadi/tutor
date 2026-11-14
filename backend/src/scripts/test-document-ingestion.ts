@@ -95,6 +95,21 @@ async function run() {
     assert.match(chunk.pieces[0].chunkText,/Question:.*\nAnswer:/);
   }
 
+  const unpaired = await documentToRows('questions.docx', {
+    units: [{locator:'Slide 5',text:[
+      'Questions to ask the image:',
+      'What is the main theme?',
+      'What colors are visible?',
+      'What is the ratio of people to objects?',
+      'Please answer these questions using the image.'
+    ].join('\n')}],warnings:[]
+  });
+  assert.equal(unpaired.quality.qaRecords,0,'question lists are not falsely marked as answered');
+  const combined=unpaired.rows.map(x=>x.answer).join(' ');
+  assert.match(combined,/main theme/);
+  assert.match(combined,/colors are visible/);
+  assert.match(combined,/ratio of people/);
+
   const longQA = await documentToRows('long-explanation.docx', {
     units:[{locator:'Slide 10',text:[
       'Q: How does a zero-shot prompt work?',
