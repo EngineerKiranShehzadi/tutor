@@ -22,6 +22,15 @@ on:
       - 'backend/src/services/clo-alignment.service.ts'
       - 'backend/src/routes/clo-document.routes.ts'
       - 'backend/src/services/practice-quiz.service.ts'
+      - 'backend/src/services/context-family.service.ts'
+      - 'backend/src/services/vector-search.service.ts'
+      - 'backend/src/services/document-ingestion.service.ts'
+      - 'backend/src/services/document-semantic-chunk.service.ts'
+      - 'backend/scripts/extract_document.py'
+      - 'backend/src/scripts/test-document-ingestion.ts'
+      - 'backend/src/scripts/test-context-family.ts'
+      - 'backend/scripts/test_extract_document.py'
+      - 'frontend/src/components/admin/DatasetManager.tsx'
       - 'frontend/src/components/admin/CloDocumentImport.tsx'
       - 'backend/src/services/rag-benchmark-report.service.ts'
       - 'backend/src/graphql/rag-benchmark.schema.ts'
@@ -91,6 +100,21 @@ jobs:
       - name: Approved CLO question alignment policy
         working-directory: backend
         run: npx ts-node --transpile-only src/scripts/test-clo-alignment.ts
+      - name: Parent-child context family guards
+        working-directory: backend
+        run: npx ts-node --transpile-only src/scripts/test-context-family.ts
+      - name: Document ingestion Q&A regression tests
+        working-directory: backend
+        env:
+          DB_PASSWORD: offline-test
+          JWT_SECRET: offline-test-access-secret-at-least-32-bytes
+          JWT_REFRESH_SECRET: offline-test-refresh-secret-at-least-32-bytes
+        run: npx ts-node --transpile-only src/scripts/test-document-ingestion.ts
+      - name: Python structured Word/PDF/PPT parsing regression
+        working-directory: backend
+        run: |
+          python3 -m pip install --break-system-packages --quiet python-docx python-pptx pypdf beautifulsoup4
+          python3 scripts/test_extract_document.py
       - name: Backend TypeScript
         working-directory: backend
         run: npm run typecheck
