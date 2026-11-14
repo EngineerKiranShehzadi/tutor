@@ -39,7 +39,7 @@ export function MisconceptionReview({courseId,outcomes}:{courseId:number;outcome
  return <section className="learning-form-a11y rounded-card border border-[var(--border)] bg-[var(--card)] px-5 py-6 mt-5">
   <h2 className="text-h3 font-semibold text-[var(--text)]">Misconception review</h2>
   <p className="text-caption text-[var(--muted)] mt-1 mb-5">Define a specific misunderstanding and approve which wrong MCQ option shows it. Wrong answers alone never prove a misconception.</p>
-  {busy&&<p role="status" className="sr-only">Saving faculty review…</p>}
+  {busy&&<p role="status" className="sr-only">Saving admin review…</p>}
   {error&&<div role="alert" className="text-label text-red-700 mb-3">{error}</div>}
   {success&&<div role="status" className="text-label text-[var(--accent)] mb-3">{success}</div>}
   <form onSubmit={e=>void submit(e)} className="grid gap-3 sm:grid-cols-2 mb-6">
@@ -54,7 +54,7 @@ export function MisconceptionReview({courseId,outcomes}:{courseId:number;outcome
    <label className="sm:col-span-2 text-label text-[var(--text)]">Description of the misunderstanding
     <textarea className={field+' mt-1'} required minLength={8} maxLength={600} value={description} onChange={e=>setDescription(e.target.value)} rows={2} placeholder="Confuses precision with recall."/>
    </label>
-   <div className="sm:col-span-2"><button type="submit" disabled={busy||!outcomes.length} className="rounded-control px-5 py-2.5 bg-[var(--accent)] text-white font-semibold text-label hover:bg-[var(--accent-deep)] disabled:opacity-50">Add faculty-approved misconception</button></div>
+   <div className="sm:col-span-2"><button type="submit" disabled={busy||!outcomes.length} className="rounded-control px-5 py-2.5 bg-[var(--accent)] text-white font-semibold text-label hover:bg-[var(--accent-deep)] disabled:opacity-50">Add admin-approved misconception</button></div>
   </form>
   {taxonomy.error&&<p role="alert" className="text-label text-red-700">Could not load misconception definitions.</p>}
   <div className="mb-5 space-y-2">
