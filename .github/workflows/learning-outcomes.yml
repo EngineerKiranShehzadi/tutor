@@ -117,6 +117,13 @@ jobs:
           JWT_SECRET: offline-test-access-secret-at-least-32-bytes
           JWT_REFRESH_SECRET: offline-test-refresh-secret-at-least-32-bytes
         run: npx ts-node --transpile-only src/scripts/test-document-ingestion.ts
+      - name: Practice quiz and CLO verifier regression tests
+        working-directory: backend
+        env:
+          DB_PASSWORD: offline-test
+          JWT_SECRET: offline-test-access-secret-at-least-32-bytes
+          JWT_REFRESH_SECRET: offline-test-refresh-secret-at-least-32-bytes
+        run: npx ts-node --transpile-only src/scripts/test-practice-quiz.ts
       - name: Python structured Word/PDF/PPT parsing regression
         working-directory: backend
         run: |
@@ -162,22 +169,14 @@ jobs:
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/022_courses.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/023_practice_quizzes.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/033_learning_outcomes.sql
-          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/033_learning_outcomes.sql
-          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/034_misconception_evidence.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/034_misconception_evidence.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/035_socratic_chat_state.sql
-          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/035_socratic_chat_state.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/036_approved_revision_plans.sql
-          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/036_approved_revision_plans.sql
-          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/037_rag_benchmark_runs.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/037_rag_benchmark_runs.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/038_clo_document_approvals.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/039_quiz_evidence_provenance.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/040_clo_course_integrity.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/041_explicit_context_families.sql
-          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/041_explicit_context_families.sql
-          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/040_clo_course_integrity.sql
-          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/038_clo_document_approvals.sql
       - name: Check constraints and idempotence
         run: |
           psql -v ON_ERROR_STOP=1 <<'SQL'
