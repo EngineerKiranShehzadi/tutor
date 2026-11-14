@@ -13,7 +13,8 @@ export type LogicalSection =
 
 const slideLine=/^(?:slide|page)\s*(?:no\.?|number|#)?\s*[:.\-]?\s*\d+\s*(?:[:.\-].*)?$/i;
 const qLine=/^(?:q(?:uestion)?\s*(?:no\.?\s*)?(?:#?\d+)?\s*[:.\-])\s*(.+)$/i;
-const aLine=/^(?:(?:a(?:ns(?:wer)?)?|explanation|solution)\s*(?:#?\d+)?\s*[:.\-])\s*(.*)$/i;
+const aLine=/^(?:a(?:ns(?:wer)?)?)\s*(?:#?\d+)?\s*:\s*(.*)$/i;
+const explanationLine=/^(?:explanation|solution)\s*:\s*(.*)$/i;
 const naturalQuestion=/^.{5,350}\?$/;
 const inlinePair=/^(?:Q(?:uestion)?\s*(?:no\.?\s*)?(?:#?\d+)?\s*[:.\-])\s*(.+?)\s+(?:(?:A(?:ns(?:wer)?)?|Explanation|Solution)\s*(?:#?\d+)?\s*[:.\-])\s*(.+)$/i;
 const MAX_UNIT=1050;
@@ -64,14 +65,16 @@ export function parseLogicalSections(text:string):LogicalSection[] {
   }
   const matchQ=qLine.exec(line);
   const matchA=aLine.exec(line);
+  const matchExplanation=explanationLine.exec(line);
   const candidate=matchQ?.[1]?.trim()??(naturalQuestion.test(line)?line:null);
   if(candidate){
    flushQA();flushProse();question=candidate;explicitQuestion=!!matchQ;
    continue;
   }
-  if(matchA){
+  if(matchA || (matchExplanation && question!==null)){
    if(question===null)throw new AppError('An Answer was found without its Question. Keep both in one logical section.',422);
-   if(matchA[1].trim())answer.push(matchA[1].trim());
+   const text=(matchA ?? matchExplanation)![1].trim();
+   if(text)answer.push(text);
    continue;
   }
   if(question!==null)answer.push(line);
