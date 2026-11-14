@@ -145,9 +145,15 @@ def pptx_units(data, warnings, include_empty=False, max_bytes=MAX_BYTES):
                 if value:
                     blocks.append(value)
             if shape.has_table:
-                for row in shape.table.rows:
-                    cells = [clean(cell.text) for cell in row.cells]
-                    if any(cells):
+                table_rows = [[clean(cell.text) for cell in row.cells] for row in shape.table.rows]
+                headers = [v.lower().rstrip(":") for v in table_rows[0]] if table_rows else []
+                qa_table = len(headers) >= 2 and headers[0] in {"question", "questions", "q"} and headers[1] in {"answer", "answers", "a"}
+                for index, cells in enumerate(table_rows):
+                    if not any(cells) or (qa_table and index == 0):
+                        continue
+                    if len(cells) >= 2 and (qa_table or (cells[0].endswith("?") and len(cells[0]) <= 350)):
+                        blocks.append("Question: " + cells[0] + "\nAnswer: " + cells[1])
+                    else:
                         blocks.append(" | ".join(cells))
         text = "\n\n".join(blocks)
         if text:
