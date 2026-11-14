@@ -33,3 +33,12 @@ test('learning selectors and evidence progress have usable accessible labels',()
  assert.match(gaps,/htmlFor="faculty-gap-course"/);
  assert.match(gaps,/role="progressbar"/);
 });
+
+test('student course loading and failed course fetch do not masquerade as missing learning outcomes',()=>{
+ const page=read('app/(dashboard)/learning-outcomes/page.tsx');
+ assert.match(page,/courses\.loading&&!courses\.data/);
+ assert.match(page,/courses\.error&&/);
+ assert.match(page,/No courses are available yet/);
+ assert.match(page,/courseId!==null&&!progress\.loading&&!progress\.error&&!rows\.length/);
+ assert.match(page,/disabled=\{courses\.loading\|\|!!courses\.error\|\|all\.length===0\}/);
+});
