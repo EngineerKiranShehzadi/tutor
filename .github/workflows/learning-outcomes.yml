@@ -22,6 +22,10 @@ on:
       - 'backend/src/graphql/resolvers/rag-benchmark.resolver.ts'
       - 'frontend/src/app/(admin)/admin/rag-evaluation/**'
       - 'backend/src/services/revision-plan*'
+      - 'backend/src/services/learning-effectiveness*'
+      - 'backend/src/graphql/learning-effectiveness.schema.ts'
+      - 'backend/src/graphql/resolvers/learning-effectiveness.resolver.ts'
+      - 'frontend/src/components/student/MyObservedProgress.tsx'
       - 'backend/src/graphql/revision-plan.schema.ts'
       - 'backend/src/graphql/resolvers/revision-plan.resolver.ts'
       - 'frontend/src/components/admin/FacultyRevisionEditor.tsx'
@@ -75,6 +79,9 @@ jobs:
       - name: Faculty-approved revision threshold tests
         working-directory: backend
         run: npx ts-node --transpile-only src/scripts/test-revision-plan-policy.ts
+      - name: Observed learning progress evidence tests
+        working-directory: backend
+        run: npx ts-node --transpile-only src/scripts/test-learning-effectiveness.ts
       - name: Backend TypeScript
         working-directory: backend
         run: npm run typecheck
