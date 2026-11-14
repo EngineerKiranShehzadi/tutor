@@ -152,7 +152,7 @@ export async function describeVisual(page: VisualPage, nearbyText: string): Prom
 export async function enrichDocumentWithVision(
   buffer: Buffer, extension: string, units: VisionUnit[]
 ): Promise<{ units: VisionUnit[]; warnings: string[] }> {
-  if (!['.pdf', '.ppt', '.pptx'].includes(extension)) return { units, warnings: [] };
+  if (!['.pdf', '.ppt', '.pptx', '.docx'].includes(extension)) return { units, warnings: [] };
   if (!ENABLED) return { units, warnings: ['Visual analysis explicitly disabled: figures and diagrams may be omitted.'] };
   const pages = await renderVisualPages(buffer, extension);
   if (!pages.length) return { units, warnings: [] };
