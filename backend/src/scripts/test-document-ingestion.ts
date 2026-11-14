@@ -116,7 +116,7 @@ async function run() {
       'Q: How does a zero-shot prompt work?',
       'A: A zero-shot prompt gives instructions without examples. '+
       'It focuses on explicit tasks. '.repeat(80)
-    ].join('\\n\\n')}],warnings:[]
+    ].join('\n\n')}],warnings:[]
   });
   assert.equal(new Set(repeatedLong.rows.map(r=>r.question)).size,repeatedLong.rows.length,
     'long Q/A children require stable unique question identities on repeat uploads');
