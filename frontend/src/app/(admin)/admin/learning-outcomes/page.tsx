@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@apollo/client';
 import { AdminPageHero } from '@/components/admin/AdminPageHero';
+import { MisconceptionReview } from '@/components/admin/MisconceptionReview';
 import { GET_COURSES } from '@/graphql/course.queries';
 import { GET_LECTURES } from '@/graphql/lecture.queries';
 import {
@@ -143,6 +144,7 @@ export default function LearningOutcomesAdmin() {
         {!questionsQuery.loading&&!questions.length&&<p className="text-label text-[var(--muted)]">No generated quiz questions found for this course.</p>}
       </div>}
     </section>
+    {courseId!==null&&<MisconceptionReview courseId={courseId} outcomes={outcomes}/>}
     <p className="mt-4 text-caption text-[var(--muted)]">Assessment status is descriptive, not a validated psychometric mastery score. LMS/CASE integrations are not enabled.</p>
   </div>;
 }
