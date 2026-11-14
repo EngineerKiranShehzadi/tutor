@@ -1,4 +1,5 @@
 import { query } from '../config/database';
+import { logger } from '../utils/logger';
 import type { QnaChunk } from '../types';
 
 /** Context neighbors must belong to the same lecture and pinned dataset version.
@@ -24,6 +25,7 @@ export async function expandContextCandidates(
  if(!candidates.length||topK<1)return candidates;
  const ids=candidates.slice(0,Math.min(6,topK)).map(c=>c.id);
  const cap=Math.min(8,Math.max(2,Math.floor(topK/2)));
+ try {
  const {rows}=await query<QnaChunk>(`
  WITH anchors AS (
    SELECT d.qa_id,c.id,c.question,c.start_time,d.chunk_index,
@@ -60,4 +62,10 @@ export async function expandContextCandidates(
  SELECT id,lecture_id,topic,question,answer,chunk_text,chunk_index,
   start_time,end_time,keywords FROM neighbors ORDER BY distance,id LIMIT $4`,[lectureId,ids,datasetVersionId??null,cap]);
  return [...candidates,...boundedNewNeighbors(candidates,rows,cap)];
+ } catch(error) {
+  // Context expansion is auxiliary; never make an otherwise-valid RAG search
+  // unavailable if this new optional query fails in a partially migrated DB.
+  logger.warn('[CONTEXT EXPANSION] Supplemental neighbor query failed; using original reranked candidate pool');
+  return candidates;
+ }
 }
