@@ -97,11 +97,11 @@ export const uploadDataset = async (
     });
 
     if (result.kind === 'DRY_RUN') {
-      sendSuccess(res, 'Dry run — nothing was changed.', { lectureId, preview: result.preview, previews: result.previews, extractionWarnings: document?.warnings ?? [], documentQuality: document?.quality ?? null });
+      sendSuccess(res, 'Dry run — nothing was changed.', { lectureId, preview: result.preview, previews: result.previews, extractionWarnings: document?.warnings ?? [], documentQuality: document && 'quality' in document ? document.quality : null });
       return;
     }
     if (result.kind === 'NOOP') {
-      sendSuccess(res, 'The uploaded file matches the active dataset — nothing to update.', { lectureId, preview: result.preview, extractionWarnings: document?.warnings ?? [], documentQuality: document?.quality ?? null });
+      sendSuccess(res, 'The uploaded file matches the active dataset — nothing to update.', { lectureId, preview: result.preview, extractionWarnings: document?.warnings ?? [], documentQuality: document && 'quality' in document ? document.quality : null });
       return;
     }
 
@@ -110,7 +110,7 @@ export const uploadDataset = async (
     // only starts below); the lecture's own status is not reported (it stays
     // READY when a dataset is live, EMBEDDING for a first upload).
     sendSuccess(res, 'Dataset uploaded. Building the new version in the background; the current dataset stays live until it is complete.', {
-      lectureId, versionStatus: result.versionStatus, versionId: result.versionId, versionNo: result.versionNo, preview: result.preview, extractionWarnings: document?.warnings ?? [], documentQuality: document?.quality ?? null,
+      lectureId, versionStatus: result.versionStatus, versionId: result.versionId, versionNo: result.versionNo, preview: result.preview, extractionWarnings: document?.warnings ?? [], documentQuality: document && 'quality' in document ? document.quality : null,
     });
 
     // Embed + validate + publish asynchronously so the HTTP response is already sent
