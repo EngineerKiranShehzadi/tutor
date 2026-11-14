@@ -27,6 +27,9 @@ jobs:
       - name: Real generation module with offline provider / DB tripwires
         working-directory: backend
         run: node --test tests/tutoring-mode-integration.test.cjs
+      - name: Check transport propagation and SSE failure semantics
+        working-directory: backend
+        run: node --test tests/tutoring-mode-stream.test.cjs
       - name: Typecheck backend
         working-directory: backend
         run: npm run typecheck
