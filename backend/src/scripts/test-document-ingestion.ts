@@ -62,6 +62,42 @@ async function run() {
   assert.match(structured.rows[1].question!, /Visual 1/);
   assert.match(structured.rows[0].answer!, /If statements/);
 
+  const questionAnswer = await documentToRows('slide-lecture.docx', {
+    units: [{locator:'Slide 9',text:[
+      'Slide 9: Fundamentals of Prompt Engineering',
+      'Question: What are the five main types of prompts?',
+      'Answer: Descriptive, Instructional, Conversational, Creative and Comparative prompts.',
+      'Question: What is a Creative Prompt?',
+      'Answer: It encourages imaginative output such as a poem.',
+    ].join('\n\n')}], warnings:[],
+  });
+  const qaRows = questionAnswer.rows.filter(r=>!r.question?.startsWith('Source excerpt:'));
+  assert.equal(qaRows.length,2,'each question and its answer must form a complete retrieval row');
+  assert.match(qaRows[0].question!,/five main types/i);
+  assert.match(qaRows[0].answer!,/Comparative/);
+  assert.match(qaRows[1].question!,/Creative Prompt/);
+  assert.match(qaRows[1].answer!,/imaginative output/);
+  for(const q of qaRows){
+    const chunk=await buildChunkPiecesReport(q);
+    assert.equal(chunk.splitInto,1);
+    assert.match(chunk.pieces[0].chunkText,/Question:.*\nAnswer:/);
+  }
+
+  const longQA = await documentToRows('long-explanation.docx', {
+    units:[{locator:'Slide 10',text:[
+      'Q: How does a zero-shot prompt work?',
+      'A: A zero-shot prompt gives instructions without worked examples. ' +
+        'It focuses on explicit task wording and the expected output. '.repeat(55)
+    ].join('\n\n')}],warnings:[],
+  });
+  assert.ok(longQA.rows.length>1,'long Q&A must split safely');
+  for(const child of longQA.rows){
+    assert.match(child.question!,/zero-shot prompt/i,'every child retains the parent question');
+    assert.ok(child.answer?.trim(),'every child preserves nonempty answer evidence');
+    const built=await buildChunkPiecesReport(child);
+    assert.equal(built.splitInto,1,'no second Q/A split is allowed');
+  }
+
   const same = await documentToRows('chapter-one.pdf', {
     units: [{ locator: 'Page 3', text: 'Python variables store values. '.repeat(95) }],
     warnings: [],
