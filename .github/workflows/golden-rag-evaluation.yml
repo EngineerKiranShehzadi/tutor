@@ -1,0 +1,19 @@
+name: Golden RAG benchmark checks
+on:
+  push:
+    branches: [feature/adaptive-learning-foundation]
+  pull_request:
+    paths: ['backend/evaluation/**', '.github/workflows/golden-rag-evaluation.yml']
+permissions:
+  contents: read
+jobs:
+  benchmark-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Run deterministic benchmark tests (no DB or LLM)
+        working-directory: backend
+        run: node --test evaluation/golden-evaluator.test.cjs
