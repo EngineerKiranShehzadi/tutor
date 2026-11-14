@@ -8,6 +8,7 @@ import { logSafeText } from '../observability/sanitize';
 import { typeDefs } from './typeDefs';
 import { practiceQuizRetakeTypeDefs } from './practice-quiz.schema';
 import { learningOutcomeTypeDefs } from './learning-outcome.schema';
+import { facultyLearningGapTypeDefs } from './faculty-learning-gap.schema';
 import { misconceptionTypeDefs } from './misconception.schema';
 import { resolvers as authResolvers } from './resolvers/auth.resolver';
 import { chatResolvers } from './resolvers/chat.resolver';
@@ -18,6 +19,7 @@ import { userResolvers } from './resolvers/user.resolver';
 import { notificationResolvers } from './resolvers/notification.resolver';
 import { practiceQuizResolvers } from './resolvers/practice-quiz.resolver';
 import { learningOutcomeResolvers } from './resolvers/learning-outcome.resolver';
+import { facultyLearningGapResolvers } from './resolvers/faculty-learning-gap.resolver';
 import { misconceptionResolvers } from './resolvers/misconception.resolver';
 import { GraphQLContext } from './context';
 import { verifyAccessToken } from '../utils/jwt';
@@ -38,6 +40,7 @@ const mergedResolvers = {
     ...notificationResolvers.Query,
     ...practiceQuizResolvers.Query,
     ...learningOutcomeResolvers.Query,
+    ...facultyLearningGapResolvers.Query,
     ...misconceptionResolvers.Query,
   },
   Mutation: {
@@ -72,7 +75,7 @@ export function formatGraphQLError(err: GraphQLFormattedError, originalError: un
 
 export const setupApollo = async (app: Express): Promise<void> => {
   const server = new ApolloServer<GraphQLContext>({
-    typeDefs: [typeDefs, practiceQuizRetakeTypeDefs, learningOutcomeTypeDefs, misconceptionTypeDefs],
+    typeDefs: [typeDefs, practiceQuizRetakeTypeDefs, learningOutcomeTypeDefs, misconceptionTypeDefs, facultyLearningGapTypeDefs],
     resolvers: mergedResolvers,
     // Apollo Server 4 leaves introspection on regardless of NODE_ENV; the
     // schema is not published in production (GRAPHQL_INTROSPECTION overrides).

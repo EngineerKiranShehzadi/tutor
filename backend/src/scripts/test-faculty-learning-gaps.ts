@@ -1,0 +1,13 @@
+import {strict as assert} from 'assert';
+import {classifyFacultyGap as classify,facultyGapAction,MIN_ASSESSED_STUDENTS} from '../services/faculty-learning-gap-policy';
+assert.equal(MIN_ASSESSED_STUDENTS,5);
+assert.equal(classify(0,0,0),'NOT_MAPPED');
+assert.equal(classify(1,1,1),'INSUFFICIENT_EVIDENCE');
+assert.equal(classify(5,4,3),'INSUFFICIENT_EVIDENCE');
+assert.equal(classify(5,5,2),'REVIEW_RECOMMENDED');
+assert.equal(classify(5,10,3),'REVIEW_RECOMMENDED');
+assert.equal(classify(5,5,1),'MONITOR');
+for(const a of [[1,-1,0],[1,2,3],[1,1.5,0]] as number[][])assert.throws(()=>classify(a[0],a[1],a[2]));
+assert.match(facultyGapAction('REVIEW_RECOMMENDED',true),/Faculty approval required/);
+assert.match(facultyGapAction('NOT_MAPPED',false),/map/);
+console.log('Faculty learning gap policy checks passed.');
