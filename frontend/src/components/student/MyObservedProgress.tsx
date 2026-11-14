@@ -21,7 +21,7 @@ export function MyObservedProgress({courseId}:{courseId:number}){
     <h3 className="text-label font-semibold text-[var(--text)]">{row.code} · {row.description}</h3>
     {row.changePoints===null?
      <p className="mt-2 text-caption text-[var(--muted)]">More comparable quiz evidence needed. At least two completed quizzes, each with three or more mapped answers, are required. Current qualifying quizzes: {row.eligibleQuizCount}.</p>
-     <>
+     : <>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
        <div><p className="text-caption text-[var(--muted)]">First qualifying quiz</p><p className="text-h3 font-semibold text-[var(--text)]">{format(row.firstPercent)}</p></div>
        <div><p className="text-caption text-[var(--muted)]">Latest qualifying quiz</p><p className="text-h3 font-semibold text-[var(--text)]">{format(row.latestPercent)}</p></div>
