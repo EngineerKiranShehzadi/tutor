@@ -35,6 +35,10 @@ jobs:
         run: npx ts-node --transpile-only src/scripts/test-learning-outcome-evidence.ts
       - name: Tutor mode and prompt-cache isolation tests
         working-directory: backend
+        env:
+          DB_PASSWORD: offline-test
+          JWT_SECRET: offline-test-access-secret-at-least-32-bytes
+          JWT_REFRESH_SECRET: offline-test-refresh-secret-at-least-32-bytes
         run: npx ts-node --transpile-only src/scripts/test-tutoring-modes.ts
       - name: Backend TypeScript
         working-directory: backend
