@@ -190,6 +190,7 @@ export async function enrichDocumentWithVision(
   const sourceText = units.map(u => u.text).join('\n');
   const explanations = new Map<string, string>();
   const warnings: string[] = [];
+  const pageStatuses = new Map<string, string>();
   for (let i = 0; i < pages.length; i += IMAGE_CONCURRENCY) {
     const batch = pages.slice(i, i + IMAGE_CONCURRENCY);
     const response = await Promise.all(batch.map(p => {
@@ -205,6 +206,7 @@ export async function enrichDocumentWithVision(
       return describeVisual(p, nearbyText);
     }));
     for (let j = 0; j < batch.length; j++) {
+      const locator = batch[j].locator;
       if (response[j].structureWarnings?.length) {
         warnings.push('Visual structure metadata for ' + batch[j].locator + ' had invalid optional fields (' + response[j].structureWarnings!.join(', ') + '); these fields were omitted. Review this page before applying.');
       }
@@ -220,7 +222,8 @@ export async function enrichDocumentWithVision(
           /\b(?:charts?|graphs?|diagrams?|figures?|screenshots?|photographs?|photos?|illustrations?|flyers?|posters?|infographics?|maps?|plots?|arrows?|flowcharts?|images?)\b/i.test(description) ||
           Boolean(response[j].connections?.length);
         if (explicitlyTextOnly && !describesActualVisual) {
-          warnings.push('Visual interpretation for ' + batch[j].locator + ' explicitly described a text-only page; its duplicate description was omitted.');
+          pageStatuses.set(locator, 'omitted: explicitly text-only');
+          warnings.push('Visual interpretation for ' + locator + ' explicitly described a text-only page; its duplicate description was omitted.');
           continue;
         }
         if (!identifiesVisualContent) {
@@ -228,11 +231,29 @@ export async function enrichDocumentWithVision(
         }
         const visual = formatVisualDescription(response[j]);
         if (visualTimeConflict(visual, sourceText)) {
-          warnings.push('Visual interpretation for ' + batch[j].locator + ' conflicts with selectable source time ranges; visual description omitted. Original source text is preserved.');
-        } else explanations.set(batch[j].locator, visual);
+          pageStatuses.set(locator, 'omitted: conflicts with selectable source text');
+          warnings.push('Visual interpretation for ' + locator + ' conflicts with selectable source time ranges; visual description omitted. Original source text is preserved.');
+        } else {
+          explanations.set(locator, visual);
+          pageStatuses.set(locator, identifiesVisualContent ? 'included' : 'kept for review');
+        }
+      } else {
+        pageStatuses.set(locator, 'vision marked no relevant visual');
       }
     }
   }
+  const groupedStatuses = new Map<string, string[]>();
+  for (const page of pages) {
+    const status = pageStatuses.get(page.locator) ?? 'not processed';
+    const list = groupedStatuses.get(status) ?? [];
+    list.push(page.locator);
+    groupedStatuses.set(status, list);
+  }
+  const scope = extension === '.docx' ? 'all rendered DOCX pages' : 'rendered visual candidate pages';
+  const statusText = [...groupedStatuses.entries()]
+    .map(([status, locators]) => status + ': ' + locators.join(', '))
+    .join(' | ');
+  warnings.push('Per-page visual scan: checked ' + pages.length + '/' + pages.length + ' ' + scope + '. ' + statusText);
   if (explanations.size) warnings.push('Vision-grounded descriptions from ' + explanations.size + ' diagram-bearing page(s)/slide(s) were joined with their source text. Inspect important diagrams for model interpretation errors.');
   return { units: mergeVisionIntoUnits(units, explanations), warnings };
 }
