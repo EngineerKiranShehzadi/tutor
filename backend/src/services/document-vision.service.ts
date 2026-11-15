@@ -214,9 +214,9 @@ export async function enrichDocumentWithVision(
   buffer: Buffer, extension: string, units: VisionUnit[]
 ): Promise<{ units: VisionUnit[]; warnings: string[]; visualReviewPages: VisualReviewPage[] }> {
   if (!['.pdf', '.ppt', '.pptx', '.docx'].includes(extension)) return { units, warnings: [], visualReviewPages: [] };
-  if (!ENABLED) return { units, warnings: ['Visual analysis explicitly disabled: figures and diagrams may be omitted.'], visualReviewPages: [] };
+  if (!ENABLED) return { units, warnings: ['Visual review required: visual analysis is explicitly disabled, so inspect the original document pages before applying.'], visualReviewPages: [] };
   const pages = await renderVisualPages(buffer, extension);
-  if (!pages.length) return { units, warnings: [] };
+  if (!pages.length) return { units, warnings: [], visualReviewPages: [] };
   const all = new Map(units.map(u => [u.locator, u.text]));
   const sourceText = units.map(u => u.text).join('\n');
   const explanations = new Map<string, string>();
