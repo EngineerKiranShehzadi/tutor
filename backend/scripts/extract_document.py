@@ -31,11 +31,11 @@ def clean(text):
     # and otherwise pollute embeddings and student answers.
     text = re.sub("\ue200navlist\ue202[^\\n]*", "", text, flags=re.I)
     # Remove citation token artifacts and all observed private-use navigation/citation markers.
-    text = re.sub(r"citeturn\\d+search\\d+", "", text, flags=re.I)
-    text = text.translate(str.maketrans("", "", "\\ue200\\ue201\\ue202\\ue203\\ue204\\ue206"))
+    text = re.sub(r"citeturn\d+search\d+", "", text, flags=re.I)
+    text = text.translate(str.maketrans("", "", "\ue200\ue201\ue202\ue203\ue204\ue206"))
     # Remove copied ChatGPT response chrome but keep reference titles.
-    text = re.sub(r"(?im)^\\s*Is this conversation helpful so far\\?\\s*$", "", text)
-    text = re.sub(r"(?m)^\\s*4o\\s*$", "", text)
+    text = re.sub(r"(?im)^\s*Is this conversation helpful so far\?\s*$", "", text)
+    text = re.sub(r"(?m)^\s*4o\s*$", "", text)
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n[ \t]*\n(?:[ \t]*\n)+", "\n\n", text)
     return text.strip()
