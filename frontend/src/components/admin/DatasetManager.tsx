@@ -57,6 +57,21 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [mode, setMode] = useState<DatasetMode>('MERGE');
   const [file, setFile] = useState<File | null>(null);
+  const [previewRows, setPreviewRows] = useState<Array<{index:number;question:string;answer:string;topic?:string;source?:string}>>([]);
+  const downloadChunkReport = () => {
+    if (!file || !preview || previewRows.length === 0) return;
+    const report = { schemaVersion: 1, lectureId, filename: file.name, mode, generatedAt: new Date().toISOString(),
+      documentQuality, extractionWarnings, rows: previewRows };
+    const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `lecture-${lectureId}-chunk-preview.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
   const [extractionWarnings, setExtractionWarnings] = useState<string[]>([]);
   const [documentQuality,setDocumentQuality]=useState<{sourceUnits:number;sourceCharacters:number;qaRecords:number;proseRecords:number;qaChildRecords:number;outputRecords:number;warnings:number}|null>(null);
   const [phase, setPhase] = useState<Phase>('idle');
@@ -132,13 +147,14 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
   }, [inFlight, versions]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const analyse = useCallback(async (f: File, m: DatasetMode) => {
-    setPhase('analysing'); setError(''); setNotice(''); setPreview(null); setPreviews({}); setConfirmed(false); setExtractionWarnings([]);setDocumentQuality(null);
+    setPhase('analysing'); setError(''); setNotice(''); setPreview(null); setPreviews({}); setConfirmed(false); setExtractionWarnings([]);setDocumentQuality(null);setPreviewRows([]);
     try {
       const res = await datasetApi.upload(lectureId, f, { mode: m, dryRun: true });
-      const data = res.data.data as { preview: DatasetPreview; previews?: Record<DatasetMode, DatasetPreview>; extractionWarnings?: string[];documentQuality?: {sourceUnits:number;sourceCharacters:number;qaRecords:number;proseRecords:number;qaChildRecords:number;outputRecords:number;warnings:number}|null };
+      const data = res.data.data as { preview: DatasetPreview; previews?: Record<DatasetMode, DatasetPreview>; extractionWarnings?: string[];documentQuality?: {sourceUnits:number;sourceCharacters:number;qaRecords:number;proseRecords:number;qaChildRecords:number;outputRecords:number;warnings:number}|null; previewRows?: Array<{index:number;question:string;answer:string;topic?:string;source?:string}> };
       setPreviews(data.previews ?? { [m]: data.preview });
       setExtractionWarnings(data.extractionWarnings ?? []);
       setDocumentQuality(data.documentQuality??null);
+      setPreviewRows(data.previewRows ?? []);
       setPreview(data.preview);
       setPhase('preview');
     } catch (err) {
@@ -382,6 +398,12 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
             <h3 className="font-semibold">Document chunking quality report</h3>
             <p className="mt-2">{documentQuality.sourceUnits} source sections · {documentQuality.qaRecords} Q&amp;A groups · {documentQuality.qaChildRecords} Q&amp;A pieces · {documentQuality.proseRecords} prose/visual pieces</p>
             <p className="mt-1">{documentQuality.outputRecords} searchable records prepared from {documentQuality.sourceCharacters.toLocaleString()} extracted characters.</p>
+            {preview && phase === 'preview' && previewRows.length > 0 && (
+              <button type="button" onClick={downloadChunkReport} data-testid="download-chunk-report"
+                className="mt-3 rounded-control border border-[var(--border)] px-3 py-2 font-semibold hover:bg-[var(--surface)]">
+                Download Chunk Report (JSON)
+              </button>
+            )}
             <p className="mt-2 text-[var(--muted)]">Each detected Q&amp;A keeps its question in the same retrieval record. Complex tables, implicit relationships and scanned pages still require review. This report measures processing, not answer accuracy.</p>
           </section>
         )}
