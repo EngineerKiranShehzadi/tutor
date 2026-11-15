@@ -139,6 +139,17 @@ const start = async () => {
           }, 60_000).unref();
         })
         .catch(err => logger.error('[DATASET] resume on startup failed', err));
+
+      // Warm summaries missing for the active dataset version. The stored
+      // provider/model/prompt fingerprint also makes this the rebuild path
+      // after summary generation settings change.
+      import('./services/lecture-summary.service')
+        .then(m => {
+          void m.warmMissingLectureSummaries()
+            .then(count => logger.info(`[LECTURE-SUMMARY] Startup warm-up checked ${count} active lecture version(s)`))
+            .catch(err => logger.error('[LECTURE-SUMMARY] Startup warm-up failed', err));
+        })
+        .catch(err => logger.error('[LECTURE-SUMMARY] Worker unavailable', err));
     });
 
     installShutdownHandlers(server);

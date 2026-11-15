@@ -1,4 +1,4 @@
-import { query } from '../config/database';
+import pool, { query } from '../config/database';
 import { QnaChunk } from '../types';
 import { env } from '../config/env';
 import { resolveLlmProvider } from '../llm/llm-provider.resolver';
@@ -219,7 +219,7 @@ const combineSummariesWithGemini = async (
 };
 
 /**
- * The stored summary for a lecture's current material, if there is one.
+ * The stored summary for a specific immutable dataset version, if current.
  *
  * `versionId` is normally null: the lecture's active version is resolved in
  * SQL, exactly as getAllLectureChunks resolves it, so the summary that comes
@@ -230,11 +230,15 @@ export const getStoredLectureSummary = async (
 ): Promise<string | null> => {
   try {
     const { rows } = await query<{ summary: string }>(
-      `SELECT s.summary
-         FROM lecture_summaries s
-        WHERE s.lecture_id = $1
-          AND s.version_id = COALESCE($2::int, (SELECT active_version_id FROM lectures WHERE id = $1))`,
-      [lectureId, versionId ?? null]
+      `SELECT v.lecture_summary AS summary
+         FROM dataset_versions v
+        WHERE v.lecture_id = $1
+          AND v.id = COALESCE($2::int, (SELECT active_version_id FROM lectures WHERE id = $1))
+          AND v.lecture_summary IS NOT NULL
+          AND v.summary_provider = $3 AND v.summary_model = $4
+          AND v.summary_prompt_version = $5`,
+      [lectureId, versionId ?? null, env.LLM.LECTURE_SUMMARY.PROVIDER,
+        env.LLM.LECTURE_SUMMARY.MODEL, env.LLM.LECTURE_SUMMARY.PROMPT_VERSION]
     );
     return rows[0]?.summary ?? null;
   } catch (err) {
@@ -254,12 +258,17 @@ export const storeLectureSummary = async (
 ): Promise<void> => {
   try {
     await query(
-      `INSERT INTO lecture_summaries (lecture_id, version_id, summary, batch_count)
-       SELECT $1, COALESCE($2::int, (SELECT active_version_id FROM lectures WHERE id = $1)), $3, $4
-        WHERE COALESCE($2::int, (SELECT active_version_id FROM lectures WHERE id = $1)) IS NOT NULL
-       ON CONFLICT (lecture_id, version_id)
-         DO UPDATE SET summary = EXCLUDED.summary, batch_count = EXCLUDED.batch_count, created_at = NOW()`,
-      [lectureId, versionId ?? null, summary, batchCount]
+      `UPDATE dataset_versions
+          SET lecture_summary = $3,
+              summary_batch_count = $4,
+              summary_provider = $5,
+              summary_model = $6,
+              summary_prompt_version = $7,
+              summary_generated_at = NOW()
+        WHERE lecture_id = $1
+          AND id = COALESCE($2::int, (SELECT active_version_id FROM lectures WHERE id = $1))`,
+      [lectureId, versionId ?? null, summary, batchCount, env.LLM.LECTURE_SUMMARY.PROVIDER,
+        env.LLM.LECTURE_SUMMARY.MODEL, env.LLM.LECTURE_SUMMARY.PROMPT_VERSION]
     );
   } catch (err) {
     // Same again: failing to keep it costs the next student time, nothing more.
@@ -307,4 +316,116 @@ export const generateLectureSummary = async (
   if (partials.length === 1) return { summary: partials[0], ...counts };
 
   return { summary: await combineSummaries(partials, lectureTitle, timeoutMs), ...counts };
+};
+
+type SummaryGenerator = typeof generateLectureSummary;
+export interface PreparedLectureSummary {
+  result: LectureSummaryResult;
+  stored: boolean;
+}
+
+// If a student asks while upload-time generation is still running, both paths
+// share this promise rather than paying for a second generation on this API
+// process. The durable database row is scoped to lecture + dataset version +
+// provider + model + prompt version.
+const summaryInFlight = new Map<string, Promise<PreparedLectureSummary>>();
+
+export const prepareLectureSummary = async (
+  lectureId: number,
+  versionId: number | null | undefined,
+  lectureTitle: string,
+  chunks: QnaChunk[],
+  generator: SummaryGenerator = generateLectureSummary
+): Promise<PreparedLectureSummary> => {
+  const cached = await getStoredLectureSummary(lectureId, versionId);
+  if (cached) {
+    return { result: { summary: cached, batchesAttempted: 0, batchesSucceeded: 0 }, stored: true };
+  }
+
+  const resolvedVersionId = versionId ?? await getActiveLectureVersionId(lectureId);
+  if (resolvedVersionId === null) {
+    return { result: await generator(chunks, lectureTitle), stored: false };
+  }
+
+  const key = `${lectureId}:${resolvedVersionId}:${env.LLM.LECTURE_SUMMARY.PROVIDER}:${env.LLM.LECTURE_SUMMARY.MODEL}:${env.LLM.LECTURE_SUMMARY.PROMPT_VERSION}`;
+  let job = summaryInFlight.get(key);
+  if (!job) {
+    job = (async () => {
+      // The PostgreSQL session lock coordinates warm-up across API replicas.
+      // Once acquired, recheck the row because another process may have just
+      // completed the same version/configuration.
+      const client = await pool.connect();
+      try {
+        await client.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [`lecture-summary:${lectureId}:${resolvedVersionId}`]);
+        const afterLock = await getStoredLectureSummary(lectureId, resolvedVersionId);
+        if (afterLock) {
+          return { result: { summary: afterLock, batchesAttempted: 0, batchesSucceeded: 0 }, stored: true };
+        }
+        const result = await generator(chunks, lectureTitle);
+        if (result.summary && result.batchesSucceeded === result.batchesAttempted) {
+          await storeLectureSummary(lectureId, resolvedVersionId, result.summary, result.batchesAttempted);
+        }
+        return { result, stored: false };
+      } finally {
+        await client.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [`lecture-summary:${lectureId}:${resolvedVersionId}`]).catch(() => undefined);
+        client.release();
+      }
+    })().finally(() => summaryInFlight.delete(key));
+    summaryInFlight.set(key, job);
+  }
+  return job;
+};
+
+const getActiveLectureVersionId = async (lectureId: number): Promise<number | null> => {
+  const { rows } = await query<{ active_version_id: number | null }>(
+    'SELECT active_version_id FROM lectures WHERE id = $1', [lectureId]
+  );
+  return rows[0]?.active_version_id ?? null;
+};
+
+/** Build and persist the active version's summary outside the upload request. */
+export const warmLectureSummary = async (lectureId: number, versionId: number): Promise<void> => {
+  const cached = await getStoredLectureSummary(lectureId, versionId);
+  if (cached) return;
+  const [{ rows: lectureRows }, chunks] = await Promise.all([
+    query<{ title: string }>('SELECT title FROM lectures WHERE id = $1', [lectureId]),
+    getAllLectureChunks(lectureId, versionId),
+  ]);
+  if (!lectureRows[0] || chunks.length === 0) {
+    logger.warn(`[LECTURE-SUMMARY] No title/content for lecture #${lectureId} version #${versionId}`);
+    return;
+  }
+  const { result } = await prepareLectureSummary(lectureId, versionId, lectureRows[0].title, chunks);
+  const complete = !!result.summary && result.batchesSucceeded === result.batchesAttempted;
+  logger.info(`[LECTURE-SUMMARY] Background warm-up ${complete ? 'completed' : 'incomplete'} for lecture #${lectureId} version #${versionId}`);
+};
+
+/**
+ * Recover after restarts and rebuild summaries when provider, model, or prompt
+ * version changes. Only ACTIVE dataset versions are considered.
+ */
+export const warmMissingLectureSummaries = async (): Promise<number> => {
+  const { rows } = await query<{ lecture_id: number; version_id: number }>(
+    `SELECT l.id AS lecture_id, v.id AS version_id
+       FROM lectures l
+       JOIN dataset_versions v ON v.id = l.active_version_id AND v.lecture_id = l.id
+      WHERE l.active_version_id IS NOT NULL
+        AND (v.lecture_summary IS NULL
+          OR v.summary_provider IS DISTINCT FROM $1
+          OR v.summary_model IS DISTINCT FROM $2
+          OR v.summary_prompt_version IS DISTINCT FROM $3)
+      ORDER BY l.id`,
+    [env.LLM.LECTURE_SUMMARY.PROVIDER, env.LLM.LECTURE_SUMMARY.MODEL,
+      env.LLM.LECTURE_SUMMARY.PROMPT_VERSION]
+  );
+  let warmed = 0;
+  for (const item of rows) {
+    try {
+      await warmLectureSummary(item.lecture_id, item.version_id);
+      warmed += 1;
+    } catch (err) {
+      logger.warn(`[LECTURE-SUMMARY] Background warm-up failed for lecture #${item.lecture_id} version #${item.version_id}: ${(err as Error).message}`);
+    }
+  }
+  return warmed;
 };

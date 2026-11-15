@@ -635,14 +635,17 @@ export const askLectureAgent = async (
         v => ({ storedSummaryHit: !!v })
       );
 
-      const result = stored
-        ? { summary: stored, batchesAttempted: 0, batchesSucceeded: 0 }
+      const prepared = stored
+        ? { result: { summary: stored, batchesAttempted: 0, batchesSucceeded: 0 }, stored: true }
         : await trace.span(
             'summarize-lecture-content', // covers batching + per-batch summarize + combine as one stage
-            () => generateLectureSummaryFn(allChunks, lecture.title),
-            r => ({ summaryProduced: !!r.summary, summaryBatchesAttempted: r.batchesAttempted, summaryBatchesSucceeded: r.batchesSucceeded }),
-            r => (!r.summary ? 'ERROR' : r.batchesSucceeded < r.batchesAttempted ? 'FALLBACK' : 'SUCCESS')
+            () => summaryModule.prepareLectureSummary(
+              lectureId, pinnedVersionId, lecture.title, allChunks, generateLectureSummaryFn
+            ),
+            p => ({ summaryProduced: !!p.result.summary, summaryBatchesAttempted: p.result.batchesAttempted, summaryBatchesSucceeded: p.result.batchesSucceeded }),
+            p => (!p.result.summary ? 'ERROR' : p.result.batchesSucceeded < p.result.batchesAttempted ? 'FALLBACK' : 'SUCCESS')
           );
+      const result = prepared.result;
       trace.setAttributes({ summaryBatchesAttempted: result.batchesAttempted, summaryBatchesSucceeded: result.batchesSucceeded });
 
       // Content exists but nothing could be summarised — an LLM outage, not
@@ -668,10 +671,6 @@ export const askLectureAgent = async (
       // Kept only when it is whole and freshly generated. A partial summary
       // carries a note saying part of the lecture is missing, and storing that
       // would make one outage permanent.
-      if (!stored && !partial) {
-        await summaryModule.storeLectureSummary(lectureId, pinnedVersionId ?? null, result.summary, result.batchesAttempted);
-      }
-
       const chunkIds = allChunks.map(c => c.id);
       currentStage = 'save-chat-entry';
       await trace.span('save-chat-entry', async () => {

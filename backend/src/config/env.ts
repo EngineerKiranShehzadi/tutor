@@ -382,6 +382,9 @@ export const env = {
     LECTURE_SUMMARY: {
       PROVIDER: optional('LECTURE_SUMMARY_LLM_PROVIDER', DEFAULT_LLM_PROVIDER),
       MODEL:    optional('LECTURE_SUMMARY_LLM_MODEL', DEFAULT_LLM_MODEL),
+      // Bump this whenever the lecture-summary prompt/format changes. Saved
+      // summaries with an older fingerprint are rebuilt in the background.
+      PROMPT_VERSION: optional('LECTURE_SUMMARY_PROMPT_VERSION', 'lecture-summary-v1'),
       THINKING: thinking('LECTURE_SUMMARY_THINKING', 'low'),
     },
     GUARDRAIL: {

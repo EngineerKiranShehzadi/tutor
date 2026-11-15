@@ -734,6 +734,12 @@ const activateVersion = async (versionId: number): Promise<{ activated: boolean;
       v[0].lecture_id
     );
 
+    // The tutor-ready notification follows publication; summary generation is
+    // also started only after COMMIT and never delays version activation.
+    void import('./lecture-summary.service')
+      .then(m => m.warmLectureSummary(v[0].lecture_id, versionId))
+      .catch(err => logger.warn(`[LECTURE-SUMMARY] Could not start warm-up for lecture #${v[0].lecture_id} version #${versionId}: ${(err as Error).message}`));
+
     return { activated: true, status: 'ACTIVE' };
   } catch (err) {
     await client.query('ROLLBACK').catch(() => undefined);
