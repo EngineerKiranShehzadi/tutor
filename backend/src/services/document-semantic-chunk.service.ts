@@ -56,10 +56,14 @@ export function parseLogicalSections(text:string):LogicalSection[] {
      i=j;continue;
     }
    }
-   // A labeled Question: with no answer is malformed; bare Question headings\n   // may be source prompts and are preserved as prose.\n   if(explicit?.[1] && (j>=lines.length || !isA(lines[j])))\n    throw new AppError('An explicit Question has no matching Answer. Keep each question and its answer in the same slide or section.',422);\n   prose.push(...lines.slice(i,j));i=j;continue;
+   // Explicit Question: without Answer is invalid; unlabeled prompts stay prose.
+   if(explicit?.[1] && (j>=lines.length || !isA(lines[j])))
+    throw new AppError('An explicit Question has no matching Answer. Keep each question and its answer in the same slide or section.',422);
+   prose.push(...lines.slice(i,j));i=j;continue;
   }
   const matchA=aLine.exec(line);
-  if(matchA||standaloneA.test(line)){prose.push(line);i++;continue;}
+  if(matchA)throw new AppError('An Answer was found without its Question. Keep both in one logical section.',422);
+  if(standaloneA.test(line)){prose.push(line);i++;continue;}
   prose.push(line);i++;
  }
  flushProse();return result;
