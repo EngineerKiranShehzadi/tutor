@@ -5,7 +5,8 @@ import { AppError } from '../middleware/errorHandler';
 import type { RawRow } from './chunk.service';
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 import { env } from '../config/env';
-import { enrichDocumentWithVision, VisualReviewPage } from './document-vision.service';
+import { enrichDocumentWithVision } from './document-vision.service';
+import type { VisualReviewPage } from './document-vision.service';
 import { splitPreservingQuestions } from './document-semantic-chunk.service';
 
 // The document boundary is isolated from the existing Excel parser and version
