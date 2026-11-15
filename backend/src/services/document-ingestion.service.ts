@@ -5,7 +5,7 @@ import { AppError } from '../middleware/errorHandler';
 import type { RawRow } from './chunk.service';
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 import { env } from '../config/env';
-import { enrichDocumentWithVision } from './document-vision.service';
+import { enrichDocumentWithVision, VisualReviewPage } from './document-vision.service';
 import { splitPreservingQuestions } from './document-semantic-chunk.service';
 
 // The document boundary is isolated from the existing Excel parser and version
@@ -19,9 +19,9 @@ export const supportedDatasetExtension = (filename: string): string | null => {
 };
 
 type Unit = { locator: string; text: string };
-export type ExtractionResult = { units: Unit[]; warnings: string[] };
+export type ExtractionResult = { units: Unit[]; warnings: string[]; visualReviewPages?: VisualReviewPage[] };
 export type DocumentQualityReport = {sourceUnits:number;sourceCharacters:number;qaRecords:number;proseRecords:number;qaChildRecords:number;outputRecords:number;warnings:number};
-export type DocumentRowsResult = { rows: RawRow[]; warnings: string[]; units: number; quality: DocumentQualityReport };
+export type DocumentRowsResult = { rows: RawRow[]; warnings: string[]; units: number; quality: DocumentQualityReport; visualReviewPages: VisualReviewPage[] };
 
 const PYTHON_BIN = process.env.DOCUMENT_EXTRACT_PYTHON || 'python3';
 const EXTRACT_SCRIPT = path.resolve(__dirname, '../../scripts/extract_document.py');
@@ -107,7 +107,7 @@ export async function runDocumentExtractor(buffer: Buffer, extension: string): P
   if (found) extractionCache.delete(digest);
   const textResult = await extractTextOnly(buffer, extension);
   const enriched = await enrichDocumentWithVision(buffer, extension, textResult.units);
-  const result = { units: enriched.units, warnings: [...textResult.warnings, ...enriched.warnings] };
+  const result = { units: enriched.units, warnings: [...textResult.warnings, ...enriched.warnings], visualReviewPages: enriched.visualReviewPages };
   for (const [key, entry] of extractionCache) if (entry.expiresAt <= Date.now()) extractionCache.delete(key);
   if (extractionCache.size >= EXTRACTION_CACHE_LIMIT) extractionCache.delete(extractionCache.keys().next().value!);
   extractionCache.set(digest, { expiresAt: Date.now() + EXTRACTION_CACHE_MS, result });
@@ -182,7 +182,7 @@ export const documentToRows = async (
   }
   if (!rows.length) throw new AppError('Document does not contain usable text', 422);
   const warnings=extracted.warnings.slice(0,100);
-  return { rows, warnings, units: extracted.units.length,
+  return { rows, warnings, units: extracted.units.length, visualReviewPages: extracted.visualReviewPages ?? [],
     quality:{sourceUnits:extracted.units.length,sourceCharacters:extracted.units.reduce((n,u)=>n+u.text.length,0),
       qaRecords,proseRecords,qaChildRecords,outputRecords:rows.length,warnings:warnings.length} };
 };

@@ -102,7 +102,7 @@ export const uploadDataset = async (
     });
 
     if (result.kind === 'DRY_RUN') {
-      sendSuccess(res, 'Dry run — nothing was changed.', { lectureId, preview: result.preview, previews: result.previews, extractionWarnings: document?.warnings ?? [], documentQuality: document && 'quality' in document ? document.quality : null, previewRows: document && dryRun ? document.rows.map((row, index) => ({ index: index + 1, question: row.question, answer: row.answer, topic: row.topic, source: row.start_time })) : undefined });
+      sendSuccess(res, 'Dry run — nothing was changed.', { lectureId, preview: result.preview, previews: result.previews, extractionWarnings: document?.warnings ?? [], documentQuality: document && 'quality' in document ? document.quality : null, visualReviewPages: document && 'visualReviewPages' in document ? document.visualReviewPages : [], previewRows: document && dryRun ? document.rows.map((row, index) => ({ index: index + 1, question: row.question, answer: row.answer, topic: row.topic, source: row.start_time })) : undefined });
       return;
     }
     if (result.kind === 'NOOP') {

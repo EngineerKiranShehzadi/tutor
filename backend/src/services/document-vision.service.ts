@@ -62,6 +62,7 @@ async function renderVisualPages(buffer: Buffer, extension: string): Promise<Vis
 }
 
 type VisualEvidence = { kind: string; region: [number, number, number, number]; visibleEvidence: string };
+export type VisualReviewPage = { locator: string; confidence: number; reason: string; image: string; candidateDescription: string; candidateIncluded: boolean };
 type VisionDescription = { relevant: boolean; description: string; confidence: number; visualEvidence: VisualEvidence[]; topic?: string; nodes?: string[]; connections?: string[]; uncertainty?: string[]; structureWarnings?: string[] };
 
 const VISUAL_KINDS = new Set(['chart', 'graph', 'diagram', 'flowchart', 'table', 'screenshot', 'photo', 'illustration', 'infographic', 'map', 'plot', 'other']);
@@ -211,15 +212,21 @@ export function visualTimeConflict(description: string, sourceText: string): boo
 
 export async function enrichDocumentWithVision(
   buffer: Buffer, extension: string, units: VisionUnit[]
-): Promise<{ units: VisionUnit[]; warnings: string[] }> {
-  if (!['.pdf', '.ppt', '.pptx', '.docx'].includes(extension)) return { units, warnings: [] };
-  if (!ENABLED) return { units, warnings: ['Visual analysis explicitly disabled: figures and diagrams may be omitted.'] };
+): Promise<{ units: VisionUnit[]; warnings: string[]; visualReviewPages: VisualReviewPage[] }> {
+  if (!['.pdf', '.ppt', '.pptx', '.docx'].includes(extension)) return { units, warnings: [], visualReviewPages: [] };
+  if (!ENABLED) return { units, warnings: ['Visual analysis explicitly disabled: figures and diagrams may be omitted.'], visualReviewPages: [] };
   const pages = await renderVisualPages(buffer, extension);
   if (!pages.length) return { units, warnings: [] };
   const all = new Map(units.map(u => [u.locator, u.text]));
   const sourceText = units.map(u => u.text).join('\n');
   const explanations = new Map<string, string>();
   const warnings: string[] = [];
+  const visualReviewPages: VisualReviewPage[] = [];
+  const addReviewPage = (page: VisualPage, confidence: number, reason: string, candidateDescription: string, candidateIncluded: boolean) => {
+    if (visualReviewPages.some(item => item.locator === page.locator)) return;
+    visualReviewPages.push({ locator: page.locator, confidence, reason, image: page.image,
+      candidateDescription: candidateDescription.slice(0, 7000), candidateIncluded });
+  };
   const pageStatuses = new Map<string, string>();
   for (let i = 0; i < pages.length; i += IMAGE_CONCURRENCY) {
     const batch = pages.slice(i, i + IMAGE_CONCURRENCY);
@@ -244,17 +251,20 @@ export async function enrichDocumentWithVision(
       const confident = response[j].confidence >= 0.8;
       if (response[j].relevant && (!hasEvidence || !confident)) {
         const reason = !hasEvidence ? 'no verifiable non-text visual region' : 'low visual confidence (' + response[j].confidence.toFixed(2) + ')';
-        warnings.push('Visual review required: ' + locator + ' — ' + reason + '. Check this page in the uploaded document before applying.');
+        warnings.push('Visual review required: ' + locator + ' — ' + reason + '. Check the page image and candidate below before applying.');
+        addReviewPage(batch[j], response[j].confidence, reason, response[j].description, hasEvidence);
         if (!hasEvidence) {
           pageStatuses.set(locator, 'review required: no visual evidence');
           continue;
         }
       }
       if (!response[j].relevant && hasEvidence) {
-        warnings.push('Visual review required: ' + locator + ' — the visual evidence and relevance decision disagree. Check this page before applying.');
+        warnings.push('Visual review required: ' + locator + ' — the visual evidence and relevance decision disagree. Check the page image and candidate below before applying.');
+        addReviewPage(batch[j], response[j].confidence, 'visual evidence and relevance decision disagree', response[j].description, true);
       }
       if (!response[j].relevant && !hasEvidence && response[j].confidence < 0.8) {
-        warnings.push('Visual review required: ' + locator + ' — the model was uncertain whether the page contains an informative visual. Check this page before applying.');
+        warnings.push('Visual review required: ' + locator + ' — the model was uncertain whether the page contains an informative visual. Check the page image before applying.');
+        addReviewPage(batch[j], response[j].confidence, 'uncertain whether an informative visual is present', response[j].description, false);
         pageStatuses.set(locator, 'review required: uncertain visual decision');
         continue;
       }
@@ -307,5 +317,5 @@ export async function enrichDocumentWithVision(
     .join(' | ');
   warnings.push('Per-page visual scan: checked ' + pages.length + '/' + pages.length + ' ' + scope + '. ' + statusText);
   if (explanations.size) warnings.push('Vision-grounded descriptions from ' + explanations.size + ' diagram-bearing page(s)/slide(s) were joined with their source text. Inspect important diagrams for model interpretation errors.');
-  return { units: mergeVisionIntoUnits(units, explanations), warnings };
+  return { units: mergeVisionIntoUnits(units, explanations), warnings, visualReviewPages };
 }
