@@ -1,6 +1,7 @@
 // Offline integration checks for document section mapping.
 // No database, model or network requests are made.
 import assert from 'assert/strict';
+import { visualTimeConflict } from '../services/document-vision.service';
 import {
   documentToRows,
   supportedDatasetExtension,
@@ -9,6 +10,12 @@ import {
 import { buildChunkPieces, buildChunkPiecesReport, MAX_PIECES_PER_ROW } from '../services/chunk.service';
 
 async function run() {
+  const sourceSchedule = 'Spend Time in Park (with Kids) | 16:30 to 17:315';
+  assert.equal(visualTimeConflict('Spend Time in Park (with Kids) (16:30 to 17:15)', sourceSchedule), true,
+    'visual model must not silently rewrite a source time');
+  assert.equal(visualTimeConflict('Spend Time in Park (with Kids) (16:30 to 17:315)', sourceSchedule), false);
+  assert.equal(visualTimeConflict('This page contains a balanced-life schedule.', sourceSchedule), false);
+
   // Shared indexing must never silently discard the tail of an oversized answer.
   const shortRow = { question: 'What is a variable?', answer: 'A named storage location.' };
   assert.deepEqual(await buildChunkPieces(shortRow), (await buildChunkPiecesReport(shortRow)).pieces);
