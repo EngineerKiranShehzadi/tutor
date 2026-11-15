@@ -11,6 +11,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 MAX_VISUAL_PAGES = 30
@@ -44,7 +46,7 @@ def office_to_pdf(data, extension):
     zip_guard(data, 64 * 1024 * 1024)
     soffice = shutil.which("soffice") or shutil.which("libreoffice")
     if not soffice:
-        raise ValueError("Visual analysis of PowerPoint requires LibreOffice on the backend")
+        raise ValueError("Visual analysis of DOCX/PPTX requires LibreOffice on the backend")
     with tempfile.TemporaryDirectory(prefix="askaitutor-vis-") as root:
         source = Path(root) / ("upload.docx" if extension == ".docx" else "upload.pptx")
         source.write_bytes(data)
@@ -62,6 +64,54 @@ def office_to_pdf(data, extension):
         if p.returncode or not result.exists() or result.stat().st_size > 64 * 1024 * 1024:
             raise ValueError("Unable to render PowerPoint slides for visual grounding")
         return result.read_bytes()
+
+
+def docx_has_visual_content(data):
+    """Detect embedded DOCX drawings before invoking LibreOffice.
+
+    Text-only Word documents can go directly from python-docx extraction to
+    chunking. Render the document only when its package contains a visual
+    object (image, chart, drawing, diagram, or embedded OLE object).
+    """
+    from extract_document import zip_guard
+    zip_guard(data, 64 * 1024 * 1024)
+
+    visual_parts = (
+        "word/media/", "word/charts/", "word/diagrams/", "word/embeddings/",
+    )
+    visual_relationships = {
+        "image", "chart", "diagramData", "diagramLayout", "diagramColors",
+        "diagramQuickStyle", "oleObject",
+    }
+    w_ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    a_ns = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    visual_tags = {
+        f"{{{w_ns}}}drawing", f"{{{w_ns}}}pict", f"{{{w_ns}}}object",
+        f"{{{a_ns}}}graphic",
+    }
+
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        names = archive.namelist()
+        if any(name.startswith(visual_parts) for name in names):
+            return True
+
+        # Relationship parts catch charts/diagrams and linked visual objects,
+        # including cases whose payload is stored outside word/media.
+        for name in names:
+            if name.startswith("word/") and name.endswith(".rels"):
+                root = ET.fromstring(archive.read(name))
+                if any(rel.attrib.get("Type", "").rsplit("/", 1)[-1] in visual_relationships
+                       for rel in root):
+                    return True
+
+        # w:drawing and w:pict cover inline/floating pictures and Word shapes;
+        # w:object covers legacy embedded objects. Inspect document parts only.
+        for name in names:
+            if name.startswith("word/") and name.endswith(".xml"):
+                root = ET.fromstring(archive.read(name))
+                if any(element.tag in visual_tags for element in root.iter()):
+                    return True
+    return False
 
 
 def slide_visual_indexes(data, extension):
@@ -105,21 +155,25 @@ def identify_pdf_pages(doc):
 
 
 def visual_pages(data, extension, limit):
-    import fitz
     if extension in (".pptx", ".ppt"):
         targets = slide_visual_indexes(data, extension)
-        pdf = office_to_pdf(data, extension) if targets else b""
+        if not targets:
+            return []
+        pdf = office_to_pdf(data, extension)
         name = "Slide"
     elif extension == ".pdf":
         pdf = data
         name = "Page"
     elif extension == ".docx":
+        if not docx_has_visual_content(data):
+            return []
         pdf = office_to_pdf(data, extension)
         name = "Page"
     else:
         return []
     if not pdf:
         return []
+    import fitz
     doc = fitz.open(stream=pdf, filetype="pdf")
     if doc.is_encrypted:
         raise ValueError("Password-protected PDFs are not supported")

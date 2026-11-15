@@ -35,6 +35,8 @@ npm run dev
 
 \`DOCUMENT_EXTRACT_PYTHON\` is optional when \`python3\` and all dependencies are already on the backend host's PATH. It does **not** configure an external API.
 
+Visual analysis of a DOCX first checks the Office package for images, drawings, charts, diagrams, and embedded objects. If none are present, the pipeline skips PDF conversion and continues with text extraction/chunking; LibreOffice is not needed for that file. A DOCX with visual objects and PPTX visual slides require LibreOffice for local PDF rendering, plus PyMuPDF and Pillow. If \`DOCUMENT_VISION_ENABLED=false\`, visual analysis is skipped and only selectable text is ingested.
+
 For real questions, ensure your environment has the **matching active embedding model and tuned reranker thresholds**; review \`docs/OPENAI_SWITCH.md\`. **Do not run migrations or tests against production Neon without owner approval.**
 
 ## How to try it
