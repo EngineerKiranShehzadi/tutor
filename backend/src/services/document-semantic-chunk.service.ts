@@ -56,8 +56,7 @@ export function parseLogicalSections(text:string):LogicalSection[] {
      i=j;continue;
     }
    }
-   // Explicit question with no answer is ordinary source text, not fabricated QA.
-   prose.push(...lines.slice(i,j));i=j;continue;
+   // A labeled Question: with no answer is malformed; bare Question headings\n   // may be source prompts and are preserved as prose.\n   if(explicit?.[1] && (j>=lines.length || !isA(lines[j])))\n    throw new AppError('An explicit Question has no matching Answer. Keep each question and its answer in the same slide or section.',422);\n   prose.push(...lines.slice(i,j));i=j;continue;
   }
   const matchA=aLine.exec(line);
   if(matchA||standaloneA.test(line)){prose.push(line);i++;continue;}
