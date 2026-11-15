@@ -173,7 +173,10 @@ def visual_pages(data, extension, limit):
         return []
     if not pdf:
         return []
-    import fitz
+    # Import PyMuPDF by its current package name. The legacy `fitz` shim can
+    # print a deprecation warning before the JSON payload, breaking the Node
+    # caller which expects stdout to contain only JSON.
+    import pymupdf as fitz
     doc = fitz.open(stream=pdf, filetype="pdf")
     if doc.is_encrypted:
         raise ValueError("Password-protected PDFs are not supported")
