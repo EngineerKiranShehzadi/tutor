@@ -74,7 +74,7 @@ export const MAX_PIECES_PER_ROW = 20;
 // also changes chunk_text (hence content_hash) of any row it affects, which is
 // what triggers re-embedding of exactly those rows.
 export const CHUNKING_CONFIG_VERSION =
-  `rcts:${SPLIT_THRESHOLD_CHARS}/${SPLIT_CHUNK_SIZE}/${SPLIT_CHUNK_OVERLAP}/${MAX_PIECES_PER_ROW}:document-context-v3`;
+  `rcts:${SPLIT_THRESHOLD_CHARS}/${SPLIT_CHUNK_SIZE}/${SPLIT_CHUNK_OVERLAP}/${MAX_PIECES_PER_ROW}:document-context-v4`;
 
 const splitter = new RecursiveCharacterTextSplitter({
   chunkSize: SPLIT_CHUNK_SIZE,
@@ -88,7 +88,10 @@ const splitter = new RecursiveCharacterTextSplitter({
 function answerContext(answer: string, question: string): string | null {
   if (!/^Source excerpt:/i.test(question)) return null;
   const match = answer.match(/(?:^|\n)\s*(?:information need|learning need)\s*:\s*([^\n]{1,240})/i);
-  return match?.[1]?.trim() || null;
+  if (match?.[1]?.trim()) return match[1].trim();
+  const lines = answer.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const useful = lines.filter(line => !/^(?:answer|date|profile text|sources?)\s*:?\s*$/i.test(line));
+  return useful.slice(0, 2).join(' — ').slice(0, 240) || null;
 }
 
 // Splits a row into one or more embeddable pieces. Short rows (the common
