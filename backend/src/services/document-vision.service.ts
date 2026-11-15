@@ -211,7 +211,9 @@ export async function enrichDocumentWithVision(
       if (response[j].relevant) {
         const description = response[j].description.toLowerCase();
         const explicitlyTextOnly =
-          /\b(?:no diagrams, charts, or other visual elements|no diagrams or visual flowcharts, only structured textual information|no diagrams or visual data representations, only formatted text|text-based with no diagrams or figures)\b/i.test(description);
+          /\b(?:no diagrams, charts, or other visual elements|text-based with no diagrams or figures)\b/i.test(description) ||
+          (/\bno (?:informative )?(?:diagrams?|charts?|figures?|visual flowcharts?|visual data representations?|visual elements?|visuals?)\b/i.test(description) &&
+           /\b(?:only (?:structured )?(?:text|textual information)|purely textual|text[- ]based|only formatted text)\b/i.test(description));
         const describesActualVisual =
           /\b(?:bar chart|chart (?:shows|depicts|illustrates)|graph (?:shows|depicts|titled)|diagram (?:shows|depicts|illustrates)|flowchart (?:shows|depicts)|screenshot|photograph|illustration|image is a composite|visualization of)\b/i.test(description);
         if (explicitlyTextOnly && !describesActualVisual) {
