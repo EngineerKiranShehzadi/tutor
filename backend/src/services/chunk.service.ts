@@ -87,7 +87,7 @@ const splitter = new RecursiveCharacterTextSplitter({
 // later pieces remain retrievable without the first piece's context.
 function answerContext(answer: string, question: string): string | null {
   if (!/^Source excerpt:/i.test(question)) return null;
-  const match = answer.match(/(?:^|\\n)\\s*(?:information need|learning need)\\s*:\\s*([^\\n]{1,240})/i);
+  const match = answer.match(/(?:^|\n)\s*(?:information need|learning need)\s*:\s*([^\n]{1,240})/i);
   return match?.[1]?.trim() || null;
 }
 
