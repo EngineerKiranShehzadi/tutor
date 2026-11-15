@@ -68,7 +68,7 @@ async function run() {
     warnings: [],
   });
   assert.equal(structured.rows.length, 2);
-  assert.equal(structured.rows[0].topic, undefined);
+  assert.equal(structured.rows[0].topic, 'Slide 4');
   assert.equal(structured.rows[1].topic, 'Conditional statements');
   assert.match(structured.rows[1].answer!, /No to Fail/);
   assert.match(structured.rows[1].question!, /Visual 1/);
