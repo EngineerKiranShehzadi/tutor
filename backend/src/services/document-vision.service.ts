@@ -157,6 +157,28 @@ export async function describeVisual(page: VisualPage, nearbyText: string): Prom
   }
 }
 
+// Conservative guard: if vision rewrites a time range whose starting time occurs
+// in selectable source text, omit that visual description instead of publishing
+// conflicting facts. This does not alter the original document text.
+export function visualTimeConflict(description: string, sourceText: string): boolean {
+  const pattern = /\b([01]?\d|2[0-3]):[0-5]\d\s*(?:to|[-–])\s*([01]?\d|2[0-3]):\d{2,3}\b/gi;
+  const sourceRanges = new Map<string, Set<string>>();
+  for (const match of sourceText.matchAll(pattern)) {
+    const start = match[0].match(/^\d{1,2}:\d{2}/)?.[0];
+    if (!start) continue;
+    const endings = sourceRanges.get(start) ?? new Set<string>();
+    endings.add(match[0].replace(/^.*?(?:to|[-–])\s*/i, '').trim());
+    sourceRanges.set(start, endings);
+  }
+  for (const match of description.matchAll(pattern)) {
+    const start = match[0].match(/^\d{1,2}:\d{2}/)?.[0];
+    if (!start || !sourceRanges.has(start)) continue;
+    const ending = match[0].replace(/^.*?(?:to|[-–])\s*/i, '').trim();
+    if (!sourceRanges.get(start)!.has(ending)) return true;
+  }
+  return false;
+}
+
 export async function enrichDocumentWithVision(
   buffer: Buffer, extension: string, units: VisionUnit[]
 ): Promise<{ units: VisionUnit[]; warnings: string[] }> {
@@ -165,6 +187,7 @@ export async function enrichDocumentWithVision(
   const pages = await renderVisualPages(buffer, extension);
   if (!pages.length) return { units, warnings: [] };
   const all = new Map(units.map(u => [u.locator, u.text]));
+  const sourceText = units.map(u => u.text).join('\n');
   const explanations = new Map<string, string>();
   const warnings: string[] = [];
   for (let i = 0; i < pages.length; i += IMAGE_CONCURRENCY) {
@@ -186,7 +209,10 @@ export async function enrichDocumentWithVision(
         warnings.push('Visual structure metadata for ' + batch[j].locator + ' had invalid optional fields (' + response[j].structureWarnings!.join(', ') + '); these fields were omitted. Review this page before applying.');
       }
       if (response[j].relevant) {
-        explanations.set(batch[j].locator, formatVisualDescription(response[j]));
+        const visual = formatVisualDescription(response[j]);
+        if (visualTimeConflict(visual, sourceText)) {
+          warnings.push('Visual interpretation for ' + batch[j].locator + ' conflicts with selectable source time ranges; visual description omitted. Original source text is preserved.');
+        } else explanations.set(batch[j].locator, visual);
       }
     }
   }
