@@ -32,8 +32,8 @@ export function parseLogicalSections(text:string):LogicalSection[] {
  const flushProse=()=>{if(prose.length)result.push({kind:'TEXT',text:[heading,...prose].filter(Boolean).join('\n')});prose=[];};
  const standaloneQ=/^(?:questions?|quesiton|q)$/i;
  const standaloneA=/^(?:answers?|a)$/i;
- const isQ=(line:string)=>standaloneQ.test(line)||/^(?:question|quesiton)\s*:/i.test(line);
- const isA=(line:string)=>standaloneA.test(line)||/^answer\s*:/i.test(line);
+ const isQ=(line:string)=>standaloneQ.test(line)||/^(?:q|question|questions|quesiton)\s*:/i.test(line);
+ const isA=(line:string)=>standaloneA.test(line)||/^(?:a|answer|answers)\s*:/i.test(line);
  for(let i=0;i<lines.length;){
   const line=lines[i];
   if(isSlideBoundary(line)){flushProse();heading=line;i++;continue;}
@@ -47,7 +47,7 @@ export function parseLogicalSections(text:string):LogicalSection[] {
     qParts.push(lines[j]);j++;
    }
    if(j<lines.length&&isA(lines[j])&&qParts.length){
-    const aParts:string[]=[];const initial=lines[j].replace(/^answers?\s*:?\s*/i,'').trim();
+    const aParts:string[]=[];const initial=lines[j].replace(/^(?:a|answers?)\s*:?\s*/i,'').trim();
     if(initial)aParts.push(initial);j++;
     while(j<lines.length&&!isQ(lines[j])&&!isSlideBoundary(lines[j])){aParts.push(lines[j]);j++;}
     if(aParts.length){
