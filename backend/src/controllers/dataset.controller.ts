@@ -10,9 +10,21 @@ import { uploadRawDataset, isS3Configured } from '../services/s3-storage.service
 import { sendSuccess, sendError } from '../utils/response';
 import { logger } from '../utils/logger';
 import { supportedDatasetExtension, runDocumentExtractor, documentToRows } from '../services/document-ingestion.service';
+import type { DocumentRowsResult } from '../services/document-ingestion.service';
 import { isSubtitleExtension, subtitleToRows } from '../services/subtitle-ingestion.service';
 
 const parseLectureId = (req: AuthenticatedRequest): number => parseInt(req.params['lectureId'] ?? '', 10);
+
+const isDocumentRowsResult = (value: unknown): value is DocumentRowsResult => {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Record<string, unknown>;
+  const quality = candidate.quality;
+  if (!quality || typeof quality !== 'object') return false;
+  const report = quality as Record<string, unknown>;
+  return Array.isArray(candidate.rows) && Array.isArray(candidate.warnings) &&
+    typeof candidate.units === 'number' && Array.isArray(candidate.visualReviewPages) &&
+    typeof report.outputRecords === 'number' && typeof report.proseRecords === 'number';
+};
 
 // POST /datasets/upload/:lectureId   multipart: xlsx/pdf/docx/pptx/txt/html, [mode=MERGE|REPLACE], [confirmRemovals=<n>], [dryRun=true]
 //
@@ -73,7 +85,7 @@ export const uploadDataset = async (
         ? subtitleToRows(file.originalname, file.buffer, extension)
         : await documentToRows(file.originalname, await runDocumentExtractor(file.buffer, extension));
     // Subtitle rows do not carry visual review metadata; document rows do.
-    const documentRows = document && 'quality' in document ? document : null;
+    const documentRows = isDocumentRowsResult(document) ? document : null;
     const visualReviewPages = documentRows?.visualReviewPages ?? [];
     let visualReviewDecisions: Record<string, { include: boolean; reviewed: boolean }> = {};
     if (body['visualReviewDecisions']) {
