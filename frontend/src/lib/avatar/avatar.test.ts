@@ -1,7 +1,7 @@
 // Unit tests for the avatar logic that does not need a browser:
 // lip-sync timelines, speech controller (play/pause/resume/stop/replay/mute,
 // stale-callback guarding, autoplay-blocked, boundary re-sync), state
-// derivation, pose driver (straight arms, smooth transitions), agent identity,
+// derivation, pose driver (straight arms, smooth transitions),
 // WebGL probe, and the shared TTS helpers.
 //
 // The frontend has no test runner; run with the backend's ts-node:
@@ -18,7 +18,6 @@ import {
   SpeechController, SpeechDeps, SynthLike, UtteranceLike,
 } from './speech-controller';
 import { deriveAvatarState, AvatarPoseDriver, AvatarState, GESTURES } from './avatar-state';
-import { resolveAgentName, DEFAULT_AGENT_NAME } from './agent-identity';
 import { isWebGLAvailable } from './webgl';
 import { toChunks, pickBestVoice, stripHtml } from '../tts-utils';
 import { PORTRAIT_LAYOUT as PL, AVATAR_MODE } from './config';
@@ -250,18 +249,6 @@ const sum = (m: Record<string, number>) => Object.values(m).reduce((a, b) => a +
   const noRepeat = gest.gestures.every((g, i) => i === 0 || g !== gest.gestures[i - 1]);
   check('pose: with arm gestures enabled they occur during speech and never repeat back-to-back', gest.gestures.length >= 2 && noRepeat && GESTURES.length >= 5, gest.gestures.join(','));
   check('pose: enabled gestures still return the arms to rest (no jump)', gest.maxJump < 0.06 && gest.maxElbow > 0.3);
-}
-
-// ── agent identity ──────────────────────────────────────────────────────
-{
-  const expected: Record<string, string> = {
-    pCNit2x2gjY: 'Nova', '0YM7Cfp8dIQ': 'Sage', '1mi-gFalmSQ': 'Clarity', CIkEryaQ7ok: 'Craft',
-    IQNZNTdZhZg: 'Prism', Hv8judoCF0g: 'Oracle', jGsf0ppO3Js: 'Virtue',
-  };
-  check('identity: all seven agents resolve from the lecture video id',
-    Object.entries(expected).every(([id, name]) => resolveAgentName(id) === name));
-  check('identity: unknown/missing lecture falls back to the generic name',
-    resolveAgentName('nope') === DEFAULT_AGENT_NAME && resolveAgentName(null) === DEFAULT_AGENT_NAME && resolveAgentName(undefined) === DEFAULT_AGENT_NAME);
 }
 
 // ── WebGL probe ─────────────────────────────────────────────────────────

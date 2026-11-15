@@ -50,17 +50,6 @@ export interface DBLecture {
   updatedAt:       string;
 }
 
-// ── Legacy local Lecture (hardcoded constants) ────────
-export interface Lecture {
-  id:        string;
-  num:       number;
-  title:     string;
-  duration:  string;
-  videoId:   string;
-  watched:   number;
-  agentName: string;
-}
-
 // ── Chat ──────────────────────────────────────────────
 export type MessageRole = 'user' | 'ai';
 export type MessageType = 'text' | 'voice';

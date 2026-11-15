@@ -69,13 +69,8 @@ export const MessageBubble = ({ message, onSpeak, isSpeaking, onAskAgain }: Prop
   // Document references only (file name plus page or slide), shown as separate
   // UI and never read aloud.
   //
-  // Video timestamps used to be shown here too. The course playlist was
-  // replaced with a re-recorded English version whose timing differs by
-  // minutes, while the dataset still carries the old times, so a student
-  // clicking one would be sent to the wrong moment. The answers themselves are
-  // unaffected — retrieval matches on the meaning of the text, not on a clock
-  // reading — so only the stale pointer is withheld. Restore this once the
-  // dataset is rebuilt against the current videos.
+  // Video timestamps are withheld until the stored timing is verified against
+  // the current lecture source; document page and slide references remain.
   const isDocumentRef = (value: string | null | undefined) =>
     /(?:\.pdf|\.docx?|\.pptx?|\.txt|\.html?)\b/i.test(value ?? '');
   const timestampedSources = Array.from(

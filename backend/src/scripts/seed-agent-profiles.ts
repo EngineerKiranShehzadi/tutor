@@ -4,10 +4,8 @@
  *   node_modules/.bin/ts-node --transpile-only src/scripts/seed-agent-profiles.ts           # dry-run (default, read-only)
  *   node_modules/.bin/ts-node --transpile-only src/scripts/seed-agent-profiles.ts --apply   # actually insert
  *
- * Source of truth for WHICH lectures/agents exist is the frontend constants
- * file (frontend/src/lib/constants.ts, the `LECTURES` array): YouTube video
- * id and agent name are read from it at runtime, never duplicated here.
- * Only the lecture-specific instruction text lives in this file.
+ * This seed helper owns the small mapping for the institute's shipped course.
+ * Other course agent profiles are configured through the admin workflow.
  *
  * Safety properties:
  *  - Lectures are matched by youtube_video_id only — never by assuming
@@ -24,44 +22,30 @@
  * Global grounding / safety / verification rules are NOT stored here — they
  * stay in the backend prompt. These texts only narrow scope and presentation.
  */
-import * as fs from 'fs';
-import * as path from 'path';
 import { query } from '../config/database';
 
 // Mirrors the CHECK constraints in migration 005 so bad input is rejected
 // before any database access, with a clearer message than a constraint error.
 export const MAX_INSTRUCTIONS_CHARS = 4000;
 
-export const FRONTEND_CONSTANTS_PATH = path.resolve(__dirname, '../../../frontend/src/lib/constants.ts');
-
-// ── Frontend constants (authoritative lecture → agent mapping) ───────────
-
-export interface FrontendLecture {
+// The seeded institute course's lecture-agent mapping. This is seed tooling
+// only; it is not an end-user course-discovery flow.
+export interface SeededLecture {
   num: number;
   title: string;
   videoId: string;
   agentName: string;
 }
 
-// Reads only the LECTURES array literal out of the frontend constants source.
-// Strict on purpose: if the file's shape changes and entries stop parsing,
-// the count/shape checks below fail loudly instead of seeding a partial set.
-export function parseFrontendLectures(source: string): FrontendLecture[] {
-  const block = source.match(/export const LECTURES[^=]*=\s*\[([\s\S]*?)\n\];/);
-  if (!block) throw new Error('Could not find the LECTURES array in the frontend constants source.');
-
-  const entry = /\{\s*id:\s*'([^']+)'\s*,\s*num:\s*(\d+)\s*,\s*title:\s*'((?:[^'\\]|\\.)*)'\s*,\s*duration:\s*'[^']*'\s*,\s*videoId:\s*'([^']+)'\s*,\s*watched:\s*\d+\s*,\s*agentName:\s*'([^']+)'\s*\}/g;
-  const lectures: FrontendLecture[] = [];
-  for (const m of block[1].matchAll(entry)) {
-    lectures.push({ num: Number(m[2]), title: m[3], videoId: m[4], agentName: m[5] });
-  }
-
-  const declaredEntries = (block[1].match(/\bvideoId\s*:/g) ?? []).length;
-  if (lectures.length === 0 || lectures.length !== declaredEntries) {
-    throw new Error(`Parsed ${lectures.length} of ${declaredEntries} LECTURES entries from the frontend constants — file shape changed?`);
-  }
-  return lectures;
-}
+export const SEEDED_LECTURES: SeededLecture[] = [
+  { num: 0, title: 'Introductory Lecture — Introduction to Course, Instructor & ChatGPT-4', videoId: 'pCNit2x2gjY', agentName: 'Nova' },
+  { num: 1, title: 'Lecture 1 — Introduction to Generative AI & Prompt Engineering | FQKII', videoId: '0YM7Cfp8dIQ', agentName: 'Sage' },
+  { num: 2, title: 'Lecture 2 — Fundamentals of Crafting Simple, Fast & Accurate Prompts | FQKII', videoId: '1mi-gFalmSQ', agentName: 'Clarity' },
+  { num: 3, title: 'Lecture 3 — Prompt Formulation Process | FQKII', videoId: 'CIkEryaQ7ok', agentName: 'Craft' },
+  { num: 4, title: 'Lecture 4 — Prompt Engineering Techniques for Text Generation | FQKII', videoId: 'IQNZNTdZhZg', agentName: 'Prism' },
+  { num: 5, title: 'Lecture 5 — Prompt Engineering for Question Answering QA | FQKII', videoId: 'Hv8judoCF0g', agentName: 'Oracle' },
+  { num: 6, title: 'Lecture 6 — Evaluation, Ethics & Future of Prompt Engineering | FQKII', videoId: 'jGsf0ppO3Js', agentName: 'Virtue' },
+];
 
 // ── Lecture-specific instruction texts (keyed by YouTube video id) ───────
 // Provenance: course structure (six lectures, Week 1 = Lectures 1-3,
@@ -120,7 +104,7 @@ export const INSTRUCTIONS_BY_VIDEO_ID: Record<string, string> = {
     'Present these as the lecture\'s positions rather than as your own opinions or predictions.',
 };
 
-// ── Seed configuration (frontend mapping + instruction text) ─────────────
+// ── Seed configuration (lecture mapping + instruction text) ──────────────
 
 export interface SeedConfig {
   videoId: string;
@@ -133,17 +117,17 @@ export interface SeedConfig {
 // Validates everything that can be checked without touching the database.
 // Throws (so the caller aborts before any read or write) on any problem.
 export function buildSeedConfigs(
-  frontendLectures: FrontendLecture[],
+  seededLectures: SeededLecture[] = SEEDED_LECTURES,
   instructionsByVideoId: Record<string, string> = INSTRUCTIONS_BY_VIDEO_ID
 ): SeedConfig[] {
   const problems: string[] = [];
 
-  const videoIds = frontendLectures.map(l => l.videoId);
-  const agentNames = frontendLectures.map(l => l.agentName);
-  if (new Set(videoIds).size !== videoIds.length) problems.push('duplicate videoId in frontend constants');
-  if (new Set(agentNames).size !== agentNames.length) problems.push('duplicate agentName in frontend constants');
+  const videoIds = seededLectures.map(l => l.videoId);
+  const agentNames = seededLectures.map(l => l.agentName);
+  if (new Set(videoIds).size !== videoIds.length) problems.push('duplicate lecture video id in seed list');
+  if (new Set(agentNames).size !== agentNames.length) problems.push('duplicate agent name in seed list');
 
-  for (const l of frontendLectures) {
+  for (const l of seededLectures) {
     const text = instructionsByVideoId[l.videoId];
     if (text === undefined) { problems.push(`no instructions defined for ${l.agentName} (${l.videoId})`); continue; }
     if (!/\S/.test(text)) problems.push(`instructions for ${l.agentName} are blank`);
@@ -151,12 +135,12 @@ export function buildSeedConfigs(
     if (!/\S/.test(l.agentName)) problems.push(`blank agentName for ${l.videoId}`);
   }
   for (const id of Object.keys(instructionsByVideoId)) {
-    if (!videoIds.includes(id)) problems.push(`instructions defined for ${id}, which is not in the frontend LECTURES`);
+    if (!videoIds.includes(id)) problems.push(`instructions defined for ${id}, which is not in the seed list`);
   }
 
   if (problems.length > 0) throw new Error(`Seed configuration invalid:\n  - ${problems.join('\n  - ')}`);
 
-  return frontendLectures.map(l => ({
+  return seededLectures.map(l => ({
     videoId: l.videoId,
     agentName: l.agentName,
     lectureNum: l.num,
@@ -305,8 +289,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const source = fs.readFileSync(FRONTEND_CONSTANTS_PATH, 'utf8');
-  const configs = buildSeedConfigs(parseFrontendLectures(source));
+  const configs = buildSeedConfigs();
 
   const result = await runSeed(configs, { apply });
   report(result);

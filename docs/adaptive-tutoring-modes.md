@@ -21,7 +21,6 @@ Available first-release modes: SIMPLE, ACADEMIC, REAL_LIFE_EXAMPLE, EXAM_PREP. S
 - Selected mode is client-side within the active lecture/session. Switching sessions or lectures resets it to Academic. The current first release does not persist mode across a hard reload.
 - The existing lecturer-scoped authorization, input guardrails, output-verifier, and SSE final answer reconciliation remain unchanged.
 - Do not auto-generate, save, or grade formal quizzes from EXAM_PREP.
-- Personal YouTube RAG is **not wired to this new selector**; its existing retrieval pipeline remains separate.
 
 ## Safety and QA
 

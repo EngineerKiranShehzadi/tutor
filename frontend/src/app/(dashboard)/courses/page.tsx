@@ -3,7 +3,6 @@ import Link from 'next/link';
 import { useQuery } from '@apollo/client';
 import { GET_COURSES } from '@/graphql/course.queries';
 import { DBCourse } from '@/types/course';
-import YouTubePilotSearch from '@/components/course/YouTubePilotSearch';
 
 export default function CoursesPage() {
   const { data, loading, error, refetch } = useQuery(GET_COURSES, { fetchPolicy: 'cache-and-network' });
@@ -38,9 +37,6 @@ export default function CoursesPage() {
           ))}
         </div>
       )}
-      <div className="mt-10 pt-8 border-t border-[var(--border)]">
-        <YouTubePilotSearch />
-      </div>
     </div>
   );
 }

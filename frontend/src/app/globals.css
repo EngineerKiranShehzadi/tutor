@@ -33,8 +33,8 @@
   --ink:         #161a1f;   /* the dark band: sign-in panel, footer */
   --ink-soft:    #232a33;   /* the same band, lifted - used for the navbar */
 
-  /* Aliases kept so existing components keep working: these were a leftover
-     YouTube red and an indigo that disagreed with tailwind.config.ts. */
+  /* Aliases kept so existing components keep working: these colors differed
+     from the theme configuration. */
   --red:    #1f3a5f;
   --red2:   #16293f;
   --purple: #1f3a5f;

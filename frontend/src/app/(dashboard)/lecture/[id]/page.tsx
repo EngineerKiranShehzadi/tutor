@@ -13,17 +13,9 @@ import { useChat }         from '@/hooks/useChat';
 import { useAvatarSpeech } from '@/hooks/useAvatarSpeech';
 import { TeacherAvatarPanel } from '@/components/avatar/TeacherAvatarPanel';
 import { deriveAvatarState } from '@/lib/avatar/avatar-state';
-import { resolveAgentName } from '@/lib/avatar/agent-identity';
-import { LECTURES } from '@/lib/constants';
 import { cn }              from '@/lib/cn';
 import { sortLectures, statusBadge, isLectureReady, notReadyMessage } from '@/lib/lectures';
 import { useRouter }       from 'next/navigation';
-
-const CHANNEL = {
-  name:        'Fazal Qadir Khan Islamic Institute Pakistan',
-  initials:    'FQ',
-  subscribers: '3.05K',
-};
 
 /**
  * Is this description just the title again?
@@ -57,10 +49,9 @@ export default function LecturePage({ params }: Props) {
   // numbers described the accident of insertion rather than the course.
   const allLectures: DBLecture[]       = sortLectures((allData?.lectures ?? []).filter((l: DBLecture) => l.courseId === lecture?.courseId));
 
-  // Displayed agent identity — resolved from the lecture's YouTube id via the
-  // existing lecture -> agent mapping (no database ids hardcoded). The agent
-  // that actually answers is still selected server-side from lecture_id.
-  const agentName = lecture?.agentName || resolveAgentName(lecture?.youtubeVideoId);
+  // The answering agent is selected server-side from lecture_id; this is only
+  // the student-facing label.
+  const agentName = lecture?.agentName || 'AI Tutor';
 
   // 3D teacher avatar: a presentation layer over the existing chat. It only
   // receives the final (guardrail-checked) answer text; it never changes it.
@@ -195,7 +186,6 @@ export default function LecturePage({ params }: Props) {
   if (!lecture || isNaN(lectureId)) notFound();
 
   const isReady = isLectureReady(lecture.status);
-  const isOriginalPlaylistVideo = LECTURES.some(l => l.videoId === lecture.youtubeVideoId);
 
   return (
     <div className="px-4 py-5">
@@ -231,20 +221,6 @@ export default function LecturePage({ params }: Props) {
               </span>
             </div>
           )}
-
-          {/* Original playlist attribution only; do not mislabel other instructors. */}
-          {isOriginalPlaylistVideo && <div className="flex items-center gap-3 py-3 border-t border-b border-[var(--border)] mb-3">
-            <div className="w-10 h-10 rounded-full bg-[var(--accent)] flex items-center justify-center text-white text-sm font-bold shrink-0">
-              {CHANNEL.initials}
-            </div>
-            <div className="flex-1">
-              <p className="text-[15px] font-bold">{CHANNEL.name}</p>
-              <p className="text-[13px] text-[var(--muted)]">{CHANNEL.subscribers} subscribers</p>
-            </div>
-            <button className="px-4 py-2 bg-[var(--text)] text-white rounded-card text-[13px] font-bold hover:bg-gray-800 transition-colors">
-              Subscribe
-            </button>
-          </div>}
 
           {/* Description. Many lectures were imported with the description set
               to the title, which printed the same sentence twice under each

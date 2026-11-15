@@ -1,5 +1,5 @@
 -- Run after schema.sql and migrate.sql, BEFORE migration 022, on a throwaway PG.
--- The pre-course lectures imitate the old YouTube playlist.
+-- The fixture represents the legacy institute lecture set before course migration.
 INSERT INTO lectures (title, youtube_url, youtube_video_id, status)
 VALUES
  ('Introductory Lecture','https://www.youtube.com/watch?v=pCNit2x2gjY','pCNit2x2gjY','READY'),

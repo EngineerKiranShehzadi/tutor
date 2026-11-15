@@ -11,10 +11,9 @@
  */
 import * as fs from 'fs';
 import {
-  FRONTEND_CONSTANTS_PATH,
+  SEEDED_LECTURES,
   INSTRUCTIONS_BY_VIDEO_ID,
   MAX_INSTRUCTIONS_CHARS,
-  parseFrontendLectures,
   buildSeedConfigs,
   runSeed,
   DbLectureRow,
@@ -37,8 +36,7 @@ const EXPECTED_AGENTS: Record<string, string> = {
   'jGsf0ppO3Js': 'Virtue',
 };
 
-const frontendSource = fs.readFileSync(FRONTEND_CONSTANTS_PATH, 'utf8');
-const realConfigs = (): SeedConfig[] => buildSeedConfigs(parseFrontendLectures(frontendSource));
+const realConfigs = (): SeedConfig[] => buildSeedConfigs();
 
 const lec = (id: number, videoId: string | null, status = 'READY'): DbLectureRow =>
   ({ id, title: `db lecture ${id}`, youtube_video_id: videoId, status });
@@ -71,9 +69,9 @@ function fakeDb(lectures: DbLectureRow[], profiles: ExistingProfileRow[] = []) {
 }
 
 cases.push({
-  label: '1. Frontend constants are the source: exactly 7 lectures with the approved agent names and video ids',
+  label: '1. Seed list contains exactly 7 lectures with the approved agent names and video ids',
   run: async () => {
-    const parsed = parseFrontendLectures(frontendSource);
+    const parsed = SEEDED_LECTURES;
     const got = Object.fromEntries(parsed.map(l => [l.videoId, l.agentName]));
     const pass = parsed.length === 7 && JSON.stringify(got) === JSON.stringify(EXPECTED_AGENTS);
     return { pass, detail: parsed.map(l => `${l.agentName}:${l.videoId}`).join(', ') };
@@ -81,7 +79,7 @@ cases.push({
 });
 
 cases.push({
-  label: '2. Every instruction is non-blank, within the 4000-char DB limit, and maps to exactly one frontend lecture',
+  label: '2. Every instruction is non-blank, within the 4000-char DB limit, and maps to exactly one seeded lecture',
   run: async () => {
     const configs = realConfigs(); // throws if anything is missing/blank/oversize
     const lengths = configs.map(c => `${c.agentName}=${c.instructions.length}`);
@@ -117,7 +115,7 @@ cases.push({
 cases.push({
   label: '4. Invalid configuration aborts before any database access (blank / oversize / missing / unknown id)',
   run: async () => {
-    const lectures = parseFrontendLectures(frontendSource);
+    const lectures = SEEDED_LECTURES;
     const base = { ...INSTRUCTIONS_BY_VIDEO_ID };
     const variants: Record<string, Record<string, string>> = {
       blank: { ...base, 'pCNit2x2gjY': '   \n ' },

@@ -60,14 +60,7 @@ function sessionLabel(s: Session): string {
   return s.firstQuestion ?? s.title;
 }
 
-export interface PersonalChatAdapter {
-  list: () => Promise<Session[]>;
-  rename: (id: number, title: string) => Promise<void>;
-  delete: (id: number) => Promise<void>;
-}
 interface Props {
-  /** Personal YouTube courses use the same sidebar UI with private REST-backed sessions. */
-  personalAdapter?: PersonalChatAdapter;
   lectureId:        number;
   activeSessionId:  number | null;
   refreshKey:       number;
@@ -77,7 +70,7 @@ interface Props {
 }
 
 export const ChatSidebar = ({
-  lectureId, activeSessionId, refreshKey, onNewChat, onSelectSession, onClose, personalAdapter,
+  lectureId, activeSessionId, refreshKey, onNewChat, onSelectSession, onClose,
 }: Props) => {
   const [sessions,      setSessions]     = useState<Session[]>([]);
   const [searchQuery,   setSearchQuery]  = useState('');
@@ -96,28 +89,19 @@ export const ChatSidebar = ({
 
   const { data, loading, refetch } = useQuery(CHAT_SESSIONS_QUERY, {
     variables: { lectureId },
-    skip: !lectureId || !!personalAdapter,
+    skip: !lectureId,
     fetchPolicy: 'network-only',
   });
 
   useEffect(() => {
-    if (personalAdapter) {
-      let active = true;
-      void personalAdapter.list().then(list=>{if(active)setSessions(list);}).catch(()=>{if(active)setSessions([]);});
-      return () => { active = false; };
-    }
     const list: Session[] = data?.chatSessions ?? [];
     setSessions(list);
-  }, [data, personalAdapter]);
+  }, [data]);
 
   // Re-fetch whenever the parent signals a refresh (new message sent, session created)
   useEffect(() => {
     if (!lectureId || refreshKey === 0) return;
-    if (personalAdapter) {
-      void personalAdapter.list().then(setSessions).catch(()=>undefined);
-    } else {
-      void refetch({ lectureId });
-    }
+    void refetch({ lectureId });
   }, [refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [deleteSession] = useMutation(DELETE_CHAT_SESSION_MUTATION);
@@ -163,12 +147,10 @@ export const ChatSidebar = ({
     setSessions(prev => prev.map(s => s.id === id ? { ...s, title } : s));
     setRenamingId(null);
     try {
-      if(personalAdapter) await personalAdapter.rename(id,title);
-      else await renameSession({ variables: { id, title } });
+      await renameSession({ variables: { id, title } });
     } catch {
       // Revert on failure
-      if(personalAdapter) void personalAdapter.list().then(setSessions).catch(()=>undefined);
-      else void refetch({ lectureId });
+      void refetch({ lectureId });
     }
   };
 
@@ -178,10 +160,8 @@ export const ChatSidebar = ({
     setPinnedIds(prev => { const next = new Set(prev); next.delete(id); return next; });
     setMenu(null);
     try {
-      if(personalAdapter) await personalAdapter.delete(id);
-      else await deleteSession({ variables: { id } });
-      if(personalAdapter) void personalAdapter.list().then(setSessions).catch(()=>undefined);
-      else void refetch({ lectureId });
+      await deleteSession({ variables: { id } });
+      void refetch({ lectureId });
     } catch {
       setSessions(snapshot);
     }

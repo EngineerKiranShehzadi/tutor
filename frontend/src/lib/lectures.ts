@@ -33,7 +33,7 @@ export const lectureNumber = (title: string): number => {
 
 /**
  * Course order, oldest lesson first — the order a student would work through,
- * and the order the playlist is published in.
+ * and the order defined by the course.
  *
  * Returns a new array: Apollo freezes its result arrays, so sorting one in
  * place throws.
