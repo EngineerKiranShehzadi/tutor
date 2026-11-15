@@ -36,6 +36,16 @@ def to_jpeg(page):
     return base64.b64encode(out.getvalue()).decode("ascii")
 
 
+def persist_canonical_pdf(pdf_bytes, canonical_pdf_path):
+    if not canonical_pdf_path:
+        return None
+    canonical = Path(canonical_pdf_path)
+    if canonical.name != "canonical.pdf" or not canonical.parent.is_dir():
+        raise ValueError("Invalid canonical PDF artifact path")
+    canonical.write_bytes(pdf_bytes)
+    return canonical
+
+
 def office_to_pdf(data, extension, canonical_pdf_path=None):
     from extract_document import convert_legacy_ppt
     if extension == ".ppt":
@@ -62,11 +72,7 @@ def office_to_pdf(data, extension, canonical_pdf_path=None):
         if p.returncode or not result.exists() or result.stat().st_size > 64 * 1024 * 1024:
             raise ValueError("Unable to render PowerPoint slides for visual grounding")
         pdf_bytes = result.read_bytes()
-        if canonical_pdf_path:
-            canonical = Path(canonical_pdf_path)
-            if canonical.name != "canonical.pdf" or not canonical.parent.is_dir():
-                raise ValueError("Invalid canonical PDF artifact path")
-            canonical.write_bytes(pdf_bytes)
+        persist_canonical_pdf(pdf_bytes, canonical_pdf_path)
         return pdf_bytes
 
 
@@ -113,17 +119,13 @@ def identify_pdf_pages(doc):
 def visual_pages(data, extension, limit, canonical_pdf_path=None):
     if extension in (".pptx", ".ppt"):
         targets = slide_visual_indexes(data, extension)
-        if not targets:
-            return []
+        # Keep a canonical PDF even when structural inspection finds no visual
+        # candidates; the caller may still need the same artifact downstream.
         pdf = office_to_pdf(data, extension, canonical_pdf_path)
         name = "Slide"
     elif extension == ".pdf":
         pdf = data
-        if canonical_pdf_path:
-            canonical = Path(canonical_pdf_path)
-            if canonical.name != "canonical.pdf" or not canonical.parent.is_dir():
-                raise ValueError("Invalid canonical PDF artifact path")
-            canonical.write_bytes(data)
+        persist_canonical_pdf(data, canonical_pdf_path)
         name = "Page"
     elif extension == ".docx":
         # Render every uploaded Word document so every rendered page can be
@@ -138,7 +140,10 @@ def visual_pages(data, extension, limit, canonical_pdf_path=None):
     # print a deprecation warning before the JSON payload, breaking the Node
     # caller which expects stdout to contain only JSON.
     import pymupdf as fitz
-    doc = fitz.open(stream=pdf, filetype="pdf")
+    # The canonical artifact is the single source of truth when the caller
+    # requested retention; open that file directly rather than a parallel
+    # in-memory copy so preview and downstream consumers share the same PDF.
+    doc = fitz.open(canonical_pdf_path) if canonical_pdf_path else fitz.open(stream=pdf, filetype="pdf")
     if doc.is_encrypted:
         raise ValueError("Password-protected PDFs are not supported")
     if len(doc) > MAX_PAGES:
