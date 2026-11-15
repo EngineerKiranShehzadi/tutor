@@ -64,7 +64,9 @@ async function renderVisualPages(buffer: Buffer, extension: string): Promise<Vis
 type VisionDescription = { relevant: boolean; description: string; topic?: string; nodes?: string[]; connections?: string[]; uncertainty?: string[] };
 
 const cleanFacts = (values: unknown): string[] | undefined => {
-  if (values === undefined) return undefined;
+  // Optional JSON fields are frequently emitted as null by vision models.
+  // Treat null as omitted; still reject malformed non-null structures.
+  if (values === undefined || values === null) return undefined;
   if (!Array.isArray(values) || values.length > 60 || !values.every(v => typeof v === 'string' && v.length <= 500)) {
     throw new AppError('Invalid visual structure fields.', 503);
   }
