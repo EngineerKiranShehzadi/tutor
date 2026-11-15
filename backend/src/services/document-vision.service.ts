@@ -216,8 +216,11 @@ export async function enrichDocumentWithVision(
            /\b(?:only (?:structured )?(?:text|textual information)|purely textual|text[- ]based|only formatted text)\b/i.test(description));
         const describesActualVisual =
           /\b(?:bar chart|chart (?:shows|depicts|illustrates)|graph (?:shows|depicts|titled)|diagram (?:shows|depicts|illustrates)|flowchart (?:shows|depicts)|screenshot|photograph|illustration|image is a composite|visualization of)\b/i.test(description);
-        if (explicitlyTextOnly && !describesActualVisual) {
-          warnings.push('Visual interpretation for ' + batch[j].locator + ' described a text-only page with no informative diagram; the extra description was omitted to avoid duplicate chunks.');
+        const identifiesVisualContent =
+          /\b(?:charts?|graphs?|diagrams?|figures?|screenshots?|photographs?|photos?|illustrations?|flyers?|posters?|infographics?|maps?|plots?|arrows?|flowcharts?|images?)\b/i.test(description) ||
+          Boolean(response[j].connections?.length);
+        if ((explicitlyTextOnly && !describesActualVisual) || !identifiesVisualContent) {
+          warnings.push('Visual interpretation for ' + batch[j].locator + ' did not identify informative visual content; its extra description was omitted to avoid duplicate text chunks.');
           continue;
         }
         const visual = formatVisualDescription(response[j]);
