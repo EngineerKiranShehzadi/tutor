@@ -12,6 +12,7 @@ import { GET_QUESTIONS_PER_LECTURE } from '@/graphql/analytics.queries';
 import { DBCourse } from '@/types/course';
 import { DBLecture } from '@/types';
 import { AdminPageHero } from '@/components/admin/AdminPageHero';
+import { btnRow, filterOff, filterOn } from '@/components/admin/buttons';
 
 /**
  * Lectures.
@@ -43,7 +44,9 @@ const STATUS: Record<StatusKey, { label: string; attention: boolean }> = {
 type Tab = 'ALL' | StatusKey | 'ARCHIVED';
 type Pending = { id: string; action: 'archive' | 'delete' } | null;
 
-const outlineBtn = 'rounded-control border border-[var(--border)] px-3.5 py-2 text-caption font-semibold text-[var(--text)] hover:bg-[var(--surface)] transition-colors disabled:opacity-50';
+// Defined once in components/admin/buttons.ts; a local copy here is how the
+// same button ended up at two different sizes.
+const outlineBtn = btnRow;
 
 export default function AdminLectures() {
   const router = useRouter();
@@ -205,11 +208,7 @@ export default function AdminLectures() {
             key={t.key}
             type="button"
             onClick={() => { setTab(t.key); setPending(null); }}
-            className={`rounded-control px-3.5 py-2 text-caption font-semibold transition-colors ${
-              tab === t.key
-                ? 'bg-[var(--accent)] text-white'
-                : 'border border-[var(--border)] text-[var(--text)] hover:bg-[var(--surface)]'
-            }`}
+            className={tab === t.key ? filterOn : filterOff}
           >
             {t.label}
           </button>

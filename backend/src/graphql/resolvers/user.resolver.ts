@@ -3,6 +3,7 @@ import { GraphQLContext } from '../context';
 import { AuthenticatedRequest } from '../../types';
 import { AppError } from '../../middleware/errorHandler';
 import { getAllUsers, deleteUser, updateUserRole, updateAdminProfile } from '../../services/user.service';
+import { inviteAdmin, listAdminInvitations, revokeAdminInvitation } from '../../services/admin-invite.service';
 import { logger } from '../../utils/logger';
 import { REFRESH_COOKIE } from '../../utils/auth-cookies';
 
@@ -23,9 +24,15 @@ function wrap(fn: () => Promise<unknown>) {
 
 export const userResolvers = {
   Query: {
+    adminInvitations: (_: unknown, __: unknown, ctx: GraphQLContext) => {
+      requireAdmin(ctx);
+      return listAdminInvitations();
+    },
+
     allUsers: (
       _: unknown,
-      args: { limit?: number | null; offset?: number | null; search?: string | null; role?: string | null },
+      args: { limit?: number | null; offset?: number | null; search?: string | null;
+              role?: string | null; sort?: string | null },
       ctx: GraphQLContext
     ) =>
       wrap(async () => {
@@ -42,6 +49,18 @@ export const userResolvers = {
         logger.info(`[GRAPHQL] deleteUser: admin "${admin.email}" → user id=${id}`);
         return deleteUser(id, admin.id);
       }),
+
+    inviteAdmin: (_: unknown, { email }: { email: string }, ctx: GraphQLContext) => {
+      const admin = requireAdmin(ctx);
+      logger.info(`[GRAPHQL] inviteAdmin: admin "${admin.email}" → ${email}`);
+      return inviteAdmin(email, admin.id);
+    },
+
+    revokeAdminInvitation: (_: unknown, { id }: { id: number }, ctx: GraphQLContext) => {
+      const admin = requireAdmin(ctx);
+      logger.info(`[GRAPHQL] revokeAdminInvitation: admin "${admin.email}" → invitation #${id}`);
+      return revokeAdminInvitation(id);
+    },
 
     updateUserRole: (_: unknown, { id, role }: { id: string; role: string }, ctx: GraphQLContext) =>
       wrap(async () => {

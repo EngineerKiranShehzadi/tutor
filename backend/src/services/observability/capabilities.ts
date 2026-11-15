@@ -218,7 +218,15 @@ export async function getPhoenixCapabilities(forceRefresh = false): Promise<Phoe
 
   let serverVersion: string | null = null;
   try {
-    serverVersion = String(await withTimeout(() => client.getServerVersion(), PROBE_TIMEOUT_MS));
+    // getServerVersion() hands back the version as its parts ([20, 27, 0]).
+    // String() on an array joins with commas, which printed "20,27,0" on the
+    // System Health page — join the parts with dots instead.
+    const rawVersion = await withTimeout(() => client.getServerVersion(), PROBE_TIMEOUT_MS);
+    serverVersion = Array.isArray(rawVersion)
+      ? rawVersion.join('.')
+      : rawVersion === null || rawVersion === undefined
+        ? null
+        : String(rawVersion);
   } catch (err) {
     logger.warn(`[OBSERVABILITY] Phoenix capability check failed (server unreachable): ${(err as Error).message}`);
     const value = disabledCapabilities();

@@ -38,7 +38,7 @@ import { parse, validate, specifiedRules } from 'graphql';
 import { makeExecutableSchema } from '@graphql-tools/schema';
 import { ApolloServer } from '@apollo/server';
 import { applyMigrations } from './db-setup';
-import { getRecentQuestions, getRecentQuestionsPage, getContentGaps, CONTENT_GAPS_MAX_QUESTIONS, getMyStats,
+import { getRecentQuestions, getRecentQuestionsPage, getContentGaps, CONTENT_GAPS_QUESTIONS_PER_LECTURE, getMyStats,
   getLectureChunks, getLectureAgentDetails, getRegisteredStudents, getStudentJourney } from '../services/analytics.service';
 import { getAllUsers } from '../services/user.service';
 import { analyticsResolvers } from '../graphql/resolvers/analytics.resolver';
@@ -709,7 +709,7 @@ const run = async () => {
       `outcome=${r.outcome} status=${row.status} last_error=${JSON.stringify(row.last_error)} embedCalls=${calls}`);
   }
 
-  // ── AD4: Content Gaps reads a bounded, windowed sample ───────────────
+  // ── AD4: Content Gaps separates a real gap from an off-topic question ─
   {
     const lec = (await query<{ id: number }>(`INSERT INTO lectures (title, youtube_url, youtube_video_id, status) VALUES ('[ad4] gaps', 'https://youtu.be/xxxxxxxxxxx', 'xxxxxxxxxxx', 'READY') RETURNING id`)).rows[0].id;
     // A published dataset (Content Gaps skips a lecture without one, AD-N6).
@@ -725,16 +725,48 @@ const run = async () => {
     // Outside the 90-day window: never counted or analysed.
     await query(`INSERT INTO student_questions (student_id, lecture_id, question, created_at)
                  SELECT $1, $2, 'ancient question', NOW() - INTERVAL '100 days' FROM generate_series(1, 50)`, [stu, lec]);
+
+    // One recorded outcome per question that mattered. A gap is a question the
+    // lecture had related material for that was too weak to answer with; an
+    // off-topic question is one nothing in the lecture resembled. Only the
+    // first is work, so only the first may be reported.
+    const trace = (tag: string, i: number) => (tag + String(i)).padEnd(32, '0').slice(0, 32);
+    const logged = async (traceId: string, reason: string, question: string, ago: string) => {
+      await query(
+        `INSERT INTO rag_request_log (trace_id, created_at, student_id, lecture_id, status, response_status, not_found_reason, total_ms)
+         VALUES ($1, NOW() - $5::interval, $2, $3, 'SUCCESS', 'NOT_FOUND', $4, 10)`,
+        [traceId, stu, lec, reason, ago]);
+      await query(
+        `INSERT INTO chat_history (student_id, lecture_id, question, answer, session_id, trace_id, created_at)
+         VALUES ($1, $2, $3, 'I could not find this information in this lecture.', 1, $4, NOW() - $5::interval)`,
+        [stu, lec, question, traceId, ago]);
+    };
+    // The same real gap asked three times, with different punctuation and case.
+    await logged(trace('ad4gapa', 1), 'ALL_CANDIDATES_BELOW_RERANK_FLOOR', 'How does BPE merge pairs?', '1 day');
+    await logged(trace('ad4gapb', 2), 'ALL_CANDIDATES_BELOW_RERANK_FLOOR', 'how does bpe merge pairs', '2 days');
+    await logged(trace('ad4gapc', 3), 'ALL_CANDIDATES_BELOW_RERANK_FLOOR', 'How does BPE merge pairs???', '3 days');
+    // A student trying the tutor out.
+    await logged(trace('ad4offa', 4), 'NO_VECTOR_CANDIDATES', 'who is the prime minister', '1 day');
+    // Older than the window: invisible.
+    await logged(trace('ad4olda', 5), 'ALL_CANDIDATES_BELOW_RERANK_FLOOR', 'ancient gap', '100 days');
     try {
       const t0 = Date.now();
       const gaps = await getContentGaps();
       const ms = Date.now() - t0;
       const mine = gaps.find(g => g.lectureId === lec);
-      const processed = gaps.reduce((n, g) => n + g.answeredFromLecture + g.notInLecture, 0);
-      check('AD4-1. 25,000 questions seeded: at most 20,000 are processed, sampled=true, windowDays=90, questionsAsked stays exact (old ones excluded)',
-        !!mine && processed <= CONTENT_GAPS_MAX_QUESTIONS && mine.sampled === true && mine.windowDays === 90 && mine.questionsAsked === 25000,
-        `processed=${processed} asked=${mine?.questionsAsked} sampled=${mine?.sampled} ms=${ms}`);
+      const q = mine?.missedQuestions ?? [];
+      check('AD4-1. A gap and an off-topic question are counted apart, repeats of one question group into a single row with a count, and anything older than the window is left out',
+        mine?.missingMaterial === 3 && mine?.offTopic === 1 && mine?.windowDays === 90
+          && q.length === 1 && q[0].askedCount === 3
+          && !q.some(x => x.question === 'who is the prime minister' || x.question === 'ancient gap'),
+        `missing=${mine?.missingMaterial} offTopic=${mine?.offTopic} rows=${q.length} count=${q[0]?.askedCount} ms=${ms}`);
+      check('AD4-2. questionsAsked stays the exact number asked in the window, and is reported next to the smaller number the request log could analyse',
+        mine?.questionsAsked === 25000 && (mine?.questionsAnalysed ?? 0) === 4
+          && q.length <= CONTENT_GAPS_QUESTIONS_PER_LECTURE,
+        `asked=${mine?.questionsAsked} analysed=${mine?.questionsAnalysed} rows=${q.length}`);
     } finally {
+      await query('DELETE FROM chat_history WHERE lecture_id = $1', [lec]);
+      await query('DELETE FROM rag_request_log WHERE lecture_id = $1', [lec]);
       await query('DELETE FROM student_questions WHERE lecture_id = $1', [lec]);
     }
   }
@@ -1272,13 +1304,19 @@ const run = async () => {
     const small = await mkLecture('bravo', [1, 3]);          // 2 Q&As, the second in 3 pieces
     const legacy = await mkLecture('charlie', null);
     try {
-      const gaps = await getContentGaps({ maxChunksPerLecture: 5 });
+      // A lecture withdrawn from students cannot be acted on, so it is left
+      // out rather than listed with work nobody will do.
+      await query(
+        `INSERT INTO rag_request_log (trace_id, created_at, student_id, lecture_id, status, response_status, not_found_reason, total_ms)
+         VALUES ($1, NOW(), NULL, $2, 'SUCCESS', 'NOT_FOUND', 'ALL_CANDIDATES_BELOW_RERANK_FLOOR', 10)`,
+        [String(small).padEnd(32, 'a').slice(0, 32), small]);
+      await query('UPDATE lectures SET archived_at = NOW() WHERE id = $1', [legacy]);
+      const gaps = await getContentGaps();
       const g = (id: number) => gaps.find(x => x.lectureId === id);
       const page = await getLectureChunks(small, { limit: 50 });
-      check('AD-N6-1. Content Gaps: each lecture gets its own vocabulary share (chunksSampled only where the cap cut it), and a READY lecture with no published dataset is left out instead of scored 0%',
-        g(big)?.chunksSampled === true && g(small)?.chunksSampled === false && g(small)?.coverageScore === 100 && g(small)?.chunkCount === 4
-          && g(legacy) === undefined,
-        `big=${JSON.stringify({ s: g(big)?.chunksSampled, cov: g(big)?.coverageScore })} small=${JSON.stringify({ s: g(small)?.chunksSampled, cov: g(small)?.coverageScore, chunks: g(small)?.chunkCount })} legacyListed=${g(legacy) !== undefined}`);
+      check('AD-N6-1. Content Gaps lists a lecture only once it has a recorded outcome, and never an archived one',
+        g(small)?.missingMaterial === 1 && g(big) === undefined && g(legacy) === undefined,
+        `small=${g(small)?.missingMaterial} bigListed=${g(big) !== undefined} archivedListed=${g(legacy) !== undefined}`);
       check('AD-N7-1. lectureChunks lists and counts each Q&A pair once (a 3-piece answer is one row), with its full answer',
         page.total === 2 && page.items.length === 2 && page.items.every(i => i.answer === 'full answer'),
         `total=${page.total} items=${page.items.length}`);
@@ -1286,6 +1324,7 @@ const run = async () => {
       check('R9-1. lectureAgentDetails counts Q&A pairs too (qaCount 2, as the lecture page lists) next to embedded pieces (chunkCount 4) — the agents page captions its bars "Q&A pairs"',
         agent?.qaCount === 2 && agent?.chunkCount === 4, `qaCount=${agent?.qaCount} chunkCount=${agent?.chunkCount}`);
     } finally {
+      await query('DELETE FROM rag_request_log WHERE lecture_id = ANY($1::int[])', [[big, small, legacy]]);
       await query('DELETE FROM student_questions WHERE lecture_id = ANY($1::int[])', [[big, small, legacy]]);
     }
   }
@@ -1339,7 +1378,7 @@ const run = async () => {
               ($3, 'SUCCESS', 'ANSWERED', 'VERIFIED', 100, now() + interval '1 hour')`,
       ids
     );
-    const { rows } = await getAttention(50, null);
+    const { rows } = await getAttention(50, null, '24h');
     const listed = rows.filter(r => ids.includes(r.traceId)).map(r => `${r.answerVerificationReason}:${r.reasons.join('+')}`);
     await query('DELETE FROM rag_request_log WHERE trace_id = ANY($1::char(32)[])', [ids]);
     check('R6-1. Attention list: an answer with VERIFICATION_DISABLED is not listed (it was, as "Failed answer check", for every answer with verification off); UNSUPPORTED_CLAIMS still is',
@@ -1387,7 +1426,7 @@ const run = async () => {
       await query('DELETE FROM rag_request_log WHERE trace_id = $1', [ids[1]]);
       await writeRequestLog(buildRequestLogRow(mkTrace(ids[1], { memoryResult: 'MISS', formatRepairRejected: 'LOST_CONTENT', answerVerificationReason: 'VERIFIED' }), true));
       const refusedAfter = (await getSummary('24h')).current.formatRepairsRefused;
-      const row = (await getAttention(200, null)).rows.find(r => r.traceId === ids[1]);
+      const row = (await getAttention(200, null, '24h')).rows.find(r => r.traceId === ids[1]);
       check('R11-1. A refused list/table reformat is stored (format_repair_rejected), counted on the monitor ("List/table not delivered") and listed for attention with reason "format"',
         refusedAfter - refusedBefore === 1 && row?.formatRepairRejected === 'LOST_CONTENT' && row?.reasons.join() === 'format',
         `count ${refusedBefore}→${refusedAfter} attention=${row ? `${row.formatRepairRejected}:${row.reasons.join('+')}` : 'not listed'}`);

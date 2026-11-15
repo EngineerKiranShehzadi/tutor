@@ -3,6 +3,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useQuery } from '@apollo/client';
 import { AdminPageHero } from '@/components/admin/AdminPageHero';
+import { btnSecondary } from '@/components/admin/buttons';
 import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend,
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -85,7 +86,7 @@ export default function AdminAgentsPage() {
         action={
           <button
             onClick={() => refetch()}
-            className="flex items-center gap-2 px-4 py-2.5 bg-white/15 text-white border border-white/25 rounded-card text-label font-semibold hover:bg-white/25 transition-colors"
+            className={btnSecondary}
           >
             <i className="fas fa-rotate-right text-[11px]" /> Refresh Now
           </button>

@@ -7,6 +7,8 @@ import { ObservabilityTabs } from '@/components/observability/ObservabilityTabs'
 import { CursorPagination } from '@/components/observability/Pagination';
 import { EmptyState, ErrorState, PhoenixUnavailablePanel } from '@/components/observability/PhoenixConnectionState';
 import { observabilityApi, ObservabilityApiError } from '@/lib/observability-api';
+import { fmtDateTime } from '@/lib/chart-format';
+import { routeLabel } from '@/lib/monitor-labels';
 import type { SessionSummary } from '@/types/observability';
 
 function fmtMs(ms: number): string { return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(2)}s`; }
@@ -47,48 +49,60 @@ export default function SessionsListPage() {
 
   return (
     <div className="max-w-[1180px]">
-      <ObservabilityHeader subtitle="Multi-turn conversations grouped by chat session — reconstructed from Phoenix session data." />
+      <ObservabilityHeader title="Sessions" subtitle="Requests grouped into the conversation they belong to." />
       <ObservabilityTabs />
 
       <div className="bg-[var(--card)] rounded-card border border-[var(--border)] overflow-hidden">
         {unsupported ? (
-          <EmptyState icon="fa-comments" title="Sessions unsupported by this Phoenix server" message="This capability requires a newer Phoenix server version. Check the System Health tab for details." />
+          <EmptyState title="Sessions unsupported by this Phoenix server" message="This capability requires a newer Phoenix server version. Check the System Health tab for details." />
         ) : errorCode === 'PHOENIX_DISABLED' || errorCode === 'PHOENIX_UNREACHABLE' ? (
           <PhoenixUnavailablePanel status={null} />
         ) : error ? (
           <ErrorState message={error} onRetry={() => load(cursorStack[pageIndex] ?? null)} />
         ) : loading ? (
-          <div className="p-6 space-y-3">{[1, 2, 3, 4].map(i => <div key={i} className="h-14 bg-[var(--surface)] rounded-card animate-pulse" />)}</div>
+          <div className="p-6 space-y-3">{[1, 2, 3, 4].map(i => <div key={i} className="h-14 bg-[var(--surface)] rounded-control animate-pulse" />)}</div>
         ) : sessions.length === 0 ? (
-          <EmptyState icon="fa-comments" title="No sessions yet" message="Sessions appear once students start multi-turn conversations with the tutor." />
+          <EmptyState title="No sessions yet" message="Sessions appear once students start multi-turn conversations with the tutor." />
         ) : (
           <>
             <table className="w-full">
               <thead>
-                <tr className="border-b border-[var(--border)] bg-[var(--surface)]">
-                  <th className="text-left px-5 py-3.5 text-[11px] font-semibold text-[var(--muted)]">Session</th>
-                  <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-[var(--muted)]">First activity</th>
-                  <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-[var(--muted)]">Last activity</th>
-                  <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-[var(--muted)]">Traces</th>
-                  <th className="text-left px-4 py-3.5 text-[11px] font-semibold text-[var(--muted)]">Duration</th>
+                <tr className="border-b border-[var(--border)] text-left text-caption text-[var(--muted)]">
+                  <th className="px-5 py-3 font-medium">Session</th>
+                  <th className="px-4 py-3 font-medium">First activity</th>
+                  <th className="px-4 py-3 font-medium">Last activity</th>
+                  <th className="px-4 py-3 font-medium">Requests</th>
+                  <th className="px-4 py-3 font-medium">Failed</th>
+                  <th className="px-4 py-3 font-medium">Total answer time</th>
+                  <th className="px-4 py-3 font-medium">Question types</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--border)]">
                 {sessions.map(s => (
                   <tr key={s.sessionId} onClick={() => router.push(`/admin/rag-traces/sessions/${encodeURIComponent(s.sessionId)}`)} className="hover:bg-[var(--surface)] cursor-pointer transition-colors">
-                    <td className="px-5 py-3.5 text-caption font-mono text-[var(--text)]">{s.sessionId}</td>
-                    <td className="px-4 py-3.5 text-caption text-[var(--muted)]">{new Date(s.firstActivity).toLocaleString()}</td>
-                    <td className="px-4 py-3.5 text-caption text-[var(--muted)]">{new Date(s.lastActivity).toLocaleString()}</td>
-                    <td className="px-4 py-3.5 text-caption font-semibold text-[var(--text)]">{s.traceCount}</td>
-                    <td className="px-4 py-3.5 text-caption text-[var(--muted)] tabular-nums">{fmtMs(s.totalDurationMs)}</td>
+                    <td className="px-5 py-3.5 text-caption text-[var(--text)]">{s.sessionId}</td>
+                    <td className="px-4 py-3.5 text-caption text-[var(--text)]">{fmtDateTime(s.firstActivity)}</td>
+                    <td className="px-4 py-3.5 text-caption text-[var(--text)]">{fmtDateTime(s.lastActivity)}</td>
+                    <td className="px-4 py-3.5 text-caption text-[var(--text)] tabular-nums">{s.traceCount}</td>
+                    <td className={`px-4 py-3.5 text-caption tabular-nums ${s.errorCount ? 'font-medium text-[var(--gold)]' : 'text-[var(--text)]'}`}>
+                      {s.errorCount ?? '—'}
+                    </td>
+                    <td className="px-4 py-3.5 text-caption text-[var(--text)] tabular-nums">{fmtMs(s.totalDurationMs)}</td>
+                    <td className="px-4 py-3.5 text-caption text-[var(--text)]">
+                      {s.routes?.length ? s.routes.map(routeLabel).join(', ') : '—'}
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-            <CursorPagination hasPrev={pageIndex > 0} hasNext={!!nextCursor} onPrev={goPrev} onNext={goNext} loading={loading} label={`${sessions.length} session${sessions.length !== 1 ? 's' : ''} on this page`} />
           </>
         )}
       </div>
+      {/* Outside the card: inside it, this had a table row's width,
+          padding and top rule, so it read as one more row. */}
+      {!error && !loading && sessions.length > 0 && (
+        <CursorPagination hasPrev={pageIndex > 0} hasNext={!!nextCursor} onPrev={goPrev} onNext={goNext} loading={loading} label={`${sessions.length} session${sessions.length !== 1 ? 's' : ''} on this page`} />
+      )}
     </div>
   );
 }

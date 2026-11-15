@@ -1,5 +1,6 @@
 import { getTraces } from '@arizeai/phoenix-client/traces';
 import { getSpans } from '@arizeai/phoenix-client/spans';
+import { query } from '../../config/database';
 import { env } from '../../config/env';
 import { getPhoenixClient, phoenixProject, withPhoenixRetry } from './phoenix-client';
 import { getPhoenixCapabilities, type PhoenixCapabilities } from './capabilities';
@@ -9,6 +10,7 @@ import { logger } from '../../utils/logger';
 import { mapPhoenixSpan, extractTraceSummary } from './normalize';
 import type { RawPhoenixSpan } from './normalize';
 import { computeMemoryMetrics, computeZeroRetrievalMetric, computeFallbackMetrics, unavailableMetric } from './overview-metrics';
+import { listTraceSummariesFromRequestLog } from './traces.service';
 import { OBSERVABILITY_SCHEMA_VERSION } from '../../observability/types';
 import type { DistributionResult, FallbackBreakdown, MemoryMetrics, MetricResult, OverviewMetrics, TelemetryCoverage, TraceSummary, ZeroRetrievalMetric } from './types';
 
@@ -32,6 +34,134 @@ function percentile(sorted: number[], p: number): number {
   if (sorted.length === 0) return 0;
   const idx = Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1);
   return sorted[Math.max(0, idx)];
+}
+
+/**
+ * The overview's totals, counted in SQL over every matching request.
+ *
+ * They used to be derived from the rows OVERVIEW_TRACE_LIMIT had already
+ * fetched, so "Requests" printed 500 as soon as there were 500 or more: the
+ * cap, shown as the total. Every figure resting on it was really "of the most
+ * recent 500" with nothing saying so, and the Errors page put those counts
+ * above a list that had no such cap.
+ *
+ * count(*) and percentile_cont do not care how many rows there are, so these
+ * are the real numbers. The distributions further down still come from the
+ * fetched sample, and now say so.
+ */
+interface LogTotalsRow {
+  total: string; success_count: string; error_count: string;
+  prompt_tokens: string; completion_tokens: string;
+  avg_ms: number; min_ms: number; max_ms: number; p50: number; p95: number; p99: number;
+  first_at: Date | null; last_at: Date | null;
+}
+interface ErrorCodeRow { error_code: string; n: string }
+interface BucketRow {
+  bucket: Date; request_count: string; avg_ms: number; p95_ms: number;
+  prompt_tokens: string; completion_tokens: string; success_count: string; error_count: string;
+}
+
+const LOG_STATUS: Record<string, string> = { SUCCESS: 'SUCCESS', OK: 'SUCCESS', ERROR: 'ERROR' };
+const LOG_INT_ID = /^\d{1,9}$/;
+
+// The same base predicate the trace list uses, so the totals describe exactly
+// the rows that list is able to show.
+function overviewWhere(filters: OverviewFilters): { where: string; params: unknown[] } {
+  const parts: string[] = ['exported_to_phoenix'];
+  const params: unknown[] = [];
+  const param = (v: unknown): string => { params.push(v); return `$${params.length}`; };
+
+  if (filters.startTime) parts.push(`created_at >= ${param(filters.startTime)}::timestamptz`);
+  if (filters.endTime) parts.push(`created_at <= ${param(filters.endTime)}::timestamptz`);
+  if (filters.lectureId) parts.push(LOG_INT_ID.test(filters.lectureId) ? `lecture_id = ${param(Number(filters.lectureId))}` : 'FALSE');
+  if (filters.sessionId) parts.push(LOG_INT_ID.test(filters.sessionId) ? `session_id = ${param(Number(filters.sessionId))}` : 'FALSE');
+  if (filters.route) parts.push(`route = ${param(filters.route)}`);
+  if (filters.status) {
+    const mapped = LOG_STATUS[filters.status.toUpperCase()];
+    parts.push(mapped ? `status = ${param(mapped)}` : 'FALSE');
+  }
+  return { where: parts.join(' AND '), params };
+}
+
+async function totalsFromRequestLog(filters: OverviewFilters) {
+  const { where, params } = overviewWhere(filters);
+
+  const [totalsRes, errorsRes] = await Promise.all([
+    query<LogTotalsRow>(`
+      SELECT count(*)::text AS total,
+             count(*) FILTER (WHERE status = 'SUCCESS')::text AS success_count,
+             count(*) FILTER (WHERE status = 'ERROR')::text AS error_count,
+             coalesce(sum(input_tokens), 0)::text AS prompt_tokens,
+             coalesce(sum(output_tokens), 0)::text AS completion_tokens,
+             coalesce(avg(total_ms), 0)::float8 AS avg_ms,
+             coalesce(min(total_ms), 0)::float8 AS min_ms,
+             coalesce(max(total_ms), 0)::float8 AS max_ms,
+             coalesce(percentile_cont(0.5)  WITHIN GROUP (ORDER BY total_ms), 0)::float8 AS p50,
+             coalesce(percentile_cont(0.95) WITHIN GROUP (ORDER BY total_ms), 0)::float8 AS p95,
+             coalesce(percentile_cont(0.99) WITHIN GROUP (ORDER BY total_ms), 0)::float8 AS p99,
+             min(created_at - make_interval(secs => total_ms::float8 / 1000)) AS first_at,
+             max(created_at) AS last_at
+        FROM rag_request_log
+       WHERE ${where}`, params),
+    query<ErrorCodeRow>(`
+      SELECT error_code, count(*)::text AS n
+        FROM rag_request_log
+       WHERE ${where} AND error_code IS NOT NULL
+       GROUP BY error_code
+       ORDER BY count(*) DESC, error_code
+       LIMIT 10`, params),
+  ]);
+
+  const t = totalsRes.rows[0];
+  const total = Number(t?.total ?? 0);
+  const firstAt = t?.first_at ? new Date(t.first_at) : null;
+  const lastAt = t?.last_at ? new Date(t.last_at) : null;
+
+  // The bucket width depends on how wide the range turns out to be, so the
+  // series is a second round trip rather than a guess at the width.
+  let timeSeries: OverviewMetrics['timeSeries'] = [];
+  if (total > 0 && firstAt && lastAt) {
+    const widthSec = bucketWidthMs(Math.max(1, lastAt.getTime() - firstAt.getTime())) / 1000;
+    const seriesParams = [...params, widthSec];
+    const w = `$${seriesParams.length}`;
+    const { rows } = await query<BucketRow>(`
+      SELECT to_timestamp(floor(extract(epoch FROM started_at)::float8 / ${w}::float8) * ${w}::float8) AS bucket,
+             count(*)::text AS request_count,
+             coalesce(avg(total_ms), 0)::float8 AS avg_ms,
+             coalesce(percentile_cont(0.95) WITHIN GROUP (ORDER BY total_ms), 0)::float8 AS p95_ms,
+             coalesce(sum(input_tokens), 0)::text AS prompt_tokens,
+             coalesce(sum(output_tokens), 0)::text AS completion_tokens,
+             count(*) FILTER (WHERE status = 'SUCCESS')::text AS success_count,
+             count(*) FILTER (WHERE status = 'ERROR')::text AS error_count
+        FROM (SELECT total_ms, input_tokens, output_tokens, status,
+                     created_at - make_interval(secs => total_ms::float8 / 1000) AS started_at
+                FROM rag_request_log
+               WHERE ${where}) q
+       GROUP BY 1
+       ORDER BY 1`, seriesParams);
+    timeSeries = rows.map(r => ({
+      bucket: new Date(r.bucket).toISOString(),
+      requestCount: Number(r.request_count),
+      avgLatencyMs: r.avg_ms,
+      p95LatencyMs: r.p95_ms,
+      promptTokens: Number(r.prompt_tokens),
+      completionTokens: Number(r.completion_tokens),
+      successCount: Number(r.success_count),
+      errorCount: Number(r.error_count),
+    }));
+  }
+
+  return {
+    total,
+    successCount: Number(t?.success_count ?? 0),
+    failedCount: Number(t?.error_count ?? 0),
+    promptTokens: Number(t?.prompt_tokens ?? 0),
+    completionTokens: Number(t?.completion_tokens ?? 0),
+    latency: { avg: t?.avg_ms ?? 0, min: t?.min_ms ?? 0, max: t?.max_ms ?? 0, p50: t?.p50 ?? 0, p95: t?.p95 ?? 0, p99: t?.p99 ?? 0 },
+    firstAt, lastAt,
+    mostFrequentErrors: errorsRes.rows.map(r => ({ errorCode: r.error_code, count: Number(r.n) })),
+    timeSeries,
+  };
 }
 
 // Picks a bucket width so a chart never renders more than ~60 points
@@ -126,6 +256,49 @@ export function unavailableEnrichedMetrics(reason: string): EnrichedOverviewMetr
     fallbackCount: unavailableMetric(reason),
     fallbackBreakdown: unavailableMetric(reason),
     telemetryCoverage: { ...ZERO_COVERAGE },
+  };
+}
+
+// The same metrics, read straight off the request log.
+//
+// The Phoenix path below exists only because Phoenix's trace list carries no
+// span attributes, so route, model and memory have to be recovered with a
+// second, sampled span fetch. rag_request_log stores all three as columns, so
+// when it is on there is nothing to sample and nothing to enrich: every figure
+// covers the same rows the counts and the trace tables cover.
+//
+// retrievalCount is not a column on the log, so the zero-retrieval metric
+// reports honestly that it had nothing to measure rather than reading the
+// missing value as a zero.
+export function enrichedMetricsFromLog(counted: TraceSummary[], totalCount?: number): EnrichedOverviewMetrics {
+  // These read every row they are given, but they are only given the newest
+  // OVERVIEW_TRACE_LIMIT. When that is fewer than the real total they are a
+  // sample, and the charts say so rather than implying they cover everything.
+  const isSample = totalCount !== undefined && counted.length < totalCount;
+  const routeCounts: Record<string, number> = {};
+  const modelCounts: Record<string, number> = {};
+  for (const t of counted) {
+    const routeKey = t.route ?? 'unknown';
+    routeCounts[routeKey] = (routeCounts[routeKey] ?? 0) + 1;
+    if (t.model) modelCounts[t.model] = (modelCounts[t.model] ?? 0) + 1;
+  }
+
+  const sampleSize = counted.length;
+  const { count: fallbackCount, breakdown: fallbackBreakdown } = computeFallbackMetrics(counted, isSample, sampleSize);
+  const eligibleTraces = counted.filter(t => t.schemaVersion === OBSERVABILITY_SCHEMA_VERSION).length;
+
+  return {
+    routeDistribution: { data: routeCounts, available: true, sampled: isSample, sampleSize },
+    modelDistribution: { data: modelCounts, available: true, sampled: isSample, sampleSize },
+    memory: computeMemoryMetrics(counted, isSample, sampleSize),
+    zeroRetrievalCount: computeZeroRetrievalMetric(counted, isSample, sampleSize),
+    fallbackCount,
+    fallbackBreakdown,
+    telemetryCoverage: {
+      totalTraces: counted.length,
+      eligibleTraces,
+      legacyOrIncompleteTraces: counted.length - eligibleTraces,
+    },
   };
 }
 
@@ -283,9 +456,43 @@ export async function computeOverview(filters: OverviewFilters): Promise<Overvie
   const includedTraceIds = new Set(traces.map(t => t.traceId));
   const spansInScope = allSpans.filter(s => includedTraceIds.has(s.traceId));
 
-  const latencies = traces.map(t => t.durationMs).sort((a, b) => a - b);
-  const successCount = traces.filter(t => t.status === 'SUCCESS' || t.status === 'OK').length;
-  const failedCount = traces.filter(t => t.status === 'ERROR').length;
+  // Two sources, each answering what only it can answer.
+  //
+  // `traces` (from Phoenix) stays the source for everything span-level: span
+  // kinds, the slowest operations, and the enriched route / model / memory
+  // metrics, none of which exist outside the tracing data.
+  //
+  // `counted` is the source for every "how many / how long" figure. With the
+  // request log on, the trace tables on these pages read rag_request_log, so
+  // the figures above them must be computed from the same rows. Phoenix keeps
+  // its own, shorter history, and counting from it printed "Total requests: 1"
+  // above a list of a hundred requests. `environment` is not a column on the
+  // request log, so a filtered-by-environment overview keeps counting from
+  // Phoenix rather than quietly ignoring the filter.
+  const countFromLog = env.OBSERVABILITY.REQUEST_LOG_ENABLED && !filters.environment;
+  const counted: TraceSummary[] = countFromLog
+    ? await listTraceSummariesFromRequestLog({
+        startTime: filters.startTime,
+        endTime: filters.endTime,
+        lectureId: filters.lectureId,
+        sessionId: filters.sessionId,
+        route: filters.route,
+        status: filters.status,
+        sort: 'start_time',
+        order: 'desc',
+      }, OVERVIEW_TRACE_LIMIT)
+    : traces;
+
+  // `counted` is at most OVERVIEW_TRACE_LIMIT rows and is now only a SAMPLE,
+  // used for the route / model / memory breakdowns. Every count, rate,
+  // latency and token figure comes from `totals`, which SQL computes over
+  // every matching request however many there are.
+  const totals = countFromLog ? await totalsFromRequestLog(filters) : null;
+
+  const latencies = counted.map(t => t.durationMs).sort((a, b) => a - b);
+  const totalCount = totals ? totals.total : counted.length;
+  const successCount = totals ? totals.successCount : counted.filter(t => t.status === 'SUCCESS' || t.status === 'OK').length;
+  const failedCount = totals ? totals.failedCount : counted.filter(t => t.status === 'ERROR').length;
 
   const llmSpans = spansInScope.filter(s => s.kind === 'LLM');
   const retrievalSpans = spansInScope.filter(s => s.kind === 'RETRIEVER');
@@ -301,9 +508,9 @@ export async function computeOverview(filters: OverviewFilters): Promise<Overvie
   // fixes. They're computed below from computeEnrichedOverviewMetrics's
   // single batched getSpans() result instead, same as route/model.
 
-  const totalPromptTokens = traces.reduce((s, t) => s + (t.promptTokens ?? 0), 0);
-  const totalCompletionTokens = traces.reduce((s, t) => s + (t.completionTokens ?? 0), 0);
-  const totalTokens = traces.reduce((s, t) => s + (t.totalTokens ?? 0), 0);
+  const totalPromptTokens = counted.reduce((s, t) => s + (t.promptTokens ?? 0), 0);
+  const totalCompletionTokens = counted.reduce((s, t) => s + (t.completionTokens ?? 0), 0);
+  const totalTokens = counted.reduce((s, t) => s + (t.totalTokens ?? 0), 0);
 
   const countBy = <T,>(items: T[], key: (item: T) => string | null): Record<string, number> => {
     const out: Record<string, number> = {};
@@ -325,28 +532,41 @@ export async function computeOverview(filters: OverviewFilters): Promise<Overvie
     .slice(0, 10);
 
   const errorCounts = new Map<string, number>();
-  for (const t of traces) {
+  for (const t of counted) {
     if (t.errorCode) errorCounts.set(t.errorCode, (errorCounts.get(t.errorCode) ?? 0) + 1);
   }
-  const mostFrequentErrors = Array.from(errorCounts.entries())
+  const mostFrequentErrors = totals ? totals.mostFrequentErrors : Array.from(errorCounts.entries())
     .map(([errorCode, count]) => ({ errorCode, count }))
     .sort((a, b) => b.count - a.count)
     .slice(0, 10);
 
   const { routeDistribution, modelDistribution, memory, zeroRetrievalCount, fallbackCount, fallbackBreakdown, telemetryCoverage } =
-    await computeEnrichedOverviewMetrics(traces, caps);
+    countFromLog ? enrichedMetricsFromLog(counted, totals?.total) : await computeEnrichedOverviewMetrics(traces, caps);
 
   const metrics: OverviewMetrics = {
+    // The range is now the real first and last request, not the oldest and
+    // newest of the 500 that happened to be fetched.
     range: {
-      startTime: filters.startTime ?? traces[traces.length - 1]?.timestamp ?? new Date(0).toISOString(),
-      endTime: filters.endTime ?? traces[0]?.timestamp ?? new Date().toISOString(),
+      startTime: filters.startTime ?? totals?.firstAt?.toISOString() ?? counted[counted.length - 1]?.timestamp ?? new Date(0).toISOString(),
+      endTime: filters.endTime ?? totals?.lastAt?.toISOString() ?? counted[0]?.timestamp ?? new Date().toISOString(),
     },
-    totalTraces: traces.length,
+    totalTraces: totalCount,
     successfulTraces: successCount,
     failedTraces: failedCount,
-    successRate: traces.length > 0 ? successCount / traces.length : 0,
-    errorRate: traces.length > 0 ? failedCount / traces.length : 0,
-    latencyMs: {
+    successRate: totalCount > 0 ? successCount / totalCount : 0,
+    errorRate: totalCount > 0 ? failedCount / totalCount : 0,
+    // percentile_cont interpolates between rows where the JS helper picked
+    // the nearest one, so these move slightly, and they are now over every
+    // request rather than the newest 500.
+    latencyMs: totals ? {
+      avg: totals.latency.avg,
+      median: totals.latency.p50,
+      p90: totals.latency.p95,
+      p95: totals.latency.p95,
+      p99: totals.latency.p99,
+      min: totals.latency.min,
+      max: totals.latency.max,
+    } : {
       avg: latencies.length > 0 ? latencies.reduce((a, b) => a + b, 0) / latencies.length : 0,
       median: percentile(latencies, 50),
       p90: percentile(latencies, 90),
@@ -358,10 +578,10 @@ export async function computeOverview(filters: OverviewFilters): Promise<Overvie
     totalSpans: spansInScope.length,
     avgSpansPerTrace: traces.length > 0 ? spansInScope.length / traces.length : 0,
     tokens: {
-      prompt: totalPromptTokens,
-      completion: totalCompletionTokens,
-      total: totalTokens,
-      avgPerRequest: traces.length > 0 ? totalTokens / traces.length : 0,
+      prompt: totals ? totals.promptTokens : totalPromptTokens,
+      completion: totals ? totals.completionTokens : totalCompletionTokens,
+      total: totals ? totals.promptTokens + totals.completionTokens : totalTokens,
+      avgPerRequest: totalCount > 0 ? (totals ? totals.promptTokens + totals.completionTokens : totalTokens) / totalCount : 0,
     },
     llmCallCount: llmSpans.length,
     retrievalCallCount: retrievalSpans.length,
@@ -372,18 +592,20 @@ export async function computeOverview(filters: OverviewFilters): Promise<Overvie
     fallbackBreakdown,
     telemetryCoverage,
     routeDistribution,
-    statusDistribution: countBy(traces, t => t.status),
+    statusDistribution: totals ? { SUCCESS: successCount, ERROR: failedCount } : countBy(counted, t => t.status),
     spanKindDistribution: countBy(spansInScope, s => s.kind),
     modelDistribution,
     slowestOperations,
     mostFrequentErrors,
-    timeSeries: buildTimeSeries(traces),
+    timeSeries: totals ? totals.timeSeries : buildTimeSeries(counted),
   };
 
   const value: OverviewResult = {
     metrics,
-    coveredTraceCount: traces.length,
-    truncated: result.traces.length >= OVERVIEW_TRACE_LIMIT,
+    coveredTraceCount: totalCount,
+    // Now means "the breakdowns below are from a sample", not "the counts are
+    // short". The counts cannot be short any more.
+    truncated: totals ? counted.length < totals.total : result.traces.length >= OVERVIEW_TRACE_LIMIT,
   };
   overviewCache.set(cacheKey, value, env.OBSERVABILITY.PHOENIX_OVERVIEW_CACHE_TTL_MS);
   return value;

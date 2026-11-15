@@ -13,6 +13,7 @@ import { GET_QUESTIONS_PER_LECTURE } from '@/graphql/analytics.queries';
 import { DBLecture } from '@/types';
 import { DBCourse } from '@/types/course';
 import { AdminPageHero } from '@/components/admin/AdminPageHero';
+import { btnPrimary, btnSecondary, btnRow } from '@/components/admin/buttons';
 import { DatasetManager } from '@/components/admin/DatasetManager';
 
 interface QnaChunk { id: number; topic: string | null; question: string; answer: string; startTime: string | null; endTime: string | null; keywords: string | null }
@@ -44,7 +45,7 @@ const STATUS: Record<string, { label: string; note: string; attention: boolean }
 };
 
 const fieldClass = 'w-full rounded-control border border-[var(--border)] bg-[var(--card)] px-3.5 py-2.5 text-label text-[var(--text)] outline-none transition-colors focus:border-[var(--muted)] placeholder:text-[var(--muted2)]';
-const outlineBtn = 'rounded-control border border-[var(--border)] px-3.5 py-2 text-caption font-semibold text-[var(--text)] hover:bg-[var(--surface)] transition-colors disabled:opacity-50';
+const outlineBtn = btnRow;
 
 interface Props { params: { id: string } }
 
@@ -67,6 +68,9 @@ export default function LectureDetailPage({ params }: Props) {
   const [chunkSearchInput, setChunkSearchInput] = useState('');
   const [chunkSearch,      setChunkSearch]      = useState('');
   const [chunkPage,        setChunkPage]        = useState(1);
+  // Which long pieces the reader has opened. Keyed by chunk id, so it does not
+  // matter that the list repaginates underneath it.
+  const [openChunks,       setOpenChunks]       = useState<Set<number>>(new Set());
   const CHUNK_PAGE_SIZE = 10;
 
   // Search runs on the server (question, answer, topic); wait for a pause in typing.
@@ -320,10 +324,10 @@ export default function LectureDetailPage({ params }: Props) {
             {editError && <p role="alert" className="text-caption text-red-700">{editError}</p>}
 
             <div className="flex gap-2 pt-1">
-              <button type="submit" disabled={updating} className="h-10 rounded-control bg-[var(--accent)] px-5 text-label font-semibold text-white hover:bg-[var(--accent-deep)] transition-colors disabled:opacity-50">
+              <button type="submit" disabled={updating} className={btnPrimary}>
                 {updating ? 'Saving…' : 'Save Changes'}
               </button>
-              <button type="button" onClick={() => setEditMode(false)} className="h-10 rounded-control border border-[var(--border)] px-4 text-label font-semibold text-[var(--text)] hover:bg-[var(--surface)] transition-colors">
+              <button type="button" onClick={() => setEditMode(false)} className={btnSecondary}>
                 Cancel
               </button>
             </div>
@@ -379,13 +383,18 @@ export default function LectureDetailPage({ params }: Props) {
           <div className="flex flex-wrap items-baseline justify-between gap-3 mb-4">
             <div>
               <h2 className="text-h3 font-semibold text-[var(--text)]">Dataset Contents</h2>
+              {/* Not "question and answer pairs". That is only true of a
+                  lecture built from the Excel template. A lecture built from a
+                  .docx or PDF is split into numbered excerpts, so this line
+                  was calling rows that read "Source excerpt … Part 3" question
+                  and answer pairs. "Pieces" is accurate for both. */}
               <p className="text-caption text-[var(--muted)] mt-0.5">
-                The question and answer pairs the tutor answers from.
+                The pieces of lecture material the tutor searches when answering.
               </p>
             </div>
             {chunkTotal > 0 && (
               <span className="text-caption text-[var(--muted)] tabular-nums shrink-0">
-                {chunkTotal} {chunkTotal === 1 ? 'pair' : 'pairs'}{chunkSearch ? ' matching' : ''}
+                {chunkTotal} {chunkTotal === 1 ? 'piece' : 'pieces'}{chunkSearch ? ' matching' : ''}
               </span>
             )}
           </div>
@@ -395,7 +404,10 @@ export default function LectureDetailPage({ params }: Props) {
             <input
               value={chunkSearchInput}
               onChange={e => setChunkSearchInput(e.target.value)}
-              placeholder="Search questions, answers or topics"
+              /* Neutral wording. A lecture built from a .docx has no
+                 questions, answers or topics in it: its pieces are numbered
+                 excerpts, and this box searches their text just the same. */
+              placeholder="Search this lecture's material"
               className="w-full rounded-control border border-[var(--border)] bg-[var(--card)] pl-10 pr-4 py-2.5 text-label text-[var(--text)] outline-none transition-colors focus:border-[var(--muted)] placeholder:text-[var(--muted2)]"
             />
           </div>
@@ -406,7 +418,7 @@ export default function LectureDetailPage({ params }: Props) {
             </div>
           ) : pagedChunks.length === 0 ? (
             <p className="py-10 text-center text-label text-[var(--muted)]">
-              {chunkSearch ? 'Nothing matches that search.' : 'This dataset has no pairs.'}
+              {chunkSearch ? 'Nothing matches that search.' : 'This dataset has no pieces.'}
             </p>
           ) : (
             <ul className="space-y-5">
@@ -416,7 +428,29 @@ export default function LectureDetailPage({ params }: Props) {
                     <p className="text-caption text-[var(--muted)] mb-1">{chunk.topic}</p>
                   )}
                   <p className="text-label font-semibold text-[var(--text)]">{chunk.question}</p>
-                  <p className="text-label text-[var(--muted)] mt-1 leading-relaxed line-clamp-3">{chunk.answer}</p>
+                  {/* Clamped to three lines, with a way out. An Excel answer
+                      usually fits; a document excerpt does not, so this list
+                      could show the first three lines of a piece and no way to
+                      read the rest. That makes it impossible to check what the
+                      tutor is actually searching, which is the whole point of
+                      the section. */}
+                  <p className={`text-label text-[var(--muted)] mt-1 leading-relaxed whitespace-pre-wrap ${
+                    openChunks.has(chunk.id) ? '' : 'line-clamp-3'
+                  }`}>
+                    {chunk.answer}
+                  </p>
+                  {chunk.answer.length > 220 && (
+                    <button
+                      onClick={() => setOpenChunks(prev => {
+                        const next = new Set(prev);
+                        if (next.has(chunk.id)) next.delete(chunk.id); else next.add(chunk.id);
+                        return next;
+                      })}
+                      className="mt-1 text-caption font-semibold text-[var(--accent)] hover:underline"
+                    >
+                      {openChunks.has(chunk.id) ? 'Show less' : 'Show all'}
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>

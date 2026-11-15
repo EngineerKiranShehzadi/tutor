@@ -7,9 +7,12 @@ import {
 } from '@/graphql/course.queries';
 import { DBCourse } from '@/types/course';
 import { AdminPageHero } from '@/components/admin/AdminPageHero';
+import { btnPrimary, btnRow, btnSecondary } from '@/components/admin/buttons';
 
 const inputStyle = 'w-full rounded-control border border-[var(--border)] bg-[var(--card)] px-3.5 py-2.5 text-label text-[var(--text)] outline-none transition-colors focus:border-[var(--muted)]';
-const outlineBtn = 'rounded-control border border-[var(--border)] px-3.5 py-2 text-caption font-semibold text-[var(--text)] hover:bg-[var(--surface)] transition-colors';
+// Defined once in components/admin/buttons.ts; a local copy here is how the
+// same button ended up at two different sizes.
+const outlineBtn = btnRow;
 const initial = { title: '', subtitle: '', description: '' };
 
 type Pending = { id: string; action: 'archive' | 'delete' } | null;
@@ -336,10 +339,10 @@ export default function AdminCoursesPage() {
               {formError && <p role="alert" className="text-caption text-red-700">{formError}</p>}
 
               <div className="flex gap-2 pt-1">
-                <button type="submit" disabled={creating || updating} className="h-10 rounded-control bg-[var(--accent)] px-5 text-label font-semibold text-white hover:bg-[var(--accent-deep)] transition-colors disabled:opacity-50">
+                <button type="submit" disabled={creating || updating} className={btnPrimary}>
                   {creating || updating ? 'Saving…' : editId ? 'Save Changes' : 'Create Course'}
                 </button>
-                <button type="button" onClick={close} className="h-10 rounded-control border border-[var(--border)] px-4 text-label font-semibold text-[var(--text)] hover:bg-[var(--surface)] transition-colors">
+                <button type="button" onClick={close} className={btnSecondary}>
                   Cancel
                 </button>
               </div>

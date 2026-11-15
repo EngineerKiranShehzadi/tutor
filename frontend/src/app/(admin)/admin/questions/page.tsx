@@ -3,8 +3,11 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useApolloClient, useQuery } from '@apollo/client';
 import { GET_LECTURE_STATUS_LIST, GET_RECENT_QUESTIONS_PAGE } from '@/graphql/analytics.queries';
+import { GET_COURSES } from '@/graphql/course.queries';
 import { AdminPageHero } from '@/components/admin/AdminPageHero';
+import { btnRow } from '@/components/admin/buttons';
 import { downloadCsv } from '@/lib/csv';
+import { responseStatusLabel, notFoundReasonLabel } from '@/lib/monitor-labels';
 
 interface RecentQuestion {
   id: number;
@@ -12,18 +15,33 @@ interface RecentQuestion {
   studentEmail: string;
   lectureId: number;
   lectureTitle: string;
+  // Every lecture belongs to exactly one course, so these are never null.
+  courseId: number;
+  courseTitle: string;
   question: string;
+  answer: string;
+  // From rag_request_log via chat_history.trace_id. Null on rows recorded
+  // before that column existed, which still have a question and an answer.
+  traceId: string | null;
+  outcome: string | null;
+  notFoundReason: string | null;
   createdAt: string;
 }
 
 interface QuestionPage { items: RecentQuestion[]; total: number; hasMore: boolean }
+
+// Past this length the answer is clamped with a toggle, so fifteen rows stay
+// scannable instead of becoming fifteen essays.
+const ANSWER_CLAMP_CHARS = 240;
 
 const PAGE_SIZE = 15;
 // Export pages through the same server API, 200 rows at a time.
 const EXPORT_PAGE = 200;
 const EXPORT_MAX = 20_000;
 
-const outlineBtn = 'rounded-control border border-[var(--border)] px-3.5 py-2 text-caption font-semibold text-[var(--text)] hover:bg-[var(--surface)] transition-colors disabled:opacity-50';
+// Defined once in components/admin/buttons.ts; a local copy here is how the
+// same button ended up at two different sizes.
+const outlineBtn = btnRow;
 
 /**
  * Questions.
@@ -34,17 +52,27 @@ const outlineBtn = 'rounded-control border border-[var(--border)] px-3.5 py-2 te
  * It is a list now, in the same shape as Recent Questions on Overview, with
  * the question first and everything else under it.
  *
- * student_questions holds the question only, so the tutor's answer cannot be
- * shown here; it lives in chat_history and is reached through Tutor Monitor.
+ * It reads chat_history, so every row is a real turn: the question, what the
+ * tutor actually replied, and what the outcome was. It used to read
+ * student_questions, a second table holding the question alone, which is why
+ * two thousand stored answers were never visible anywhere in the admin.
+ *
+ * One consequence, worth knowing: a question that errored before an answer
+ * existed has no chat_history row and is not listed here. Those are in
+ * Observability, Errors.
  */
 export default function AdminQuestions() {
   const client = useApolloClient();
   const [searchInput,   setSearchInput]   = useState('');
   const [search,        setSearch]        = useState('');
   const [lectureFilter, setLectureFilter] = useState('ALL');
+  const [courseFilter,  setCourseFilter]  = useState('ALL');
   const [page,          setPage]          = useState(1);
   const [exporting,     setExporting]     = useState(false);
   const [exportError,   setExportError]   = useState('');
+  // Which long answers the reader has opened. Cleared when the page changes,
+  // since the ids on screen are different ones.
+  const [expanded,      setExpanded]      = useState<Set<number>>(new Set());
 
   // Search runs on the server; wait for a pause in typing.
   useEffect(() => {
@@ -53,18 +81,25 @@ export default function AdminQuestions() {
   }, [searchInput]);
 
   const lectureId = lectureFilter === 'ALL' ? null : Number(lectureFilter);
-  const filters = { search: search || null, lectureId };
+  // Course ids are strings over GraphQL and numbers in the database, so the
+  // conversion happens once, here, where the variables are assembled.
+  const courseId = courseFilter === 'ALL' ? null : Number(courseFilter);
+  const filters = { search: search || null, lectureId, courseId };
   const { data, loading } = useQuery<{ recentQuestionsPage: QuestionPage }>(GET_RECENT_QUESTIONS_PAGE, {
     variables: { limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE, ...filters },
     fetchPolicy: 'cache-and-network',
   });
   const { data: lectureData } = useQuery<{ lectureStatusList: { id: number; title: string }[] }>(GET_LECTURE_STATUS_LIST);
+  const { data: courseData } = useQuery<{ courses: { id: string; title: string }[] }>(GET_COURSES, {
+    variables: { includeArchived: true },
+  });
+  const courses = courseData?.courses ?? [];
 
   const paged = data?.recentQuestionsPage.items ?? [];
   const total = data?.recentQuestionsPage.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const lectures = [...(lectureData?.lectureStatusList ?? [])].sort((a, b) => a.title.localeCompare(b.title));
-  const filtering = Boolean(search) || lectureFilter !== 'ALL';
+  const filtering = Boolean(search) || lectureFilter !== 'ALL' || courseFilter !== 'ALL';
 
   const exportCSV = async () => {
     setExporting(true); setExportError('');
@@ -79,9 +114,12 @@ export default function AdminQuestions() {
         all.push(...d.recentQuestionsPage.items);
         if (!d.recentQuestionsPage.hasMore) break;
       }
-      const rows = [['Student', 'Email', 'Lecture', 'Question', 'Asked']];
+      // The answer and the outcome go in the file too. An export of questions
+      // without the replies is not a record anyone can review.
+      const rows = [['Student', 'Email', 'Course', 'Lecture', 'Question', 'Answer', 'Outcome', 'Asked']];
       all.forEach(q => rows.push([
-        q.studentName, q.studentEmail, q.lectureTitle, q.question,
+        q.studentName, q.studentEmail, q.courseTitle, q.lectureTitle, q.question, q.answer,
+        q.outcome ? responseStatusLabel(q.outcome) : '',
         new Date(q.createdAt).toLocaleString(),
       ]));
       downloadCsv('questions.csv', rows);
@@ -97,7 +135,7 @@ export default function AdminQuestions() {
       {/* Titled "Questions", the same word the sidebar uses. */}
       <AdminPageHero
         title="Questions"
-        subtitle="Everything students have asked the tutor, newest first."
+        subtitle="Every question the tutor answered, with its reply, newest first. Questions that failed before an answer are under Observability, Errors."
         action={
           <button
             onClick={() => { void exportCSV(); }}
@@ -125,6 +163,21 @@ export default function AdminQuestions() {
             placeholder="Search a question or a student name"
             className="w-full rounded-control border border-[var(--border)] bg-[var(--card)] pl-10 pr-4 py-2.5 text-label text-[var(--text)] outline-none transition-colors focus:border-[var(--muted)] placeholder:text-[var(--muted2)]"
           />
+        </div>
+        {/* Course before lecture, widest scope first. Both can be set: that is
+            simply a narrower query, and a lecture outside the chosen course
+            correctly returns nothing rather than quietly ignoring one. */}
+        <div className="relative">
+          <select
+            aria-label="Filter by course"
+            value={courseFilter}
+            onChange={e => { setCourseFilter(e.target.value); setPage(1); }}
+            className="appearance-none rounded-control border border-[var(--border)] bg-[var(--card)] pl-3.5 pr-10 py-2.5 text-label text-[var(--text)] outline-none transition-colors focus:border-[var(--muted)] max-w-[260px]"
+          >
+            <option value="ALL">All courses</option>
+            {courses.map(c => <option key={c.id} value={c.id}>{c.title}</option>)}
+          </select>
+          <i className="fas fa-chevron-down pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-[11px] text-[var(--muted2)]" aria-hidden="true" />
         </div>
         <div className="relative">
           <select
@@ -163,6 +216,31 @@ export default function AdminQuestions() {
             {paged.map(q => (
               <li key={q.id} className="py-4">
                 <p className="text-label text-[var(--text)] leading-relaxed">{q.question}</p>
+
+                {/* The reply, indented under the question it answers. A left
+                    rule rather than a tinted box: this is a transcript, and a
+                    card around every answer would turn fifteen turns into
+                    fifteen boxes. */}
+                <div className="mt-2 border-l-2 border-[var(--border)] pl-3">
+                  <p className={`text-label text-[var(--muted)] leading-relaxed whitespace-pre-wrap ${
+                    expanded.has(q.id) || q.answer.length <= ANSWER_CLAMP_CHARS ? '' : 'line-clamp-3'
+                  }`}>
+                    {q.answer}
+                  </p>
+                  {q.answer.length > ANSWER_CLAMP_CHARS && (
+                    <button
+                      onClick={() => setExpanded(prev => {
+                        const next = new Set(prev);
+                        if (next.has(q.id)) next.delete(q.id); else next.add(q.id);
+                        return next;
+                      })}
+                      className="mt-1 text-caption font-semibold text-[var(--accent)] hover:underline"
+                    >
+                      {expanded.has(q.id) ? 'Show less' : 'Show full answer'}
+                    </button>
+                  )}
+                </div>
+
                 <p className="text-caption text-[var(--muted)] mt-1.5">
                   {/* No link to the student: recentQuestionsPage returns the
                       name and email but not the id the student page needs. */}
@@ -175,6 +253,38 @@ export default function AdminQuestions() {
                   {new Date(q.createdAt).toLocaleString(undefined, {
                     day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
                   })}
+                  {/* Outcome and trace only when the row has them. Older rows
+                      predate chat_history.trace_id, and printing "Unknown
+                      outcome" on two thousand of them would be noise, not
+                      information. */}
+                  {q.outcome && (
+                    <>
+                      {' · '}
+                      {/* The outcome is the one part of this line an admin
+                          scans for, so it steps out of the muted run of text
+                          rather than reading as part of the sentence. Same
+                          rule as System Health: gold is reserved for the state
+                          a human may need to act on, and an answered turn is
+                          not one. */}
+                      <span className={q.outcome.includes('NOT_FOUND')
+                        ? 'font-semibold text-[var(--gold)]'
+                        : 'font-medium text-[var(--text)]'}>
+                        {responseStatusLabel(q.outcome)}
+                        {q.notFoundReason ? ` (${notFoundReasonLabel(q.notFoundReason)})` : ''}
+                      </span>
+                    </>
+                  )}
+                  {q.traceId && (
+                    <>
+                      {' · '}
+                      <Link
+                        href={`/admin/rag-traces/traces/${encodeURIComponent(q.traceId)}?from=questions`}
+                        className="text-[var(--accent)] hover:underline"
+                      >
+                        View trace
+                      </Link>
+                    </>
+                  )}
                 </p>
               </li>
             ))}

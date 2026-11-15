@@ -36,15 +36,21 @@ export const GET_RECENT_QUESTIONS = gql`
 
 // One page of student questions, filtered on the server (A11).
 export const GET_RECENT_QUESTIONS_PAGE = gql`
-  query RecentQuestionsPage($limit: Int!, $offset: Int!, $search: String, $lectureId: Int) {
-    recentQuestionsPage(limit: $limit, offset: $offset, search: $search, lectureId: $lectureId) {
+  query RecentQuestionsPage($limit: Int!, $offset: Int!, $search: String, $lectureId: Int, $courseId: Int) {
+    recentQuestionsPage(limit: $limit, offset: $offset, search: $search, lectureId: $lectureId, courseId: $courseId) {
       items {
         id
         studentName
         studentEmail
         lectureId
         lectureTitle
+        courseId
+        courseTitle
         question
+        answer
+        traceId
+        outcome
+        notFoundReason
         createdAt
       }
       total
@@ -95,20 +101,25 @@ export const GET_STUDENT_JOURNEY = gql`
 `;
 
 export const GET_CONTENT_GAPS = gql`
-  query ContentGaps {
-    contentGaps {
+  query ContentGaps($days: Int, $courseId: Int) {
+    contentGaps(days: $days, courseId: $courseId) {
       lectureId
       lectureTitle
+      courseId
+      courseTitle
       questionsAsked
-      chunkCount
-      coverageScore
-      gapTopics
-      coveredTopics
+      questionsAnalysed
+      unanswered
+      questionsToAnswer
+      missingMaterial
+      offTopic
+      noMaterial
       status
-      answeredFromLecture
-      notInLecture
-      sampled
-      chunksSampled
+      missedQuestions {
+        question
+        askedCount
+        lastAskedAt
+      }
       windowDays
     }
   }

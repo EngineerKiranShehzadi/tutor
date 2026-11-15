@@ -97,6 +97,41 @@ export const buildSummaryBatches = (chunks: QnaChunk[], maxChars = MAX_CHARS_PER
 
 const DEFAULT_SUMMARY_TIMEOUT_MS = 20000;
 
+/**
+ * How many batch summaries are in flight at once.
+ *
+ * They used to run strictly one after another, so a lecture that split into
+ * ten batches cost ten round trips end to end: measured at 130 s typical,
+ * 186 s at worst, with a student watching. Nothing about a batch depends on
+ * another batch — each one is summarised only from its own content — so the
+ * sequence bought nothing.
+ *
+ * Four at a time, not all of them: a provider rate limit turns an unbounded
+ * fan-out into a wall of 429s, which is slower than the sequence it replaced
+ * and fails instead of waiting.
+ */
+export const SUMMARY_BATCH_CONCURRENCY = 4;
+
+/**
+ * Run `work` over `items` with at most `limit` in flight, keeping results in
+ * the order the items came in. Order matters here: the partial summaries are
+ * labelled "Section 1", "Section 2" for the combine step, and shuffling them
+ * would reorder the lecture.
+ */
+async function mapWithLimit<T, R>(items: T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const runner = async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await work(items[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, runner));
+  return results;
+}
+
 const SUMMARY_SYSTEM_PROMPT = `You are summarizing part of a lecture for a student-facing AI tutor.
 Use ONLY the lecture content provided below. Do NOT use outside knowledge, and do NOT invent facts that aren't present in it.
 Produce a concise, well-organized summary of the topics and key points covered in this content.`;
@@ -183,6 +218,55 @@ const combineSummariesWithGemini = async (
   }
 };
 
+/**
+ * The stored summary for a lecture's current material, if there is one.
+ *
+ * `versionId` is normally null: the lecture's active version is resolved in
+ * SQL, exactly as getAllLectureChunks resolves it, so the summary that comes
+ * back is always the one built from the chunks that would be summarised now.
+ */
+export const getStoredLectureSummary = async (
+  lectureId: number, versionId?: number | null
+): Promise<string | null> => {
+  try {
+    const { rows } = await query<{ summary: string }>(
+      `SELECT s.summary
+         FROM lecture_summaries s
+        WHERE s.lecture_id = $1
+          AND s.version_id = COALESCE($2::int, (SELECT active_version_id FROM lectures WHERE id = $1))`,
+      [lectureId, versionId ?? null]
+    );
+    return rows[0]?.summary ?? null;
+  } catch (err) {
+    // A cache that cannot be read must never stop an answer being produced.
+    logger.warn(`[LECTURE-SUMMARY] ⚠️  Could not read stored summary for lecture #${lectureId}: ${(err as Error).message}`);
+    return null;
+  }
+};
+
+/**
+ * Keep a summary for next time. Only ever called with a complete one: a
+ * partial summary carries a note saying part of the lecture is missing, and
+ * storing that would freeze a temporary outage into the lecture for good.
+ */
+export const storeLectureSummary = async (
+  lectureId: number, versionId: number | null, summary: string, batchCount: number
+): Promise<void> => {
+  try {
+    await query(
+      `INSERT INTO lecture_summaries (lecture_id, version_id, summary, batch_count)
+       SELECT $1, COALESCE($2::int, (SELECT active_version_id FROM lectures WHERE id = $1)), $3, $4
+        WHERE COALESCE($2::int, (SELECT active_version_id FROM lectures WHERE id = $1)) IS NOT NULL
+       ON CONFLICT (lecture_id, version_id)
+         DO UPDATE SET summary = EXCLUDED.summary, batch_count = EXCLUDED.batch_count, created_at = NOW()`,
+      [lectureId, versionId ?? null, summary, batchCount]
+    );
+  } catch (err) {
+    // Same again: failing to keep it costs the next student time, nothing more.
+    logger.warn(`[LECTURE-SUMMARY] ⚠️  Could not store summary for lecture #${lectureId}: ${(err as Error).message}`);
+  }
+};
+
 export interface SummarizeDeps {
   summarizeBatch?:    (chunks: QnaChunk[], lectureTitle: string, timeoutMs: number) => Promise<string | null>;
   combineSummaries?:  (partials: string[], lectureTitle: string, timeoutMs: number) => Promise<string | null>;
@@ -209,11 +293,11 @@ export const generateLectureSummary = async (
   const batches = buildSummaryBatches(chunks, opts.maxCharsPerBatch ?? MAX_CHARS_PER_BATCH);
   logger.info(`[LECTURE-SUMMARY] 📚 Summarizing ${chunks.length} chunk(s) in ${batches.length} batch(es)`);
 
-  const partials: string[] = [];
-  for (const batch of batches) {
-    const partial = await summarizeBatch(batch, lectureTitle, timeoutMs);
-    if (partial) partials.push(partial);
-  }
+  const settled = await mapWithLimit(batches, SUMMARY_BATCH_CONCURRENCY,
+    (batch) => summarizeBatch(batch, lectureTitle, timeoutMs));
+  // A failed batch yields null and is dropped; the survivors keep their
+  // original order, so "Section 2" is still the second part of the lecture.
+  const partials = settled.filter((p): p is string => !!p);
   const counts = { batchesAttempted: batches.length, batchesSucceeded: partials.length };
   if (partials.length < batches.length) {
     logger.warn(`[LECTURE-SUMMARY] ⚠️  ${batches.length - partials.length}/${batches.length} batch(es) failed`);

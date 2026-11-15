@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "db:setup": "ts-node --transpile-only src/scripts/db-setup.ts",
     "db:migrate": "ts-node --transpile-only src/scripts/db-setup.ts",
+    "db:migrate:only": "ts-node --transpile-only src/scripts/db-migrate-only.ts",
     "seed:dataset": "ts-node --transpile-only src/scripts/seed-dataset.ts",
     "seed:request-log": "ts-node --transpile-only src/scripts/seed-request-log.ts",
     "seed:retry": "ts-node --transpile-only src/scripts/retry-missing-embeddings.ts",

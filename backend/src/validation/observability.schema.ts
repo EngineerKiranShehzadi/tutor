@@ -122,6 +122,7 @@ export const monitorWindowValidators = [
 ];
 
 export const monitorAttentionValidators = [
+  ...monitorWindowValidators,
   query('limit').optional().isInt({ min: 1, max: 100 }).toInt(),
   // Kept as a string (no .toDate()): the service casts it in SQL so the
   // microsecond precision of the cursor survives the round trip.

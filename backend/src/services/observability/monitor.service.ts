@@ -23,12 +23,32 @@ export const ANSWERED_STATUSES = ['ANSWERED', 'MEMORY_HIT_ANSWERED', 'GREETING_A
 const ANSWERED = `(${ANSWERED_STATUSES.map(s => `'${s}'`).join(', ')})`;
 const VERIFIER_OK = `(${NON_PROBLEM_VERIFIER_REASONS.map(s => `'${s}'`).join(', ')})`;
 
+/**
+ * What counts as a problem worth showing an administrator.
+ *
+ * Wider than NON_PROBLEM_VERIFIER_REASONS, and deliberately so. That list is
+ * also what decides which traces get sampled into Phoenix, where a corrected
+ * answer is worth keeping for a developer to look at. On this page it is not
+ * a problem: REVISED_AND_VERIFIED means the checker caught a weak answer, the
+ * answer was rewritten, and the rewrite passed. That is the safety net doing
+ * its job, and listing it under "what went wrong" filled the table with rows
+ * reading "Answer was corrected, then passed the check" — which is not
+ * something that went wrong.
+ */
+const VERIFIER_NOT_A_PROBLEM = [...NON_PROBLEM_VERIFIER_REASONS, 'REVISED_AND_VERIFIED'];
+const VERIFIER_FINE = `(${VERIFIER_NOT_A_PROBLEM.map(s => `'${s}'`).join(', ')})`;
+
 const num = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v));
 
 // Rates are 0..1; null (not 0) when there were no requests.
 export const rate = (count: unknown, total: number): number | null => (total === 0 ? null : Number(count) / total);
 
-export const bucketUnit = (window: MonitorWindow): 'hour' | 'day' => (window === '30d' ? 'day' : 'hour');
+/**
+ * Hourly only for a single day. A week of hourly buckets is 168 of them, and
+ * a course this size fills a handful, so the chart came out as a flat line
+ * with a few spikes in it and no way to tell one day from the next.
+ */
+export const bucketUnit = (window: MonitorWindow): 'hour' | 'day' => (window === '24h' ? 'hour' : 'day');
 
 export type AttentionReason = 'error' | 'not_answered' | 'verifier' | 'format' | 'slow';
 
@@ -57,6 +77,15 @@ export interface PeriodSummary {
   notFoundRate: number | null;
   guardrailRejectedRate: number | null;
   errorRate: number | null;
+  // The count itself. The page used to multiply the rate by the total and
+  // round, which lands one off the truth often enough to matter when the
+  // honest answer is "3 failed".
+  errorCount: number;
+  // Answers that took longer than OBSERVABILITY_SLOW_TRACE_MS, and that
+  // threshold, so the page can say "3 of 25 took longer than 10 s" instead
+  // of repeating "Slow" on every row of a table.
+  slowCount: number;
+  slowThresholdMs: number;
   p50Ms: number | null;
   p95Ms: number | null;
   totalCostUsd: number | null;
@@ -81,11 +110,12 @@ async function summarizePeriod(startOffset: string, endOffset: string): Promise<
             coalesce(sum(input_tokens), 0)::float8 AS in_tokens,
             coalesce(sum(output_tokens), 0)::float8 AS out_tokens,
             count(*) FILTER (WHERE memory_skip_reason = 'PII_MASKED')::int AS memory_skipped_pii,
-            count(*) FILTER (WHERE format_repair_rejected IS NOT NULL)::int AS format_refused
+            count(*) FILTER (WHERE format_repair_rejected IS NOT NULL)::int AS format_refused,
+            count(*) FILTER (WHERE total_ms > $3)::int AS slow
        FROM rag_request_log
       WHERE created_at >= now() - $1::interval
         AND created_at <  now() - $2::interval`,
-    [startOffset, endOffset]
+    [startOffset, endOffset, env.OBSERVABILITY.SLOW_TRACE_MS]
   );
   const r = rows[0];
   const total = Number(r.total);
@@ -97,6 +127,9 @@ async function summarizePeriod(startOffset: string, endOffset: string): Promise<
     notFoundRate: rate(r.not_found, total),
     guardrailRejectedRate: rate(r.guardrail, total),
     errorRate: rate(r.errors, total),
+    errorCount: Number(r.errors),
+    slowCount: Number(r.slow),
+    slowThresholdMs: env.OBSERVABILITY.SLOW_TRACE_MS,
     p50Ms: num(r.p50),
     p95Ms: num(r.p95),
     totalCostUsd: num(r.cost),
@@ -203,7 +236,22 @@ export async function attachPhoenixLinks(rows: AttentionRow[]): Promise<Attentio
   }));
 }
 
-export async function getAttention(limit: number, before: string | null): Promise<{ rows: AttentionRow[]; nextBefore: string | null }> {
+/**
+ * The failures themselves, newest first.
+ *
+ * Two things were wrong with this list. It ignored the period, so a page set
+ * to the last 24 hours listed failures from any date in the log. And it
+ * listed anything slower than the threshold, which on a system whose typical
+ * answer already takes longer than that meant every row said "Slow" and the
+ * handful of real failures were lost among them.
+ *
+ * Being slow is now a count on the summary, not a row here. A row still
+ * carries a "Slow" tag when it happens to be slow as well, because that is
+ * useful context on a failure.
+ */
+export async function getAttention(
+  limit: number, before: string | null, window: MonitorWindow
+): Promise<{ rows: AttentionRow[]; nextBefore: string | null }> {
   // createdAt is rendered with microseconds so that passing it back as
   // `before` neither skips nor repeats rows (JS Dates stop at milliseconds).
   const { rows } = await query<Record<string, unknown>>(
@@ -217,12 +265,12 @@ export async function getAttention(limit: number, before: string | null): Promis
       WHERE (r.status = 'ERROR'
              OR r.response_status NOT IN ${ANSWERED}
              OR r.answer_verification_reason NOT IN ${VERIFIER_OK}
-             OR r.format_repair_rejected IS NOT NULL
-             OR r.total_ms > $1)
-        AND ($2::timestamptz IS NULL OR r.created_at < $2::timestamptz)
+             OR r.format_repair_rejected IS NOT NULL)
+        AND r.created_at >= now() - $3::interval
+        AND ($1::timestamptz IS NULL OR r.created_at < $1::timestamptz)
       ORDER BY r.created_at DESC, r.id DESC
-      LIMIT $3`,
-    [env.OBSERVABILITY.SLOW_TRACE_MS, before, limit]
+      LIMIT $2`,
+    [before, limit, WINDOW_INTERVAL[window]]
   );
   const slowMs = env.OBSERVABILITY.SLOW_TRACE_MS;
   const mapped: AttentionRow[] = rows.map(r => ({
@@ -248,6 +296,66 @@ export async function getAttention(limit: number, before: string | null): Promis
     }, slowMs),
   }));
   return { rows: mapped, nextBefore: mapped.length === limit ? mapped[mapped.length - 1].createdAt : null };
+}
+
+// ── 3b. Failures, grouped ────────────────────────────────────────────
+
+export interface FailureGroup {
+  responseStatus: string | null;
+  notFoundReason: string | null;
+  errorCode: string | null;
+  answerVerificationReason: string | null;
+  formatRepairRejected: string | null;
+  errored: boolean;
+  occurrences: number;
+  lectures: number;
+  lectureTitles: string[];
+  lastAt: string;
+}
+
+/**
+ * The same problem, once.
+ *
+ * A row for every failed request is how a quiet week produced fourteen rows
+ * that said the same three things, each repeating the lecture title that was
+ * already repeated above it. Error trackers solved this long ago by grouping
+ * identical events and counting them, so the list is as long as the number
+ * of distinct problems rather than the number of times they happened.
+ */
+export async function getFailureGroups(window: MonitorWindow): Promise<FailureGroup[]> {
+  const { rows } = await query<Record<string, unknown>>(
+    `SELECT r.response_status, r.not_found_reason, r.error_code,
+            r.answer_verification_reason, r.format_repair_rejected,
+            bool_or(r.status = 'ERROR') AS errored,
+            count(*)::int AS occurrences,
+            count(DISTINCT r.lecture_id)::int AS lectures,
+            (array_agg(DISTINCT l.title) FILTER (WHERE l.title IS NOT NULL))[1:3] AS lecture_titles,
+            to_char(max(r.created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS last_at
+       FROM rag_request_log r
+       LEFT JOIN lectures l ON l.id = r.lecture_id
+      WHERE r.created_at >= now() - $1::interval
+        AND (r.status = 'ERROR'
+             OR r.response_status NOT IN ${ANSWERED}
+             OR r.answer_verification_reason NOT IN ${VERIFIER_FINE}
+             OR r.format_repair_rejected IS NOT NULL)
+      GROUP BY r.response_status, r.not_found_reason, r.error_code,
+               r.answer_verification_reason, r.format_repair_rejected
+      ORDER BY occurrences DESC, last_at DESC
+      LIMIT 20`,
+    [WINDOW_INTERVAL[window]]
+  );
+  return rows.map(r => ({
+    responseStatus: (r.response_status as string | null) ?? null,
+    notFoundReason: (r.not_found_reason as string | null) ?? null,
+    errorCode: (r.error_code as string | null) ?? null,
+    answerVerificationReason: (r.answer_verification_reason as string | null) ?? null,
+    formatRepairRejected: (r.format_repair_rejected as string | null) ?? null,
+    errored: Boolean(r.errored),
+    occurrences: Number(r.occurrences),
+    lectures: Number(r.lectures),
+    lectureTitles: (r.lecture_titles as string[] | null) ?? [],
+    lastAt: String(r.last_at),
+  }));
 }
 
 // ── 4. Lectures ──────────────────────────────────────────────────────

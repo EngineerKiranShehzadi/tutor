@@ -3,6 +3,7 @@ import { useRef, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { authApi } from '@/lib/api';
 import { cn } from '@/lib/cn';
+import { fieldLabel } from '@/lib/ui';
 
 /**
  * Profile — account details and password.
@@ -293,7 +294,7 @@ export default function ProfilePage() {
                   // size. It was a 32px bordered tile, which made a decorative
                   // box heavier than the fact it was labelling.
                   <div key={item.label} className="min-w-0">
-                    <dt className="flex items-center gap-2 text-caption text-[var(--muted)]">
+                    <dt className={`flex items-center gap-2 ${fieldLabel}`}>
                       <i className={cn(item.brand ? 'fab' : 'fas', item.icon, 'text-[11px] w-3.5 text-center text-[var(--muted2)]')} />
                       {item.label}
                     </dt>

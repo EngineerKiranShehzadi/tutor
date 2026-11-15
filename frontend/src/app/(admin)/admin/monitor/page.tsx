@@ -5,10 +5,9 @@ import { AdminPageHero } from '@/components/admin/AdminPageHero';
 import { useAutoRefresh } from '@/components/observability/useAutoRefresh';
 import { StatusBanner } from '@/components/monitor/StatusBanner';
 import { WindowToggle } from '@/components/monitor/WindowToggle';
-import { SummaryCard, type Change } from '@/components/monitor/SummaryCard';
+import { Figures, type Figure } from '@/components/monitor/Figures';
 import { TrendChart } from '@/components/monitor/TrendChart';
-import { AttentionTable } from '@/components/monitor/AttentionTable';
-import { LectureTable } from '@/components/monitor/LectureTable';
+import { FailureList } from '@/components/monitor/FailureList';
 import { StageChart } from '@/components/monitor/StageChart';
 import {
   monitorApi, isCanceled, MONITOR_WINDOWS,
@@ -17,27 +16,46 @@ import {
 
 const REFRESH_MS = 60_000;
 
-const fmtMs = (ms: number) => (ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(2)} s`);
+// The two Diagnostics figures and the Phoenix links are for whoever is
+// debugging retrieval, which is the same person who turns on Advanced
+// Traces. Same flag, so a teacher running the course never meets them.
+const DEV_TOOLS = process.env.NEXT_PUBLIC_DEV_TOOLS === 'true';
+
+const fmtMs = (ms: number) => (ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`);
 const fmtPct = (r: number | null) => (r === null ? null : `${(r * 100).toFixed(1)}%`);
 const fmtUsd = (v: number | null) => (v === null ? null : `$${v.toFixed(v < 1 ? 4 : 2)}`);
-const errorCount = (p: PeriodSummary) => Math.round((p.errorRate ?? 0) * p.totalRequests);
+const n = (v: number) => v.toLocaleString();
 
-// Relative change (counts, latency, cost). null when there is no baseline.
-function relChange(cur: number | null, prev: number | null, goodWhen: Change['goodWhen']): Change | null {
-  if (cur === null || prev === null) return null;
-  if (cur === prev) return { direction: 'same', text: '', goodWhen };
-  if (prev === 0) return null;
+/**
+ * How much traffic a period needs before comparing it to the one before is
+ * worth printing.
+ *
+ * Every figure used to carry "x% vs previous period". With 25 questions this
+ * period against a few thousand left over from seeded test data, the page
+ * reported a 99% collapse in gold, twice, and "same as the previous period"
+ * under two zeros. A comparison drawn from almost no traffic is not a weak
+ * signal, it is a wrong one, so below this it is not shown at all.
+ */
+const MIN_FOR_COMPARISON = 50;
+
+const WINDOW_LABEL: Record<MonitorWindow, string> = {
+  '24h': 'Last 24 hours',
+  '7d': 'Last 7 days',
+  '30d': 'Last 30 days',
+};
+
+/** "12% more than the week before", or nothing. */
+function compare(cur: number | null, prev: number | null, enough: boolean, unit: 'pct' | 'rel'): string | undefined {
+  if (!enough || cur === null || prev === null) return undefined;
+  if (unit === 'pct') {
+    const pts = (cur - prev) * 100;
+    if (Math.abs(pts) < 0.5) return undefined;
+    return `${pts > 0 ? 'up' : 'down'} ${Math.abs(pts).toFixed(1)} points`;
+  }
+  if (prev === 0) return undefined;
   const pct = ((cur - prev) / prev) * 100;
-  if (Math.abs(pct) < 0.5) return { direction: 'same', text: '', goodWhen };
-  return { direction: pct > 0 ? 'up' : 'down', text: `${Math.abs(pct).toFixed(0)}%`, goodWhen };
-}
-
-// Percentage-point change for 0..1 rates.
-function rateChange(cur: number | null, prev: number | null, goodWhen: Change['goodWhen']): Change | null {
-  if (cur === null || prev === null) return null;
-  const pts = (cur - prev) * 100;
-  if (Math.abs(pts) < 0.05) return { direction: 'same', text: '', goodWhen };
-  return { direction: pts > 0 ? 'up' : 'down', text: `${Math.abs(pts).toFixed(1)} pt`, goodWhen };
+  if (Math.abs(pct) < 5) return undefined;
+  return `${pct > 0 ? 'up' : 'down'} ${Math.abs(pct).toFixed(0)}%`;
 }
 
 function MonitorContent() {
@@ -101,13 +119,58 @@ function MonitorContent() {
   const prev = summary?.window === windowKey ? summary.previous : null;
   const cardsLoading = loading || !cur || !prev;
 
+  // No questions in the period: there are no rates, no chart and no
+  // failures, so the page says so once instead of in four empty panels.
+  const quiet = !!cur && cur.totalRequests === 0;
+
+  // Both periods have to carry real traffic before a comparison is printed.
+  const comparable = !!cur && !!prev
+    && cur.totalRequests >= MIN_FOR_COMPARISON && prev.totalRequests >= MIN_FOR_COMPARISON;
+
+  const figures: Figure[] = [
+    {
+      label: 'Questions asked',
+      value: cur ? n(cur.totalRequests) : null,
+      note: compare(cur?.totalRequests ?? null, prev?.totalRequests ?? null, comparable, 'rel'),
+    },
+    {
+      label: 'Answered from the material',
+      value: cur ? fmtPct(cur.answeredRate) : null,
+      note: compare(cur?.answeredRate ?? null, prev?.answeredRate ?? null, comparable, 'pct'),
+    },
+    {
+      label: 'Not in the uploaded material',
+      value: cur ? fmtPct(cur.notFoundRate) : null,
+      note: compare(cur?.notFoundRate ?? null, prev?.notFoundRate ?? null, comparable, 'pct'),
+    },
+    {
+      // The number this page exists to surface. Gold once a typical answer
+      // crosses the threshold the system itself calls slow, because at that
+      // point it is not a statistic, it is what a student is sitting through.
+      // The note says how many waited, so the colour explains itself rather
+      // than being an unexplained red number with jargon under it.
+      label: 'Typical answer time',
+      value: cur && cur.p50Ms !== null ? fmtMs(cur.p50Ms) : null,
+      note: cur && cur.slowCount > 0
+        ? `${n(cur.slowCount)} of ${n(cur.totalRequests)} waited over ${fmtMs(cur.slowThresholdMs)}`
+        : cur && cur.p95Ms !== null ? `the slowest took ${fmtMs(cur.p95Ms)}` : undefined,
+      warn: !!cur && cur.p50Ms !== null && cur.p50Ms > cur.slowThresholdMs,
+    },
+    {
+      label: 'Failed to answer',
+      value: cur ? n(cur.errorCount) : null,
+      note: cur && cur.errorCount > 0 && cur.errorRate !== null ? `${fmtPct(cur.errorRate)} of questions` : undefined,
+      warn: !!cur && cur.errorCount > 0,
+    },
+  ];
+
   return (
     <div className="max-w-[1180px] min-w-0">
       <AdminPageHero
         icon="fas fa-heart-pulse"
         iconGradient=" "
-        title="AI Tutor Monitor"
-        subtitle="How the AI tutor is doing, at a glance."
+        title="Tutor Health"
+        subtitle="Whether the tutor is working, how long it takes to answer, and what went wrong."
         action={
           <div className="flex items-center gap-3">
             <WindowToggle value={windowKey} onChange={changeWindow} />
@@ -115,7 +178,7 @@ function MonitorContent() {
               type="button"
               onClick={refresh}
               aria-label="Refresh now"
-              className="w-9 h-9 rounded-card bg-white/10 border border-white/20 text-white/80 hover:text-white"
+              className="w-9 h-9 rounded-control border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--text)] transition-colors"
             >
               <i className={`fas fa-rotate text-caption ${loading ? 'animate-spin' : ''}`} />
             </button>
@@ -123,6 +186,8 @@ function MonitorContent() {
         }
       />
 
+      {/* No time on this line: the page already says when it last refreshed,
+          under the figures, and saying it twice is how a page fills up. */}
       <StatusBanner health={health} loading={healthLoading} />
 
       {error && !summary ? (
@@ -130,105 +195,68 @@ function MonitorContent() {
           <i className="fas fa-triangle-exclamation text-h1 text-[var(--gold)] mb-3" />
           <p className="text-label font-semibold text-[var(--text)]">Could not load the numbers</p>
           <p className="text-caption text-[var(--muted2)] mt-1">Please try again in a moment.</p>
-          <button type="button" onClick={refresh} className="mt-4 px-4 py-2 rounded-card bg-[var(--ink)] text-white text-caption font-semibold">Try again</button>
+          <button type="button" onClick={refresh} className="mt-4 h-10 rounded-control bg-[var(--accent)] px-5 text-label font-semibold text-white hover:bg-[var(--accent-deep)] transition-colors">Try again</button>
         </div>
       ) : (
         <>
           {error && <p className="text-caption text-[var(--gold)] mb-3">Couldn't fetch the latest numbers — showing the previous ones.</p>}
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5">
-            <SummaryCard
-              loading={cardsLoading}
-              label="Questions asked"
-              icon="fas fa-comments"
-              accent="indigo"
-              tooltip="How many questions students asked in this period."
-              value={cur ? cur.totalRequests.toLocaleString() : null}
-              change={cur && prev ? relChange(cur.totalRequests, prev.totalRequests, 'neutral') : null}
-            />
-            <SummaryCard
-              loading={cardsLoading}
-              label="Answered"
-              icon="fas fa-circle-check"
-              accent="emerald"
-              tooltip="Share of questions answered from the lecture. Higher is better."
-              value={cur ? fmtPct(cur.answeredRate) : null}
-              change={cur && prev ? rateChange(cur.answeredRate, prev.answeredRate, 'up') : null}
-            />
-            <SummaryCard
-              loading={cardsLoading}
-              label="Not found in lecture"
-              icon="fas fa-magnifying-glass-minus"
-              accent="amber"
-              tooltip="Share of questions the lecture had no answer for. Lower is better."
-              value={cur ? fmtPct(cur.notFoundRate) : null}
-              change={cur && prev ? rateChange(cur.notFoundRate, prev.notFoundRate, 'down') : null}
-            />
-            <SummaryCard
-              loading={cardsLoading}
-              label="Response time"
-              icon="fas fa-stopwatch"
-              accent="violet"
-              tooltip="Typical time to answer (median). The p95 below is the time that 19 out of 20 answers beat."
-              value={cur && cur.p50Ms !== null ? fmtMs(cur.p50Ms) : null}
-              subValue={cur && cur.p95Ms !== null ? `p95: ${fmtMs(cur.p95Ms)}` : undefined}
-              change={cur && prev ? relChange(cur.p50Ms, prev.p50Ms, 'down') : null}
-            />
-            <SummaryCard
-              loading={cardsLoading}
-              label="Errors"
-              icon="fas fa-circle-exclamation"
-              accent="red"
-              tooltip="Questions where something failed and no answer could be produced. Lower is better."
-              value={cur ? errorCount(cur).toLocaleString() : null}
-              subValue={cur && cur.errorRate !== null ? `${fmtPct(cur.errorRate)} of questions` : undefined}
-              change={cur && prev ? relChange(errorCount(cur), errorCount(prev), 'down') : null}
-            />
-            <SummaryCard
-              loading={cardsLoading}
-              label="LLM cost"
-              icon="fas fa-coins"
-              accent="cyan"
-              tooltip="Estimated AI model spend in this period (USD). Shows — when no cost was recorded."
-              value={cur ? fmtUsd(cur.totalCostUsd) : null}
-              change={cur && prev ? relChange(cur.totalCostUsd, prev.totalCostUsd, 'down') : null}
-            />
-            <SummaryCard
-              loading={cardsLoading}
-              label="Answer cache skipped"
-              icon="fas fa-user-shield"
-              accent="indigo"
-              tooltip="Questions answered without the answer cache because personal data in them (a phone number, an email…) was masked. Masked questions can't be told apart, so their answers are never cached or reused. They are still answered normally."
-              value={cur ? cur.memorySkippedForPii.toLocaleString() : null}
-              subValue="personal data was masked"
-              change={cur && prev ? relChange(cur.memorySkippedForPii, prev.memorySkippedForPii, 'neutral') : null}
-            />
-            <SummaryCard
-              loading={cardsLoading}
-              label="List/table not delivered"
-              icon="fas fa-table-list"
-              accent="amber"
-              tooltip="Questions that asked for a list or a table but got the answer as plain text: the reformatted answer was refused because it added or dropped content. The answer itself was still correct. Lower is better."
-              value={cur ? cur.formatRepairsRefused.toLocaleString() : null}
-              subValue="sent as plain text"
-              change={cur && prev ? relChange(cur.formatRepairsRefused, prev.formatRepairsRefused, 'down') : null}
-            />
-          </div>
-          {lastRefreshedAt && (
-            <p className="text-caption text-[var(--muted2)] mt-4">
-              Last updated: {lastRefreshedAt.toLocaleTimeString()} · refreshes automatically every 60 seconds
+          {quiet ? (
+            /* Shown the way every other "nothing here" on this page is
+               shown, rather than as a loose sentence under the heading. */
+            <div className="rounded-card border border-[var(--border)] bg-[var(--card)] py-12 px-8 flex flex-col items-center text-center">
+              <i className="fas fa-chart-column text-h1 text-[var(--muted2)] mb-3" aria-hidden="true" />
+              <p className="text-label font-semibold text-[var(--muted)]">No questions were asked in this period</p>
+              <p className="text-caption text-[var(--muted2)] mt-1">
+                Choose a longer period above to see how the tutor has been doing.
+              </p>
+            </div>
+          ) : (
+          <>
+          {/* The period in words. Overview counts every question ever asked,
+              this page counts the ones in the window, and the two numbers
+              being wildly different needs to be obvious rather than worked
+              out from a toggle in the corner. */}
+          <p className="text-caption font-semibold text-[var(--muted)] mb-2">{WINDOW_LABEL[windowKey]}</p>
+          {/* One row, in the order the question travels: how many came in,
+              what became of them, how long it took, how many failed. */}
+          <Figures loading={cardsLoading} items={figures} />
+          </>
+          )}
+          {/* One quiet footer, not a stack of loose sentences under the
+              figures. Cost is a fact about the period rather than a measure
+              of health, so it sits here with the clock. */}
+          <p className="text-caption text-[var(--muted)] mt-4">
+            {!quiet && cur && cur.totalCostUsd !== null && (
+              <>Model cost for this period: about {fmtUsd(cur.totalCostUsd)}, estimated from token counts. · </>
+            )}
+            {lastRefreshedAt
+              ? <>Updated {lastRefreshedAt.toLocaleTimeString()}, and every 60 seconds</>
+              : <>Refreshes every 60 seconds</>}
+          </p>
+          {DEV_TOOLS && cur && !quiet && (
+            <p className="text-caption text-[var(--muted)] mt-1">
+              Developer diagnostics — answer cache skipped because personal data was masked: {n(cur.memorySkippedForPii)} ·
+              answers sent as plain text when a list or table was asked for: {n(cur.formatRepairsRefused)}
             </p>
           )}
         </>
       )}
 
-      <div className="mt-5 space-y-5 min-w-0">
-        <TrendChart windowKey={windowKey} tick={tick} />
-        <AttentionTable tick={tick} />
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 min-w-0">
-          <LectureTable windowKey={windowKey} tick={tick} />
+      {/* Nothing below here has anything to say about a period with no
+          questions in it, and four boxes each announcing that separately is
+          how the page looked when the course was quiet. */}
+      {!quiet && (
+        <div className="mt-6 space-y-5 min-w-0">
+          <TrendChart windowKey={windowKey} tick={tick} />
+          <FailureList windowKey={windowKey} tick={tick} />
+          {/* By lecture lived here too: questions, answered, not found and
+              response time per lecture. Content Gaps already ranks the
+              lectures by unanswered questions and then lists the questions,
+              which is the same finding with the next step attached. One
+              fact, one page. */}
           <StageChart windowKey={windowKey} tick={tick} />
         </div>
-      </div>
+      )}
     </div>
   );
 }

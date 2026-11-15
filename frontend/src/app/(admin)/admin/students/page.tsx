@@ -6,6 +6,7 @@ import { useApolloClient, useQuery, useMutation } from '@apollo/client';
 import { GET_REGISTERED_STUDENTS } from '@/graphql/analytics.queries';
 import { DELETE_USER_MUTATION } from '@/graphql/admin.mutations';
 import { AdminPageHero } from '@/components/admin/AdminPageHero';
+import { btnPrimary, btnRow, btnSecondary, filterOff, filterOn } from '@/components/admin/buttons';
 
 interface Student {
   id: string;
@@ -26,7 +27,7 @@ interface StudentPage {
   totalStudents: number; activeCount: number; inactiveCount: number;
 }
 
-const outlineBtn = 'rounded-control border border-[var(--border)] px-3.5 py-2 text-caption font-semibold text-[var(--text)] hover:bg-[var(--surface)] transition-colors disabled:opacity-50';
+const outlineBtn = btnRow;
 
 /**
  * Students.
@@ -146,7 +147,7 @@ export default function AdminStudents() {
           <button
             onClick={() => { void handleExport(); }}
             disabled={loading || exporting || total === 0}
-            className="h-10 rounded-control bg-[var(--accent)] px-5 text-label font-semibold text-white hover:bg-[var(--accent-deep)] transition-colors disabled:opacity-50"
+            className={btnPrimary}
           >
             {exporting ? 'Exporting…' : 'Export CSV'}
           </button>
@@ -173,11 +174,7 @@ export default function AdminStudents() {
               key={t.key}
               type="button"
               onClick={() => { setStatusFilter(t.key); setPage(1); setDeleteId(null); }}
-              className={`rounded-control px-3.5 py-2 text-caption font-semibold transition-colors ${
-                statusFilter === t.key
-                  ? 'bg-[var(--accent)] text-white'
-                  : 'border border-[var(--border)] text-[var(--text)] hover:bg-[var(--surface)]'
-              }`}
+              className={statusFilter === t.key ? filterOn : filterOff}
             >
               {t.label}
             </button>
@@ -226,7 +223,9 @@ export default function AdminStudents() {
             </thead>
             <tbody className="divide-y divide-[var(--border)]">
               {paged.map(student => (
-                <tr key={student.id}>
+                /* Same hover as the Admins table: a row that highlights under
+                   the cursor is easier to read across on a wide screen. */
+                <tr key={student.id} className="hover:bg-[var(--surface)] transition-colors">
                   <td className="px-6 py-4">
                     <p className="text-label font-semibold text-[var(--text)]">{student.name}</p>
                     <p className="text-caption text-[var(--muted)] mt-0.5">{student.email}</p>
@@ -304,14 +303,14 @@ export default function AdminStudents() {
                 type="button"
                 disabled={deleting}
                 onClick={() => void confirmDelete(pendingStudent)}
-                className="h-10 rounded-control bg-[var(--accent)] px-5 text-label font-semibold text-white hover:bg-[var(--accent-deep)] transition-colors disabled:opacity-50"
+                className={btnPrimary}
               >
                 {deleting ? 'Deleting…' : 'Delete Permanently'}
               </button>
               <button
                 type="button"
                 onClick={() => setDeleteId(null)}
-                className="h-10 rounded-control border border-[var(--border)] px-4 text-label font-semibold text-[var(--text)] hover:bg-[var(--surface)] transition-colors"
+                className={btnSecondary}
               >
                 Cancel
               </button>

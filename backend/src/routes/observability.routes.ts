@@ -34,7 +34,39 @@ function markSuccess(): void {
   lastRecentError = null;
 }
 
+/**
+ * A reachability probe that succeeds proves Phoenix is answering again, so a
+ * failure message from before it recovered must stop being reported.
+ *
+ * Only the data routes called markSuccess(), and System Health calls just
+ * /status and /capabilities. So once Phoenix went down and came back, that
+ * page kept showing "PHOENIX_UNREACHABLE: Phoenix server is unreachable"
+ * beside a Connected indicator until some other tab happened to run a real
+ * query.
+ *
+ * lastSuccessfulQueryAt is deliberately NOT touched: a capabilities probe is
+ * not a successful data query, and the status poll runs on every page, so
+ * setting it here would make it mean "a moment ago" forever.
+ */
+function clearRecentErrorIfReachable(reachable: boolean): void {
+  if (reachable) lastRecentError = null;
+}
+
 function handleError(res: Response, err: unknown, routeLabel: string): void {
+  // Anything that is not an ObservabilityError was reported to the browser AND
+  // written to this log as PHOENIX_UNREACHABLE with no detail. A failing
+  // database query, a null reference, any bug at all looked exactly like
+  // Phoenix being down, and the real message was discarded, so the page told
+  // the reader to go and check a server that was running perfectly.
+  //
+  // The cause is logged here. The response is unchanged: the browser still
+  // sees only the generic code, because a database error is not something to
+  // put in front of a user.
+  if (!isObservabilityError(err)) {
+    const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    logger.error(`[OBSERVABILITY-API] ${routeLabel} threw an unexpected error. ${detail}`);
+    if (err instanceof Error && err.stack) logger.error(err.stack);
+  }
   const e = isObservabilityError(err) ? err : new ObservabilityError('PHOENIX_UNREACHABLE', 'Unexpected observability query failure');
   lastRecentError = `${e.code}: ${e.message}`.slice(0, 300);
   logger.warn(`[OBSERVABILITY-API] ${routeLabel} failed: code=${e.code} message=${e.message}`);
@@ -54,6 +86,7 @@ function safeEndpointLabel(url: string): string {
 
 router.get('/status', async (_req: Request, res: Response) => {
   const caps = await getPhoenixCapabilities();
+  clearRecentErrorIfReachable(caps.reachable);
   res.json({
     success: true,
     data: {
@@ -73,6 +106,7 @@ router.get('/status', async (_req: Request, res: Response) => {
 
 router.get('/capabilities', async (_req: Request, res: Response) => {
   const caps = await getPhoenixCapabilities();
+  clearRecentErrorIfReachable(caps.reachable);
   res.json({ success: true, data: caps });
 });
 

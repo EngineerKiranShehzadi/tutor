@@ -54,7 +54,17 @@ const legacyCrlfChecksum = (s: string): string => sha(s.replace(/\r\n/g, '\n').r
 
 export interface MigrationReport { applied: string[]; reapplied: string[]; skipped: string[] }
 
-export async function applyMigrations(migrationsDir = join(__dirname, '../db/migrations')): Promise<MigrationReport> {
+/**
+ * @param opts.dryRun classify every migration exactly as a real run would, but
+ *   execute nothing and write nothing to the ledger. Added so a migration can
+ *   be previewed against a production database before it is applied: see
+ *   db-migrate-only.ts, which prints the plan and refuses to re-apply an
+ *   already-recorded migration unless that is asked for explicitly.
+ */
+export async function applyMigrations(
+  migrationsDir = join(__dirname, '../db/migrations'),
+  opts: { dryRun?: boolean } = {}
+): Promise<MigrationReport> {
   await pool.query(LEDGER_SQL);
   const { rows } = await pool.query<{ filename: string; checksum: string }>('SELECT filename, checksum FROM schema_migrations');
   const done = new Map(rows.map(r => [r.filename, r.checksum]));
@@ -66,6 +76,8 @@ export async function applyMigrations(migrationsDir = join(__dirname, '../db/mig
     const prev = done.get(file);
     if (prev === checksum) { report.skipped.push(file); continue; }
     if (prev === legacyCrlfChecksum(sql)) {
+      // Same content, legacy hash. A dry run must not rewrite the ledger row.
+      if (opts.dryRun) { report.skipped.push(file); continue; }
       // Unchanged content, just a pre-normalization legacy hash — no SQL to
       // run, just quietly migrate the ledger row to the canonical checksum
       // so this machine (and every machine after it) stops re-deriving the
@@ -74,6 +86,9 @@ export async function applyMigrations(migrationsDir = join(__dirname, '../db/mig
       report.skipped.push(file);
       continue;
     }
+    // Classify only: nothing is executed and the ledger is untouched.
+    if (opts.dryRun) { (prev === undefined ? report.applied : report.reapplied).push(file); continue; }
+
     if (prev !== undefined) console.warn(`⚠️  ${file} changed since it was applied — applying it again (migrations are idempotent).`);
     console.log(`Applying ${file}...`);
     const client = await pool.connect();

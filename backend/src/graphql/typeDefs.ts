@@ -149,7 +149,18 @@ export const typeDefs = `#graphql
     studentEmail: String!
     lectureId:    Int!
     lectureTitle: String!
+    courseId:     Int!
+    courseTitle:  String!
     question:     String!
+    # What the tutor replied. Stored in chat_history since the first question
+    # was ever asked; nothing displayed it until this field existed.
+    answer:       String!
+    # The three below come from rag_request_log via chat_history.trace_id, so
+    # they are nullable: that column was added later and is NULL on older
+    # rows, which still have a perfectly good question and answer.
+    traceId:        String
+    outcome:        String
+    notFoundReason: String
     createdAt:    String!
   }
 
@@ -196,6 +207,27 @@ export const typeDefs = `#graphql
   }
 
   # One page of users (AD6); the summary counts cover every user.
+  type AdminInvitation {
+    id:            Int!
+    email:         String!
+    invitedByName: String
+    createdAt:     String!
+    expiresAt:     String!
+    # PENDING or EXPIRED. An accepted invitation is not returned.
+    status:        String!
+  }
+
+  type AdminInviteResult {
+    # GRANTED when the address already had an account and is now an admin,
+    # INVITED when it was emailed and is waiting for a signup.
+    outcome: String!
+    email:   String!
+    name:    String
+    # False when the message could not be sent. The role change or the
+    # invitation still stands; only the notification failed.
+    emailed: Boolean!
+  }
+
   type UserPage {
     items:        [UserManagementEntry!]!
     total:        Int!
@@ -277,23 +309,35 @@ export const typeDefs = `#graphql
   }
 
   # ── Content Gap ────────────────────────────────────────
+  # One unanswered question, with how many students asked it.
+  type MissedQuestion {
+    question:    String!
+    askedCount:  Int!
+    lastAskedAt: String!
+  }
+
   type LectureGapAnalysis {
-    lectureId:           Int!
-    lectureTitle:        String!
-    questionsAsked:      Int!
-    chunkCount:          Int!
-    coverageScore:       Float!
-    gapTopics:           [String!]!
-    coveredTopics:       [String!]!
-    status:              String!
-    answeredFromLecture: Int!
-    notInLecture:        Int!
-    # Analysis covers questions from the last windowDays days; sampled = the
-    # window held more questions than were analysed (newest 20,000 used).
-    sampled:             Boolean!
-    # Only part of the lecture's Q&As were compared (the per-lecture cap).
-    chunksSampled:       Boolean!
-    windowDays:          Int!
+    lectureId:         Int!
+    lectureTitle:      String!
+    # Every lecture belongs to exactly one course, so these are never null.
+    courseId:          Int!
+    courseTitle:       String!
+    # Everything asked in the window, and the part of it the request log
+    # covers. analysed < asked for a lecture used before logging began.
+    questionsAsked:    Int!
+    questionsAnalysed: Int!
+    unanswered:        Int!
+    # How many different questions need writing: the unit of work.
+    questionsToAnswer: Int!
+    # How many times those questions were asked, across all students.
+    missingMaterial:   Int!
+    # Nothing in the lecture resembled the question: off topic, not a gap.
+    offTopic:          Int!
+    # Nothing published yet: a setup problem, not a content gap.
+    noMaterial:        Int!
+    status:            String!
+    missedQuestions:   [MissedQuestion!]!
+    windowDays:        Int!
   }
 
   type DayActivity {
@@ -459,15 +503,20 @@ export const typeDefs = `#graphql
     # Newest first. limit defaults to 10 and is capped at 100.
     recentQuestions(limit: Int):     [RecentQuestion!]!
     # One page (limit capped at 200), filtered by question/student-name text and lecture.
-    recentQuestionsPage(limit: Int!, offset: Int!, search: String, lectureId: Int): RecentQuestionPage!
+    recentQuestionsPage(limit: Int!, offset: Int!, search: String, lectureId: Int, courseId: Int): RecentQuestionPage!
     lectureStatusList:               [LectureStatusEntry!]!
     # Paged (AD6): limit default 25, at most 100.
     registeredStudents(limit: Int, offset: Int, search: String, status: String): StudentPage!
-    allUsers(limit: Int, offset: Int, search: String, role: String): UserPage!
+    """Order: JOINED_DESC (default) or JOINED_ASC."""
+    allUsers(limit: Int, offset: Int, search: String, role: String, sort: String): UserPage!
+    # Invitations sent to people who do not have an account yet.
+    adminInvitations:                [AdminInvitation!]!
     lectureChunks(lectureId: Int!, limit: Int, offset: Int, search: String): QnaChunkPage!
     lectureAgentDetails:             [LectureAgentDetail!]!
     studentJourney(id: String!, limit: Int, offset: Int): StudentJourney!
-    contentGaps:                     [LectureGapAnalysis!]!
+    # days: 30, 90 or 365. Anything else falls back to 90.
+    # courseId narrows to the lectures of one course; omitted means all.
+    contentGaps(days: Int, courseId: Int): [LectureGapAnalysis!]!
   }
 
   # ── Mutations ─────────────────────────────────────────
@@ -503,6 +552,11 @@ export const typeDefs = `#graphql
     renameChatEntry(id: Int!, label: String!):                    Boolean!
     deleteUser(id: String!):                                      Boolean!
     updateUserRole(id: String!, role: String!):                   UserManagementEntry!
+    # Give an email address the admin role. If it already has an account the
+    # role is applied now; if not, the address is invited and becomes an admin
+    # when it signs up.
+    inviteAdmin(email: String!):                                  AdminInviteResult!
+    revokeAdminInvitation(id: Int!):                              Boolean!
     updateAdminProfile(name: String, currentPassword: String, newPassword: String): AuthUserPayload!
       # Marks the caller's notifications read. With no ids, marks all of them.
     # Returns the refreshed first page so the bell needs no second request.

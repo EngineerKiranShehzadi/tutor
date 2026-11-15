@@ -1,14 +1,49 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { useQuery } from '@apollo/client';
+import { useQuery, useMutation } from '@apollo/client';
 import { GET_COURSES } from '@/graphql/course.queries';
 import { DBCourse } from '@/types/course';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { useMutation } from '@apollo/client';
 import { CREATE_LECTURE_MUTATION } from '@/graphql/lecture.queries';
+import { AdminPageHero } from '@/components/admin/AdminPageHero';
+import { btnPrimary, btnRow } from '@/components/admin/buttons';
 
-const FIELD_CLASS = 'w-full px-4 py-2.5 bg-[var(--surface)] border border-[var(--border)] rounded-card text-label text-[var(--text)] outline-none focus:border-[var(--accent)] focus:bg-[var(--card)] transition-colors placeholder:text-[var(--muted2)]';
+const FIELD_CLASS = 'w-full h-10 px-3 bg-[var(--surface)] border border-[var(--border)] rounded-control text-label text-[var(--text)] outline-none focus:border-[var(--accent)] focus:bg-[var(--card)] transition-colors placeholder:text-[var(--muted2)]';
+const AREA_CLASS = 'w-full px-3 py-2 bg-[var(--surface)] border border-[var(--border)] rounded-control text-label text-[var(--text)] outline-none focus:border-[var(--accent)] focus:bg-[var(--card)] transition-colors placeholder:text-[var(--muted2)] resize-none';
+
+// The formats the dataset pipeline accepts, stated once. The page used to
+// carry two lists of these, in two places, and they disagreed: the hint under
+// the video field left out Excel, the format the pipeline was built around.
+const MATERIAL_FORMATS = 'Excel, PDF, Word, PowerPoint, text or HTML';
+
+/**
+ * One rule for every label: required fields carry a muted asterisk, optional
+ * ones say "Optional". Gold is the colour this admin uses for something
+ * needing attention, and a field being required is not that.
+ *
+ * `span` is the grid width. Short values sit two to a row; anything someone
+ * writes a sentence into takes the full row.
+ */
+function Field({ id, label, required, hint, span = 1, children }: {
+  id: string; label: string; required?: boolean; hint?: string; span?: 1 | 2; children: React.ReactNode;
+}) {
+  return (
+    <div className={span === 2 ? 'sm:col-span-2' : ''}>
+      {/* Lighter than the fieldLabel token used for table column headings. A
+          column heading labels a whole column of values and earns the weight;
+          a form label sits directly above its own field and reads as shouting
+          at this size. Optional is bracketed so it reads as an aside rather
+          than part of the field name. */}
+      <label htmlFor={id} className="block mb-1.5">
+        <span className="text-[12px] font-normal text-[var(--muted)]">{label}</span>
+        <span className="text-[12px] font-normal text-[var(--muted2)]">{required ? ' *' : ' (optional)'}</span>
+      </label>
+      {children}
+      {hint && <p className="text-caption text-[var(--muted2)] mt-1.5 leading-relaxed">{hint}</p>}
+    </div>
+  );
+}
 
 export default function CreateLecturePage() {
   const router = useRouter();
@@ -36,7 +71,7 @@ export default function CreateLecturePage() {
     }
     if (!courseId || !courses.some(c => c.id === courseId)) { setError('Choose a valid course first.'); return; }
     if (!form.agentName.trim() || !form.agentInstructions.trim()) {
-      setError('AI agent name and instructions are required.');
+      setError('Tutor name and instructions are required.');
       return;
     }
     try {
@@ -63,172 +98,138 @@ export default function CreateLecturePage() {
   };
 
   return (
-    <div className="max-w-2xl">
-      {/* Back + title */}
-      <div className="flex items-center gap-3 mb-7">
-        <Link
-          href="/admin/lectures"
-          className="w-8 h-8 rounded-card bg-[var(--card)] border border-[var(--border)] flex items-center justify-center text-[var(--muted)] hover:text-[var(--text)] hover:border-[var(--muted2)] transition-colors"
-        >
-          <i className="fas fa-arrow-left text-caption" />
-        </Link>
-        <div>
-          <h1 className="text-h2 font-semibold text-[var(--text)]">New Lecture</h1>
-          <p className="text-label text-[var(--muted)]">Add a lecture and upload a dataset to activate AI tutoring.</p>
-        </div>
-      </div>
+    /* 640px, not the full width of the screen. Six fields do not need
+       780px-wide inputs: a Title that long is harder to read, not easier,
+       and stretching them was what made this page look empty on the right. */
+    <div className="max-w-[640px]">
+      <AdminPageHero
+        title="New Lecture"
+        subtitle="Add a lecture, then upload its material to start the tutor."
+        parent={{ label: 'Lectures', href: '/admin/lectures' }}
+      />
 
-      <div className="bg-[var(--card)] rounded-card border border-[var(--border)] overflow-hidden">
-        {/* Form header */}
-        <div className="px-6 py-4 border-b border-[var(--border)] bg-[var(--surface)] flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-card bg-[var(--accent)] flex items-center justify-center">
-            <i className="fas fa-film text-white text-[11px]" />
-          </div>
-          <span className="text-label font-semibold text-[var(--text)]">Lecture Details</span>
-        </div>
+      <form onSubmit={handleSubmit} className="bg-[var(--card)] rounded-card border border-[var(--border)] p-6">
+        {/* Two to a row for the short values, full row for anything with a
+            sentence in it. Half the height of a single stacked column, and
+            the width is used rather than padded out. */}
+        {/* Both groups carry a heading. One section titled and the other not
+            read as the first group having lost its label. */}
+        <div className="grid sm:grid-cols-2 gap-x-4 gap-y-4">
+          <h2 className="sm:col-span-2 text-label font-semibold text-[var(--text)]">Lecture</h2>
 
-        <form onSubmit={handleSubmit} className="p-6 flex flex-col gap-5">
-          {/* Course */}
-          <div>
-            <label className="block text-caption font-semibold text-[var(--muted)] mb-2">
-              Course <span className="text-[var(--gold)] normal-case">*</span>
-            </label>
+          <Field id="course" label="Course" required span={2}>
             <select
+              id="course"
               value={courseId}
               onChange={e => setCourseId(e.target.value)}
               disabled={coursesLoading}
               required
-              className={FIELD_CLASS}
+              /* select-arrow insets the chevron. A native select puts it hard
+                 against the border, which is the thing we fixed elsewhere. */
+              className={`${FIELD_CLASS} select-arrow pr-9 cursor-pointer`}
             >
               <option value="">Select course</option>
               {courses.map(course => <option key={course.id} value={course.id}>{course.title}</option>)}
             </select>
-            {coursesError && <p className="text-[var(--gold)] text-caption mt-1">Could not load courses.</p>}
-            <Link href="/admin/courses" className="text-caption text-[var(--accent)] hover:underline inline-block mt-2">Create or manage courses</Link>
-          </div>
-          {/* Title */}
-          <div>
-            <label className="block text-caption font-semibold text-[var(--muted)] mb-2">
-              Title <span className="text-[var(--gold)] normal-case">*</span>
-            </label>
+            {coursesError && <p className="text-caption text-[var(--gold)] mt-1.5">Could not load courses.</p>}
+          </Field>
+
+          <Field id="title" label="Title" required span={2}>
             <input
+              id="title"
               type="text"
               value={form.title}
               onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
-              placeholder="e.g. Lecture 1 — Introduction to Islamic Studies"
+              placeholder="e.g. Lecture 1 — Introduction"
               className={FIELD_CLASS}
             />
-          </div>
+          </Field>
 
-          {/* YouTube URL */}
-          <div>
-            <label className="block text-caption font-semibold text-[var(--muted)] mb-2">
-              YouTube URL <span className="text-[var(--muted2)] normal-case font-normal">(optional for document-only lectures)</span>
-            </label>
-            <div className="relative">
-              <div className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--muted2)]">
-                <i className="fab fa-youtube text-[var(--gold)] text-label" />
-              </div>
-              <input
-                type="url"
-                value={form.youtubeUrl}
-                onChange={(e) => setForm((f) => ({ ...f, youtubeUrl: e.target.value }))}
-                placeholder="https://www.youtube.com/watch?v=..."
-                className={`${FIELD_CLASS} pl-10`}
-              />
-            </div>
-            <p className="text-[11px] text-[var(--muted2)] mt-1.5">
-              Optional. Add a YouTube video or create a lecture using PDF, Word, PowerPoint, TXT or HTML materials.
-            </p>
-          </div>
+          <Field
+            id="youtubeUrl"
+            label="YouTube URL"
+            span={2}
+            hint={`Leave empty for a lecture built from ${MATERIAL_FORMATS} material.`}
+          >
+            <input
+              id="youtubeUrl"
+              type="url"
+              value={form.youtubeUrl}
+              onChange={(e) => setForm((f) => ({ ...f, youtubeUrl: e.target.value }))}
+              placeholder="https://www.youtube.com/watch?v=…"
+              className={FIELD_CLASS}
+            />
+          </Field>
 
-          {/* Description */}
-          <div>
-            <label className="block text-caption font-semibold text-[var(--muted)] mb-2">
-              Description <span className="text-[var(--muted2)] normal-case font-normal">(optional)</span>
-            </label>
+          <Field id="description" label="Description" span={2}>
             <textarea
+              id="description"
               value={form.description}
               onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-              placeholder="Brief description of lecture content for students…"
-              rows={3}
-              className={`${FIELD_CLASS} resize-none`}
+              placeholder="Shown to students before they open the lecture…"
+              rows={2}
+              className={AREA_CLASS}
             />
+          </Field>
+        </div>
+
+        {/* No rule above this group. The heading and the space already say a
+            new section has started, and a full-width line directly under a
+            textarea read as the textarea having a second border. */}
+        <div className="mt-5 grid sm:grid-cols-2 gap-x-4 gap-y-4">
+          <h2 className="sm:col-span-2 text-label font-semibold text-[var(--text)]">Tutor</h2>
+
+          <Field id="agentName" label="Tutor name" required span={2}>
+            <input
+              id="agentName"
+              type="text"
+              value={form.agentName}
+              onChange={(e) => setForm((f) => ({ ...f, agentName: e.target.value }))}
+              placeholder="e.g. Nova"
+              className={FIELD_CLASS}
+            />
+          </Field>
+
+          <Field
+            id="agentInstructions"
+            label="Tutor instructions"
+            required
+            span={2}
+            /* Says what to write, in the admin's terms, rather than describing
+               the prompt machinery. The counter appears once there is
+               something to count: "0 / 4000" on an empty form is noise. */
+            hint={'Sets tone, depth and emphasis. Answers still come only from the lecture material.'
+              + (form.agentInstructions.length ? ` · ${form.agentInstructions.length} / 4000` : '')}
+          >
+            <textarea
+              id="agentInstructions"
+              value={form.agentInstructions}
+              onChange={(e) => setForm((f) => ({ ...f, agentInstructions: e.target.value }))}
+              placeholder="e.g. Explain for first-year students. Define every term before using it. Prefer short worked examples."
+              rows={4}
+              maxLength={4000}
+              className={AREA_CLASS}
+            />
+          </Field>
+        </div>
+
+        {error && (
+          <div role="alert" className="mt-5 flex items-start gap-2.5 bg-[var(--gold-soft)] rounded-control px-3.5 py-2.5 text-caption text-[var(--gold)]">
+            <i className="fas fa-circle-exclamation mt-0.5 shrink-0" aria-hidden="true" />
+            <span>{error}</span>
           </div>
+        )}
 
-          {/* AI agent */}
-          <div className="pt-2 border-t border-[var(--border)]">
-            <p className="text-caption font-semibold text-[var(--muted)] mb-4">AI Agent for this lecture</p>
-            <div className="flex flex-col gap-5">
-              <div>
-                <label className="block text-caption font-semibold text-[var(--muted)] mb-2">
-                  Agent Name <span className="text-[var(--gold)] normal-case">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={form.agentName}
-                  onChange={(e) => setForm((f) => ({ ...f, agentName: e.target.value }))}
-                  placeholder="e.g. Nova"
-                  className={FIELD_CLASS}
-                />
-              </div>
-              <div>
-                <label className="block text-caption font-semibold text-[var(--muted)] mb-2">
-                  Agent Instructions <span className="text-[var(--gold)] normal-case">*</span>
-                </label>
-                <textarea
-                  value={form.agentInstructions}
-                  onChange={(e) => setForm((f) => ({ ...f, agentInstructions: e.target.value }))}
-                  placeholder="Describe this lecture's scope and how the agent should present answers…"
-                  rows={5}
-                  maxLength={4000}
-                  className={`${FIELD_CLASS} resize-none`}
-                />
-                <p className="text-[11px] text-[var(--muted2)] mt-1.5">
-                  {form.agentInstructions.length} / 4000 · The agent goes live once the dataset is uploaded and READY.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* Error */}
-          {error && (
-            <div className="flex items-start gap-2.5 bg-[var(--gold-soft)] border border-[var(--border)] rounded-card px-4 py-3 text-label text-[var(--gold)]">
-              <i className="fas fa-circle-exclamation mt-0.5 shrink-0" />
-              <span>{error}</span>
-            </div>
-          )}
-
-          {/* Actions */}
-          <div className="flex gap-3 pt-2 border-t border-[var(--border)]">
-            <button
-              type="submit"
-              disabled={loading || coursesLoading || !courseId}
-              className="flex items-center gap-2 px-5 py-2.5 bg-[var(--accent)] text-white rounded-card text-caption font-semibold hover:bg-[var(--accent-deep)] disabled:opacity-60 transition-colors"
-            >
-              {loading ? (
-                <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Creating…</>
-              ) : (
-                <><i className="fas fa-plus text-[11px]" /> Create Lecture</>
-              )}
-            </button>
-            <Link
-              href="/admin/lectures"
-              className="px-5 py-2.5 border border-[var(--border)] rounded-card text-caption font-semibold text-[var(--muted)] hover:bg-[var(--surface)] transition-colors"
-            >
-              Cancel
-            </Link>
-          </div>
-        </form>
-      </div>
-
-      {/* Info note */}
-      <div className="mt-4 flex items-start gap-2.5 px-4 py-3 bg-[var(--accent-soft)] border border-[var(--border)] rounded-card">
-        <i className="fas fa-circle-info text-[var(--accent)] mt-0.5 shrink-0" />
-        <p className="text-caption text-[var(--accent)] leading-relaxed">
-          After creating the lecture, you&apos;ll be taken to the detail page where you can upload Excel, PDF, DOCX, PPTX, TXT or HTML learning material to activate the AI tutor.
-        </p>
-      </div>
+        <div className="mt-5 pt-5 border-t border-[var(--border)] flex items-center gap-3">
+          <button type="submit" disabled={loading || coursesLoading || !courseId} className={btnPrimary}>
+            {loading ? 'Creating…' : 'Create lecture'}
+          </button>
+          <Link href="/admin/lectures" className={btnRow}>Cancel</Link>
+          <Link href="/admin/courses" className="ml-auto text-caption text-[var(--accent)] hover:underline">
+            Manage courses
+          </Link>
+        </div>
+      </form>
     </div>
   );
 }

@@ -6,23 +6,30 @@ import { useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { cn } from '@/lib/cn';
 
-// "User Mgmt" and "Advanced traces" were the only abbreviated and
-// sentence-cased labels in the list; every nav item now reads the same way.
-const NAV = [
-  { href: '/admin/dashboard',     icon: 'fas fa-table-columns',         label: 'Overview'         },
-  { href: '/admin/courses',       icon: 'fas fa-layer-group',           label: 'Courses'          },
-  { href: '/admin/lectures',      icon: 'fas fa-play-circle',           label: 'Lectures'         },
-  { href: '/admin/students',      icon: 'fas fa-user-graduate',         label: 'Students'         },
-  { href: '/admin/questions',     icon: 'fas fa-comments',              label: 'Questions'        },
-  { href: '/admin/content-gaps',  icon: 'fas fa-magnifying-glass-chart', label: 'Content Gaps'    },
-  { href: '/admin/learning-outcomes',icon: 'fas fa-bullseye', label: 'Learning Outcomes' },
-  { href: '/admin/faculty-gaps', icon: 'fas fa-chart-column', label: 'Learning Gaps' },
-  { href: '/admin/rag-evaluation', icon: 'fas fa-flask', label: 'RAG Evaluation' },
-  { href: '/admin/users',         icon: 'fas fa-users-gear',            label: 'User Management'  },
-  { href: '/admin/agents',        icon: 'fas fa-robot',                 label: 'AI Agents'        },
-  { href: '/admin/monitor',       icon: 'fas fa-heart-pulse',           label: 'Tutor Monitor'    },
-  { href: '/admin/rag-traces',    icon: 'fas fa-timeline',              label: 'Advanced Traces'  },
-  { href: '/admin/settings',      icon: 'fas fa-user-shield',           label: 'Admin Profile'    },
+// Keep the grouped admin navigation and every adaptive-learning page.
+const COURSE_NAV = [
+  { href: '/admin/dashboard',      icon: 'fas fa-table-columns',          label: 'Overview' },
+  { href: '/admin/courses',        icon: 'fas fa-layer-group',            label: 'Courses' },
+  { href: '/admin/lectures',       icon: 'fas fa-play-circle',            label: 'Lectures' },
+  { href: '/admin/students',       icon: 'fas fa-user-graduate',          label: 'Students' },
+  { href: '/admin/questions',      icon: 'fas fa-comments',               label: 'Questions' },
+  { href: '/admin/content-gaps',   icon: 'fas fa-magnifying-glass-chart', label: 'Content Gaps' },
+  { href: '/admin/learning-outcomes', icon: 'fas fa-bullseye',             label: 'Learning Outcomes' },
+  { href: '/admin/faculty-gaps',   icon: 'fas fa-chart-column',            label: 'Learning Gaps' },
+  { href: '/admin/rag-evaluation', icon: 'fas fa-flask',                   label: 'RAG Evaluation' },
+];
+
+const ADMIN_NAV = [
+  { href: '/admin/users',    icon: 'fas fa-users-gear',  label: 'Team' },
+  { href: '/admin/agents',   icon: 'fas fa-robot',       label: 'AI Agents' },
+  { href: '/admin/monitor',  icon: 'fas fa-heart-pulse', label: 'Tutor Health' },
+  { href: '/admin/settings', icon: 'fas fa-circle-user', label: 'My Account' },
+];
+
+// Tracing pages are shown as developer tools when enabled.
+const DEV_TOOLS = process.env.NEXT_PUBLIC_DEV_TOOLS === 'true';
+const DEV_NAV = [
+  { href: '/admin/rag-traces', icon: 'fas fa-timeline', label: 'Observability' },
 ];
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -85,10 +92,16 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         </div>
 
         <nav className="sidebar-scroll flex-1 px-3 pt-1 pb-4 overflow-y-auto">
-          <p className="px-3 mb-1.5 text-[11.5px] font-semibold text-white/55">Analytics</p>
-          {NAV.slice(0, 9).map(({ href, icon, label }) => navLink(href, icon, label))}
-          <p className="px-3 mt-4 mb-1.5 text-[11.5px] font-semibold text-white/55">Management</p>
-          {NAV.slice(9).map(({ href, icon, label }) => navLink(href, icon, label))}
+          <p className="px-3 mb-1.5 text-[11.5px] font-semibold text-white/55">Teaching</p>
+          {COURSE_NAV.map(({ href, icon, label }) => navLink(href, icon, label))}
+          <p className="px-3 mt-4 mb-1.5 text-[11.5px] font-semibold text-white/55">Administration</p>
+          {ADMIN_NAV.map(({ href, icon, label }) => navLink(href, icon, label))}
+          {DEV_TOOLS && (
+            <>
+              <p className="px-3 mt-4 mb-1.5 text-[11.5px] font-semibold text-white/55">Developer</p>
+              {DEV_NAV.map(({ href, icon, label }) => navLink(href, icon, label))}
+            </>
+          )}
         </nav>
 
         {/* A "System Online — all services operational" card used to sit here.
@@ -100,7 +113,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           {userMenuOpen && (
             <>
               <div className="fixed inset-0 z-20" onClick={() => setUserMenuOpen(false)} />
-              <div className="absolute bottom-[calc(100%+6px)] left-3 right-3 z-30 bg-[var(--card)] rounded-card border border-[var(--border)] shadow-lg overflow-hidden">
+              <div className="absolute bottom-[calc(100%+6px)] left-3 right-3 z-30 bg-[var(--card)] rounded-card border border-[var(--border)] shadow-[0_12px_32px_rgba(22,26,31,0.16)] overflow-hidden">
                 <div className="flex items-center gap-3 px-4 py-3.5 bg-[var(--surface)] border-b border-[var(--border)]">
                   <div className="w-10 h-10 rounded-full overflow-hidden shrink-0">
                     {user.avatar_url ? (
@@ -125,14 +138,14 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                     className="flex items-center gap-3 px-4 py-2.5 text-label text-[var(--text)] hover:bg-[var(--surface)] transition-colors"
                   >
                     <i className="fas fa-user w-4 text-center text-[12px] text-[var(--muted)]" aria-hidden="true" />
-                    Admin Profile
+                    My Account
                   </Link>
                 </div>
 
                 <div className="border-t border-[var(--border)] py-1.5">
                   <button
                     onClick={() => { setUserMenuOpen(false); logout(); }}
-                    className="w-full flex items-center gap-3 px-4 py-2.5 text-label text-red-700 hover:bg-red-50 transition-colors"
+                    className="w-full flex items-center gap-3 px-4 py-2.5 text-label text-[var(--text)] hover:bg-[var(--surface)] transition-colors"
                   >
                     <i className="fas fa-right-from-bracket w-4 text-center text-[12px]" aria-hidden="true" />
                     Log out
