@@ -184,7 +184,7 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
   };
 
   const reset = () => {
-    setFile(null); setPreview(null); setPreviews({}); setPhase('idle'); setConfirmed(false); setExtractionWarnings([]);
+    setFile(null); setPreview(null); setPreviews({}); setPhase('idle'); setConfirmed(false); setExtractionWarnings([]); setDocumentQuality(null); setPreviewRows([]);
     if (fileRef.current) fileRef.current.value = '';
   };
 
