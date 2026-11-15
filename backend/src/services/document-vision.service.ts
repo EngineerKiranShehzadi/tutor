@@ -7,7 +7,7 @@ export interface VisualPage { locator: string; image: string }
 export interface VisionUnit { locator: string; text: string }
 const SCRIPT = path.resolve(__dirname, '../../scripts/render_document_visuals.py');
 const MAX_RENDER_OUTPUT = 18 * 1024 * 1024;
-const PAGE_LIMIT = 30;
+const PAGE_LIMIT = 50;
 const IMAGE_CONCURRENCY = 3;
 const MODEL = process.env.DOCUMENT_VISION_MODEL || 'gpt-4.1-mini';
 const ENABLED = process.env.DOCUMENT_VISION_ENABLED !== 'false';
