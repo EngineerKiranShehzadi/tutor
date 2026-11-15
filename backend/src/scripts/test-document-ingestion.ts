@@ -110,6 +110,24 @@ async function run() {
   assert.match(combined,/colors are visible/);
   assert.match(combined,/ratio of people/);
 
+  const standalone = await documentToRows('intro.docx',{
+    units:[{locator:'Slide 3',text:[
+      'Achieve Excellence in Technical Skills','Question',
+      'What is the Best Learning Methodology to achieve excellence in Technical Skills?',
+      'Answer','DO IT YOURSELF'
+    ].join('\n')}],warnings:[]
+  });
+  assert.equal(standalone.quality.qaRecords,1);
+  assert.match(standalone.rows.find(x=>x.question?.includes('Best Learning'))?.answer??'',/DO IT YOURSELF/);
+  const typoLabel = await documentToRows('intro.docx',{
+    units:[{locator:'Slide 2',text:[
+      'Life','Quesiton','Life = Technical Skills (?) + Human Engineering (?)',
+      'Answer','Life = Technical Skills (15%) + Human Engineering (85%)'
+    ].join('\n')}],warnings:[]
+  });
+  assert.equal(typoLabel.quality.qaRecords,1);
+  assert.match(typoLabel.rows.find(x=>x.question?.includes('Life ='))?.answer??'',/85%/);
+
   const longQA = await documentToRows('long-explanation.docx', {
     units:[{locator:'Slide 10',text:[
       'Q: How does a zero-shot prompt work?',
