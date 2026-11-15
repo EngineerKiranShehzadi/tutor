@@ -61,14 +61,16 @@ async function renderVisualPages(buffer: Buffer, extension: string): Promise<Vis
   });
 }
 
-type VisionDescription = { relevant: boolean; description: string; topic?: string; nodes?: string[]; connections?: string[]; uncertainty?: string[] };
+type VisionDescription = { relevant: boolean; description: string; topic?: string; nodes?: string[]; connections?: string[]; uncertainty?: string[]; structureWarnings?: string[] };
 
-const cleanFacts = (values: unknown): string[] | undefined => {
-  // Optional JSON fields are frequently emitted as null by vision models.
-  // Treat null as omitted; still reject malformed non-null structures.
+const cleanFacts = (values: unknown, field: string, issues: string[]): string[] | undefined => {
   if (values === undefined || values === null) return undefined;
-  if (!Array.isArray(values) || values.length > 60 || !values.every(v => typeof v === 'string' && v.length <= 500)) {
-    throw new AppError('Invalid visual structure fields.', 503);
+  if (!Array.isArray(values) || values.length > 60 ||
+      !values.every(v => typeof v === 'string' && v.length <= 500)) {
+    // Optional model metadata must not block independently validated text.
+    // Never stringify or trust malformed structure; expose a review warning.
+    issues.push(field);
+    return undefined;
   }
   return values.map((v: string) => v.trim()).filter(Boolean);
 };
@@ -139,9 +141,13 @@ export async function describeVisual(page: VisualPage, nearbyText: string): Prom
     if (data.topic !== undefined && (typeof data.topic !== 'string' || data.topic.length > 200)) {
       throw new AppError('Invalid visual topic.', 503);
     }
+    const structureWarnings: string[] = [];
+    const nodes = cleanFacts(data.nodes, 'nodes', structureWarnings);
+    const connections = cleanFacts(data.connections, 'connections', structureWarnings);
+    const uncertainty = cleanFacts(data.uncertainty, 'uncertainty', structureWarnings);
     return { relevant: data.relevant, description: data.description.trim(),
       topic: typeof data.topic === 'string' ? data.topic.trim() : undefined,
-      nodes: cleanFacts(data.nodes), connections: cleanFacts(data.connections), uncertainty: cleanFacts(data.uncertainty),
+      nodes, connections, uncertainty, structureWarnings,
     };
   } catch (e) {
     if (e instanceof AppError) throw e;
@@ -176,6 +182,9 @@ export async function enrichDocumentWithVision(
       return describeVisual(p, nearbyText);
     }));
     for (let j = 0; j < batch.length; j++) {
+      if (response[j].structureWarnings?.length) {
+        warnings.push('Visual structure metadata for ' + batch[j].locator + ' had invalid optional fields (' + response[j].structureWarnings!.join(', ') + '); these fields were omitted. Review this page before applying.');
+      }
       if (response[j].relevant) {
         explanations.set(batch[j].locator, formatVisualDescription(response[j]));
       }
