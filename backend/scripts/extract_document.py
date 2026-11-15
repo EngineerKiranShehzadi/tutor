@@ -26,6 +26,11 @@ MAX_TEXT_CHARS = 900_000
 
 def clean(text):
     text = text.replace("\x00", "").replace("\r\n", "\n").replace("\r", "\n")
+    # Remove known private-use citation/navigation glyphs that can leak into
+    # copied Word text from rich web/LLM responses. They are not lecture text
+    # and otherwise pollute embeddings and student answers.
+    text = re.sub("\ue200navlist\ue202[^\\n]*", "", text, flags=re.I)
+    text = text.translate(str.maketrans("", "", "\ue200\ue202\ue203\ue204\ue206"))
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n[ \t]*\n(?:[ \t]*\n)+", "\n\n", text)
     return text.strip()
