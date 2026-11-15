@@ -47,12 +47,13 @@ export function parseLogicalSections(text:string):LogicalSection[] {
     qParts.push(lines[j]);j++;
    }
    if(j<lines.length&&isA(lines[j])&&qParts.length){
-    const aParts:string[]=[];const initial=lines[j].replace(/^(?:a|answers?)\s*:?\s*/i,'').trim();
+    const aParts:string[]=[];const initial=lines[j].replace(/^(?:answers?|a)(?=\s|:|$)\s*:?\s*/i,'').trim();
     if(initial)aParts.push(initial);j++;
     while(j<lines.length&&!isQ(lines[j])&&!isSlideBoundary(lines[j])){aParts.push(lines[j]);j++;}
     if(aParts.length){
+     const localHeading=prose.length===1 && prose[0].length<=140 && !/[.!?]$/.test(prose[0]) ? prose[0] : null;
      flushProse();
-     result.push({kind:'QA',question:qParts.join(' ').trim(),answer:aParts.join('\n'),heading:heading??undefined});
+     result.push({kind:'QA',question:qParts.join(' ').trim(),answer:aParts.join('\n'),heading:localHeading??heading??undefined});
      i=j;continue;
     }
    }
@@ -100,7 +101,10 @@ export async function splitPreservingQuestions(text:string):Promise<PreservedPar
   const parts=await answerSplitter.splitText(section.answer);
   if(!parts.length)throw new AppError('Question has no answer in document',422);
   if(parts.length>20)throw new AppError('A long answer needs smaller logical sections before upload',422);
-  for(const [i,part] of parts.entries())out.push({kind:'QA',question:section.question,text:part,part:i+1,heading:section.heading});
+  for(const [i,part] of parts.entries()){
+   const context=section.heading && !/^(?:slide|page)\s*\d+$/i.test(section.heading) ? `Topic: ${section.heading}\n` : '';
+   out.push({kind:'QA',question:section.question,text:context+part,part:i+1,heading:section.heading});
+  }
  }
  return out;
 }
