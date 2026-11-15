@@ -36,7 +36,7 @@ def to_jpeg(page):
     return base64.b64encode(out.getvalue()).decode("ascii")
 
 
-def office_to_pdf(data, extension):
+def office_to_pdf(data, extension, canonical_pdf_path=None):
     from extract_document import convert_legacy_ppt
     if extension == ".ppt":
         data = convert_legacy_ppt(data)
@@ -61,7 +61,13 @@ def office_to_pdf(data, extension):
         result = dest / "upload.pdf"
         if p.returncode or not result.exists() or result.stat().st_size > 64 * 1024 * 1024:
             raise ValueError("Unable to render PowerPoint slides for visual grounding")
-        return result.read_bytes()
+        pdf_bytes = result.read_bytes()
+        if canonical_pdf_path:
+            canonical = Path(canonical_pdf_path)
+            if canonical.name != "canonical.pdf" or not canonical.parent.is_dir():
+                raise ValueError("Invalid canonical PDF artifact path")
+            canonical.write_bytes(pdf_bytes)
+        return pdf_bytes
 
 
 def slide_visual_indexes(data, extension):
@@ -104,20 +110,25 @@ def identify_pdf_pages(doc):
     return selected
 
 
-def visual_pages(data, extension, limit):
+def visual_pages(data, extension, limit, canonical_pdf_path=None):
     if extension in (".pptx", ".ppt"):
         targets = slide_visual_indexes(data, extension)
         if not targets:
             return []
-        pdf = office_to_pdf(data, extension)
+        pdf = office_to_pdf(data, extension, canonical_pdf_path)
         name = "Slide"
     elif extension == ".pdf":
         pdf = data
+        if canonical_pdf_path:
+            canonical = Path(canonical_pdf_path)
+            if canonical.name != "canonical.pdf" or not canonical.parent.is_dir():
+                raise ValueError("Invalid canonical PDF artifact path")
+            canonical.write_bytes(data)
         name = "Page"
     elif extension == ".docx":
         # Render every uploaded Word document so every rendered page can be
         # checked for visual content, even if package metadata looks text-only.
-        pdf = office_to_pdf(data, extension)
+        pdf = office_to_pdf(data, extension, canonical_pdf_path)
         name = "Page"
     else:
         return []
@@ -156,6 +167,7 @@ def main():
     parser.add_argument("--extension", required=True, choices=[".pdf", ".pptx", ".ppt", ".docx"])
     parser.add_argument("--max-bytes", type=int, default=10 * 1024 * 1024)
     parser.add_argument("--max-visual-pages", type=int, default=MAX_VISUAL_PAGES)
+    parser.add_argument("--canonical-pdf", help="Persist the exact PDF used for page rendering in the upload job directory")
     args = parser.parse_args()
     try:
         if not 1 <= args.max_bytes <= 25 * 1024 * 1024 or not 1 <= args.max_visual_pages <= 50:
@@ -163,7 +175,7 @@ def main():
         data = sys.stdin.buffer.read(args.max_bytes + 1)
         if len(data) > args.max_bytes or not data:
             raise ValueError("File exceeds the configured upload limit")
-        print(json.dumps({"pages": visual_pages(data, args.extension, args.max_visual_pages)}))
+        print(json.dumps({"pages": visual_pages(data, args.extension, args.max_visual_pages, args.canonical_pdf)}))
     except Exception as exc:
         print(json.dumps({"error": str(exc)[:250]}))
         sys.exit(2)
