@@ -72,6 +72,11 @@ export const uploadDataset = async (
       : isSubtitleExtension(extension)
         ? subtitleToRows(file.originalname, file.buffer, extension)
         : await documentToRows(file.originalname, await runDocumentExtractor(file.buffer, extension));
+    const visualReviewRequired = !!document?.warnings.some(warning => warning.startsWith('Visual review required:'));
+    if (!dryRun && visualReviewRequired && body['confirmVisualReview'] !== 'true') {
+      sendError(res, 'Review the flagged visual pages in the original document and confirm before applying this dataset.', 422);
+      return;
+    }
     const result = await prepareDatasetVersion(lectureId, file.buffer, {
       mode, dryRun, confirmRemovals, filename: file.originalname,
       ...(document ? { rawRows: document.rows } : {}),

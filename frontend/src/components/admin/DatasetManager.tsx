@@ -82,6 +82,7 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [confirmed, setConfirmed] = useState(false);
+  const [visualReviewConfirmed, setVisualReviewConfirmed] = useState(false);
 
   // Most visits only need to know what is in there. The file picker and the
   // version history are opened when wanted, instead of all of it being on
@@ -147,7 +148,7 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
   }, [inFlight, versions]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const analyse = useCallback(async (f: File, m: DatasetMode) => {
-    setPhase('analysing'); setError(''); setNotice(''); setPreview(null); setPreviews({}); setConfirmed(false); setExtractionWarnings([]);setDocumentQuality(null);setPreviewRows([]);
+    setPhase('analysing'); setError(''); setNotice(''); setPreview(null); setPreviews({}); setConfirmed(false); setVisualReviewConfirmed(false); setExtractionWarnings([]);setDocumentQuality(null);setPreviewRows([]);
     try {
       const res = await datasetApi.upload(lectureId, f, { mode: m, dryRun: true });
       const data = res.data.data as { preview: DatasetPreview; previews?: Record<DatasetMode, DatasetPreview>; extractionWarnings?: string[];documentQuality?: {sourceUnits:number;sourceCharacters:number;qaRecords:number;proseRecords:number;qaChildRecords:number;outputRecords:number;warnings:number}|null; previewRows?: Array<{index:number;question:string;answer:string;topic?:string;source?:string}> };
@@ -177,14 +178,14 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
     if (!file || phase === 'applying') return;
     const known = previews[m];
     if (known && phase === 'preview') {
-      setPreview(known); setConfirmed(false); setError('');
+      setPreview(known); setConfirmed(false); setVisualReviewConfirmed(false); setError('');
     } else {
       void analyse(file, m);
     }
   };
 
   const reset = () => {
-    setFile(null); setPreview(null); setPreviews({}); setPhase('idle'); setConfirmed(false); setExtractionWarnings([]); setDocumentQuality(null); setPreviewRows([]);
+    setFile(null); setPreview(null); setPreviews({}); setPhase('idle'); setConfirmed(false); setVisualReviewConfirmed(false); setExtractionWarnings([]); setDocumentQuality(null); setPreviewRows([]);
     if (fileRef.current) fileRef.current.value = '';
   };
 
@@ -195,6 +196,7 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
       const res = await datasetApi.upload(lectureId, file, {
         mode,
         confirmRemovals: preview.removed > 0 ? preview.removed : undefined,
+        confirmVisualReview: visualReviewConfirmed || undefined,
       });
       setNotice(res.data.message);
       reset();
@@ -265,7 +267,8 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
   const busy = phase === 'analysing' || phase === 'applying' || !!inFlight || firstUploadRunning;
   const noChanges = !!preview && preview.added === 0 && preview.updated === 0 && preview.removed === 0 && !(preview.reembeddedForModel > 0);
   const needsConfirm = !!preview && preview.removed > 0;
-  const canApply = phase === 'preview' && !!preview && !noChanges && (!needsConfirm || confirmed);
+  const requiresVisualReview = extractionWarnings.some(warning => warning.startsWith('Visual review required:'));
+  const canApply = phase === 'preview' && !!preview && !noChanges && (!needsConfirm || confirmed) && (!requiresVisualReview || visualReviewConfirmed);
 
   const pct = inFlight && inFlight.to_embed > 0
     ? Math.min(100, Math.round(((inFlight.to_embed - Number(inFlight.pending_count)) / inFlight.to_embed) * 100))
@@ -412,7 +415,13 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
             <div role="alert" className="my-3 rounded-control border border-[var(--border)] border-l-[3px] border-l-[var(--gold)] bg-[var(--card)] px-5 py-4 text-caption text-[var(--text)]" data-testid="extraction-warnings">
               <b>Some content could not be extracted:</b>
               <ul className="list-disc ml-5 mt-1">{extractionWarnings.map((warning, i) => <li key={i}>{warning}</li>)}</ul>
-              <p>Scanned pages and diagrams need OCR or text captions. Review before applying.</p>
+              <p>Check the flagged page numbers in the uploaded document before applying.</p>
+              {requiresVisualReview && (
+                <label className="mt-3 flex items-start gap-2">
+                  <input type="checkbox" checked={visualReviewConfirmed} onChange={e => setVisualReviewConfirmed(e.target.checked)} />
+                  <span>I reviewed the flagged pages in the original document.</span>
+                </label>
+              )}
             </div>
           )}
           {preview && (phase === 'preview' || phase === 'applying') && (
