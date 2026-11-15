@@ -90,7 +90,11 @@ def docx_units(data, warnings):
             sections.append({"locator": locator, "text": "\n\n".join(current)})
             current = []
 
-    for element in document.iter_inner_content():
+    elements = list(document.iter_inner_content())
+    pending_slide_headings = []
+    duplicate_heading_to_skip = None
+
+    for element_index, element in enumerate(elements):
         if isinstance(element, Paragraph):
             value = clean(element.text)
             if not value:
@@ -99,12 +103,21 @@ def docx_units(data, warnings):
             standalone_slide = value.strip().upper() == "SLIDE"
             style = (element.style.name or "").lower() if element.style else ""
             structured_heading = style.startswith("heading ") or style == "title"
+            if duplicate_heading_to_skip is not None:
+                is_duplicate = value.casefold() == duplicate_heading_to_skip.casefold()
+                duplicate_heading_to_skip = None
+                if is_duplicate:
+                    continue
             if standalone_slide or slide or (structured_heading and not inside_slides):
                 flush()
                 if standalone_slide or slide:
                     inside_slides = True
                     slide_number = int(slide.group(1)) if slide else slide_number + 1
                     locator = "Slide " + str(slide_number)
+                    if pending_slide_headings:
+                        current.extend(pending_slide_headings)
+                        duplicate_heading_to_skip = pending_slide_headings[-1]
+                        pending_slide_headings = []
                 else:
                     heading_count += 1
                     locator = "Section " + str(heading_count) + ": " + value[:75]
@@ -117,6 +130,20 @@ def docx_units(data, warnings):
             # Recognize real Question/Answer tables rather than splitting a
             # question column from the corresponding answer column.
             table_rows = [[clean(cell.text) for cell in row.cells] for row in element.rows]
+            # Some Word-exported slide decks place a one-cell title table just
+            # before the next standalone SLIDE marker. Keep that title with the
+            # next slide instead of contaminating the previous slide's chunk.
+            next_content = next((candidate for candidate in elements[element_index + 1:]
+                                 if not isinstance(candidate, Paragraph) or clean(candidate.text)), None)
+            is_next_slide_title = (
+                len(table_rows) == 1 and len(table_rows[0]) == 1
+                and 0 < len(table_rows[0][0]) <= 140
+                and isinstance(next_content, Paragraph)
+                and clean(next_content.text).upper() == "SLIDE"
+            )
+            if is_next_slide_title:
+                pending_slide_headings.append(table_rows[0][0])
+                continue
             header = [v.lower().rstrip(":") for v in table_rows[0]] if table_rows else []
             qa_table = len(header) >= 2 and header[0] in {"question", "questions", "q"} and header[1] in {"answer", "answers", "a"}
             for index, cells in enumerate(table_rows):
@@ -129,6 +156,8 @@ def docx_units(data, warnings):
                 else:
                     current.append(" | ".join(cells))
     flush()
+    if sections and sections[0]["locator"] == "Document":
+        warnings.append("Text before the first slide marker was found; review this document preamble.")
     if len(sections) > MAX_UNITS:
         raise ValueError("Word document has too many logical sections")
     return sections
