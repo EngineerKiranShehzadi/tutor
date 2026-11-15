@@ -74,13 +74,22 @@ export const MAX_PIECES_PER_ROW = 20;
 // also changes chunk_text (hence content_hash) of any row it affects, which is
 // what triggers re-embedding of exactly those rows.
 export const CHUNKING_CONFIG_VERSION =
-  `rcts:${SPLIT_THRESHOLD_CHARS}/${SPLIT_CHUNK_SIZE}/${SPLIT_CHUNK_OVERLAP}/${MAX_PIECES_PER_ROW}:document-context-v2`;
+  `rcts:${SPLIT_THRESHOLD_CHARS}/${SPLIT_CHUNK_SIZE}/${SPLIT_CHUNK_OVERLAP}/${MAX_PIECES_PER_ROW}:document-context-v3`;
 
 const splitter = new RecursiveCharacterTextSplitter({
   chunkSize: SPLIT_CHUNK_SIZE,
   chunkOverlap: SPLIT_CHUNK_OVERLAP,
   separators: SPLIT_SEPARATORS,
 });
+
+// DOCX prose rows use a generic "Source excerpt" question. When a long answer
+// is split, carry its author-provided information need into every piece so
+// later pieces remain retrievable without the first piece's context.
+function answerContext(answer: string, question: string): string | null {
+  if (!/^Source excerpt:/i.test(question)) return null;
+  const match = answer.match(/(?:^|\\n)\\s*(?:information need|learning need)\\s*:\\s*([^\\n]{1,240})/i);
+  return match?.[1]?.trim() || null;
+}
 
 // Splits a row into one or more embeddable pieces. Short rows (the common
 // case today) are returned unchanged as a single piece, so nothing about
@@ -125,11 +134,14 @@ export async function buildChunkPiecesReport(row: RawRow): Promise<{ pieces: Chu
     parts = parts.slice(0, MAX_PIECES_PER_ROW);
   }
 
+  const context = answerContext(answer, String(row.question ?? ''));
+
   const pieces = parts.map((part, chunkIndex) => ({
     chunkIndex,
     chunkText: [
       row.topic ? `Topic: ${row.topic}` : null,
       `Question: ${row.question}`,
+      context ? `Source context: ${context}` : null,
       `Answer: ${part}`,
       row.keywords ? `Keywords: ${row.keywords}` : null,
     ]
