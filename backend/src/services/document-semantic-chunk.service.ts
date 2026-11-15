@@ -52,7 +52,10 @@ export function parseLogicalSections(text:string):LogicalSection[] {
     while(j<lines.length&&!isQ(lines[j])&&!isSlideBoundary(lines[j])){aParts.push(lines[j]);j++;}
     if(aParts.length){
      const localHeading=prose.length===1 && prose[0].length<=140 && !/[.!?]$/.test(prose[0]) ? prose[0] : null;
-     flushProse();
+     // A short heading immediately before a Q/A belongs to that answer.
+     // Avoid a redundant heading-only searchable row; keep its text in QA.
+     if(localHeading)prose=[];
+     else flushProse();
      result.push({kind:'QA',question:qParts.join(' ').trim(),answer:aParts.join('\n'),heading:localHeading??heading??undefined});
      i=j;continue;
     }
