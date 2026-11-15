@@ -219,9 +219,12 @@ export async function enrichDocumentWithVision(
         const identifiesVisualContent =
           /\b(?:charts?|graphs?|diagrams?|figures?|screenshots?|photographs?|photos?|illustrations?|flyers?|posters?|infographics?|maps?|plots?|arrows?|flowcharts?|images?)\b/i.test(description) ||
           Boolean(response[j].connections?.length);
-        if ((explicitlyTextOnly && !describesActualVisual) || !identifiesVisualContent) {
-          warnings.push('Visual interpretation for ' + batch[j].locator + ' did not identify informative visual content; its extra description was omitted to avoid duplicate text chunks.');
+        if (explicitlyTextOnly && !describesActualVisual) {
+          warnings.push('Visual interpretation for ' + batch[j].locator + ' explicitly described a text-only page; its duplicate description was omitted.');
           continue;
+        }
+        if (!identifiesVisualContent) {
+          warnings.push('Visual interpretation for ' + batch[j].locator + ' lacked clear visual cues; it was retained for review to avoid missing educational content.');
         }
         const visual = formatVisualDescription(response[j]);
         if (visualTimeConflict(visual, sourceText)) {
