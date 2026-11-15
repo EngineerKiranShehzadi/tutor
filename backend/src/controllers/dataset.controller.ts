@@ -72,7 +72,9 @@ export const uploadDataset = async (
       : isSubtitleExtension(extension)
         ? subtitleToRows(file.originalname, file.buffer, extension)
         : await documentToRows(file.originalname, await runDocumentExtractor(file.buffer, extension));
-    const visualReviewPages = document && 'visualReviewPages' in document ? document.visualReviewPages : [];
+    // Subtitle rows do not carry visual review metadata; document rows do.
+    const documentRows = document && 'quality' in document ? document : null;
+    const visualReviewPages = documentRows?.visualReviewPages ?? [];
     let visualReviewDecisions: Record<string, { include: boolean; reviewed: boolean }> = {};
     if (body['visualReviewDecisions']) {
       try {
@@ -104,8 +106,8 @@ export const uploadDataset = async (
         const decision = visualReviewDecisions[page.locator];
         const include = decision ? decision.include : page.candidateIncluded;
         const visualMarker = ' | ' + page.locator + ' | Visual ';
-        const hasVisualRow = rows.some(row => row.question.includes(visualMarker));
-        rows = rows.filter(row => !row.question.includes(visualMarker) || include);
+        const hasVisualRow = rows.some(row => typeof row.question === 'string' && row.question.includes(visualMarker));
+        rows = rows.filter(row => typeof row.question !== 'string' || !row.question.includes(visualMarker) || include);
         if (include && !hasVisualRow && page.candidateDescription.trim().length >= 15) {
           rows.push({
             question: 'Source excerpt: ' + safeName + ' | ' + page.locator + ' | Visual reviewed',
@@ -117,10 +119,10 @@ export const uploadDataset = async (
       }
       effectiveRows = rows;
     }
-    const effectiveDocumentQuality = document && 'quality' in document
-      ? { ...document.quality,
-          outputRecords: effectiveRows?.length ?? document.quality.outputRecords,
-          proseRecords: effectiveRows?.filter(row => row.question.startsWith('Source excerpt:')).length ?? document.quality.proseRecords }
+    const effectiveDocumentQuality = documentRows
+      ? { ...documentRows.quality,
+          outputRecords: effectiveRows?.length ?? documentRows.quality.outputRecords,
+          proseRecords: effectiveRows?.filter(row => typeof row.question === 'string' && row.question.startsWith('Source excerpt:')).length ?? documentRows.quality.proseRecords }
       : null;
     const result = await prepareDatasetVersion(lectureId, file.buffer, {
       mode, dryRun, confirmRemovals, filename: file.originalname,
