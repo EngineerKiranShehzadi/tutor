@@ -211,8 +211,8 @@ export async function enrichDocumentWithVision(
       if (response[j].relevant) {
         const description = response[j].description.toLowerCase();
         const explicitlyTextOnly =
-          /\\bno diagrams, charts, or other visual elements\\b/i.test(description) ||
-          /\\btext-based with no diagrams or figures\\b/i.test(description);
+          /\bno diagrams, charts, or other visual elements\b/i.test(description) ||
+          /\btext-based with no diagrams or figures\b/i.test(description);
         if (explicitlyTextOnly && !response[j].nodes?.length && !response[j].connections?.length) {
           warnings.push('Visual interpretation for ' + batch[j].locator + ' described a text-only page with no informative diagram; the extra description was omitted to avoid duplicate chunks.');
           continue;
