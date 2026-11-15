@@ -72,14 +72,59 @@ export const uploadDataset = async (
       : isSubtitleExtension(extension)
         ? subtitleToRows(file.originalname, file.buffer, extension)
         : await documentToRows(file.originalname, await runDocumentExtractor(file.buffer, extension));
-    const visualReviewRequired = !!document?.warnings.some(warning => warning.startsWith('Visual review required:'));
-    if (!dryRun && visualReviewRequired && body['confirmVisualReview'] !== 'true') {
-      sendError(res, 'Review the flagged visual pages in the original document and confirm before applying this dataset.', 422);
+    const visualReviewPages = document && 'visualReviewPages' in document ? document.visualReviewPages : [];
+    let visualReviewDecisions: Record<string, { include: boolean; reviewed: boolean }> = {};
+    if (body['visualReviewDecisions']) {
+      try {
+        const parsed = JSON.parse(body['visualReviewDecisions']);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) ||
+            Object.values(parsed).some((value: any) => !value || typeof value.include !== 'boolean' || typeof value.reviewed !== 'boolean')) {
+          throw new Error('Invalid visual review decisions');
+        }
+        visualReviewDecisions = parsed;
+      } catch {
+        sendError(res, 'Visual review decisions are invalid. Reanalyse the document and try again.', 400);
+        return;
+      }
+    }
+    const manualVisualReviewRequired = !!document?.warnings.some(warning => warning.startsWith('Visual review required:')) && visualReviewPages.length === 0;
+    if (!dryRun && visualReviewPages.some(page => visualReviewDecisions[page.locator]?.reviewed !== true)) {
+      sendError(res, 'Review every visual candidate and choose include or exclude before applying this dataset.', 422);
       return;
     }
+    if (!dryRun && manualVisualReviewRequired && body['confirmVisualReview'] !== 'true') {
+      sendError(res, 'Review the original document pages and confirm before applying this dataset.', 422);
+      return;
+    }
+    let effectiveRows = document?.rows;
+    if (document && visualReviewPages.length) {
+      const safeName = file.originalname.replace(/[\\r\\n\\x00-\\x1f]/g, ' ').trim().slice(0, 180);
+      let rows = [...document.rows];
+      for (const page of visualReviewPages) {
+        const decision = visualReviewDecisions[page.locator];
+        const include = decision ? decision.include : page.candidateIncluded;
+        const visualMarker = ' | ' + page.locator + ' | Visual ';
+        const hasVisualRow = rows.some(row => row.question.includes(visualMarker));
+        rows = rows.filter(row => !row.question.includes(visualMarker) || include);
+        if (include && !hasVisualRow && page.candidateDescription.trim().length >= 15) {
+          rows.push({
+            question: 'Source excerpt: ' + safeName + ' | ' + page.locator + ' | Visual reviewed',
+            answer: '[Diagram and figure interpretation]\\n' + page.candidateDescription,
+            topic: page.locator,
+            start_time: safeName + ' | ' + page.locator,
+          });
+        }
+      }
+      effectiveRows = rows;
+    }
+    const effectiveDocumentQuality = document && 'quality' in document
+      ? { ...document.quality,
+          outputRecords: effectiveRows?.length ?? document.quality.outputRecords,
+          proseRecords: effectiveRows?.filter(row => row.question.startsWith('Source excerpt:')).length ?? document.quality.proseRecords }
+      : null;
     const result = await prepareDatasetVersion(lectureId, file.buffer, {
       mode, dryRun, confirmRemovals, filename: file.originalname,
-      ...(document ? { rawRows: document.rows } : {}),
+      ...(document ? { rawRows: effectiveRows } : {}),
       // Runs once the upload is known to be valid and just before anything is
       // written. Archive the raw file exactly as uploaded, before any parsing/
       // chunking touches it. Awaited (not fire-and-forget): if raw storage
@@ -102,11 +147,11 @@ export const uploadDataset = async (
     });
 
     if (result.kind === 'DRY_RUN') {
-      sendSuccess(res, 'Dry run — nothing was changed.', { lectureId, preview: result.preview, previews: result.previews, extractionWarnings: document?.warnings ?? [], documentQuality: document && 'quality' in document ? document.quality : null, visualReviewPages: document && 'visualReviewPages' in document ? document.visualReviewPages : [], previewRows: document && dryRun ? document.rows.map((row, index) => ({ index: index + 1, question: row.question, answer: row.answer, topic: row.topic, source: row.start_time })) : undefined });
+      sendSuccess(res, 'Dry run — nothing was changed.', { lectureId, preview: result.preview, previews: result.previews, extractionWarnings: document?.warnings ?? [], documentQuality: effectiveDocumentQuality, visualReviewPages, previewRows: document && dryRun ? (effectiveRows ?? document.rows).map((row, index) => ({ index: index + 1, question: row.question, answer: row.answer, topic: row.topic, source: row.start_time })) : undefined });
       return;
     }
     if (result.kind === 'NOOP') {
-      sendSuccess(res, 'The uploaded file matches the active dataset — nothing to update.', { lectureId, preview: result.preview, extractionWarnings: document?.warnings ?? [], documentQuality: document && 'quality' in document ? document.quality : null });
+      sendSuccess(res, 'The uploaded file matches the active dataset — nothing to update.', { lectureId, preview: result.preview, extractionWarnings: document?.warnings ?? [], documentQuality: effectiveDocumentQuality });
       return;
     }
 
@@ -115,7 +160,7 @@ export const uploadDataset = async (
     // only starts below); the lecture's own status is not reported (it stays
     // READY when a dataset is live, EMBEDDING for a first upload).
     sendSuccess(res, 'Dataset uploaded. Building the new version in the background; the current dataset stays live until it is complete.', {
-      lectureId, versionStatus: result.versionStatus, versionId: result.versionId, versionNo: result.versionNo, preview: result.preview, extractionWarnings: document?.warnings ?? [], documentQuality: document && 'quality' in document ? document.quality : null,
+      lectureId, versionStatus: result.versionStatus, versionId: result.versionId, versionNo: result.versionNo, preview: result.preview, extractionWarnings: document?.warnings ?? [], documentQuality: effectiveDocumentQuality,
     });
 
     // Embed + validate + publish asynchronously so the HTTP response is already sent

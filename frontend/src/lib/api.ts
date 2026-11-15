@@ -104,13 +104,14 @@ export interface DatasetVersionInfo {
 
 export const datasetApi = {
   // dryRun=true plans the update and returns what WOULD change without writing anything.
-  upload: (lectureId: number, file: File, opts: { mode?: DatasetMode; dryRun?: boolean; confirmRemovals?: number; confirmVisualReview?: boolean } = {}) => {
+  upload: (lectureId: number, file: File, opts: { mode?: DatasetMode; dryRun?: boolean; confirmRemovals?: number; confirmVisualReview?: boolean; visualReviewDecisions?: Record<string, { include: boolean; reviewed: boolean }> } = {}) => {
     const form = new FormData();
     form.append('file', file);
     form.append('mode', opts.mode ?? 'MERGE');
     if (opts.dryRun) form.append('dryRun', 'true');
     if (opts.confirmRemovals !== undefined) form.append('confirmRemovals', String(opts.confirmRemovals));
     if (opts.confirmVisualReview !== undefined) form.append('confirmVisualReview', String(opts.confirmVisualReview));
+    if (opts.visualReviewDecisions !== undefined) form.append('visualReviewDecisions', JSON.stringify(opts.visualReviewDecisions));
     return api.post(`/datasets/upload/${lectureId}`, form, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });

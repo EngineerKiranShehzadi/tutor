@@ -249,22 +249,22 @@ export async function enrichDocumentWithVision(
       }
       const hasEvidence = response[j].visualEvidence.length > 0;
       const confident = response[j].confidence >= 0.8;
-      if (response[j].relevant && (!hasEvidence || !confident)) {
-        const reason = !hasEvidence ? 'no verifiable non-text visual region' : 'low visual confidence (' + response[j].confidence.toFixed(2) + ')';
-        warnings.push('Visual review required: ' + locator + ' — ' + reason + '. Check the page image and candidate below before applying.');
-        addReviewPage(batch[j], response[j].confidence, reason, response[j].description, hasEvidence);
-        if (!hasEvidence) {
-          pageStatuses.set(locator, 'review required: no visual evidence');
-          continue;
-        }
+      const isReviewCandidate = response[j].relevant || hasEvidence || !confident;
+      if (isReviewCandidate) {
+        const reason = !hasEvidence
+          ? 'No verifiable non-text visual region was identified.'
+          : (!response[j].relevant
+            ? 'Visual evidence was found, but the model marked it irrelevant.'
+            : (!confident ? 'Low visual confidence (' + response[j].confidence.toFixed(2) + ').' : 'Model suggests including this visual; verify it is actually visible.'));
+        addReviewPage(batch[j], response[j].confidence, reason, response[j].description,
+          response[j].relevant && hasEvidence && confident);
+        warnings.push('Visual review required: ' + locator + ' — choose include or exclude after inspecting its page thumbnail.');
       }
-      if (!response[j].relevant && hasEvidence) {
-        warnings.push('Visual review required: ' + locator + ' — the visual evidence and relevance decision disagree. Check the page image and candidate below before applying.');
-        addReviewPage(batch[j], response[j].confidence, 'visual evidence and relevance decision disagree', response[j].description, true);
+      if (response[j].relevant && (!hasEvidence || !confident) && !hasEvidence) {
+        pageStatuses.set(locator, 'review required: no visual evidence');
+        continue;
       }
-      if (!response[j].relevant && !hasEvidence && response[j].confidence < 0.8) {
-        warnings.push('Visual review required: ' + locator + ' — the model was uncertain whether the page contains an informative visual. Check the page image before applying.');
-        addReviewPage(batch[j], response[j].confidence, 'uncertain whether an informative visual is present', response[j].description, false);
+      if (!response[j].relevant && !hasEvidence && !confident) {
         pageStatuses.set(locator, 'review required: uncertain visual decision');
         continue;
       }
@@ -304,6 +304,7 @@ export async function enrichDocumentWithVision(
       }
     }
   }
+  for (const candidate of visualReviewPages) candidate.candidateIncluded = explanations.has(candidate.locator);
   const groupedStatuses = new Map<string, string[]>();
   for (const page of pages) {
     const status = pageStatuses.get(page.locator) ?? 'not processed';

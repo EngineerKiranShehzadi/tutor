@@ -16,6 +16,7 @@ interface Props {
 
 type Phase = 'idle' | 'analysing' | 'preview' | 'applying';
 type VisualReviewPage = { locator: string; confidence: number; reason: string; image: string; candidateDescription: string; candidateIncluded: boolean };
+type VisualReviewDecision = { include: boolean; reviewed: boolean };
 
 const IN_FLIGHT = new Set(['BUILDING', 'READY_TO_ACTIVATE']);
 
@@ -60,10 +61,12 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
   const [file, setFile] = useState<File | null>(null);
   const [previewRows, setPreviewRows] = useState<Array<{index:number;question:string;answer:string;topic?:string;source?:string}>>([]);
   const [visualReviewPages, setVisualReviewPages] = useState<VisualReviewPage[]>([]);
+  const [visualReviewDecisions, setVisualReviewDecisions] = useState<Record<string, VisualReviewDecision>>({});
+  const [visualSelectionDirty, setVisualSelectionDirty] = useState(false);
   const downloadChunkReport = () => {
     if (!file || !preview || previewRows.length === 0) return;
     const report = { schemaVersion: 1, lectureId, filename: file.name, mode, generatedAt: new Date().toISOString(),
-      documentQuality, extractionWarnings, visualReviewPages: visualReviewPages.map(({ image, ...page }) => page), rows: previewRows };
+      documentQuality, extractionWarnings, visualReviewPages: visualReviewPages.map(({ image, ...page }) => page), visualReviewDecisions, rows: previewRows };
     const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -150,14 +153,17 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
   }, [inFlight, versions]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const analyse = useCallback(async (f: File, m: DatasetMode) => {
-    setPhase('analysing'); setError(''); setNotice(''); setPreview(null); setPreviews({}); setConfirmed(false); setVisualReviewConfirmed(false); setExtractionWarnings([]);setDocumentQuality(null);setPreviewRows([]);setVisualReviewPages([]);
+    setPhase('analysing'); setError(''); setNotice(''); setPreview(null); setPreviews({}); setConfirmed(false); setVisualReviewConfirmed(false); setExtractionWarnings([]);setDocumentQuality(null);setPreviewRows([]);setVisualReviewPages([]);setVisualReviewDecisions({});setVisualSelectionDirty(false);
     try {
       const res = await datasetApi.upload(lectureId, f, { mode: m, dryRun: true });
       const data = res.data.data as { preview: DatasetPreview; previews?: Record<DatasetMode, DatasetPreview>; extractionWarnings?: string[];documentQuality?: {sourceUnits:number;sourceCharacters:number;qaRecords:number;proseRecords:number;qaChildRecords:number;outputRecords:number;warnings:number}|null; visualReviewPages?: VisualReviewPage[]; previewRows?: Array<{index:number;question:string;answer:string;topic?:string;source?:string}> };
       setPreviews(data.previews ?? { [m]: data.preview });
       setExtractionWarnings(data.extractionWarnings ?? []);
       setDocumentQuality(data.documentQuality??null);
-      setVisualReviewPages(data.visualReviewPages ?? []);
+      const reviewPages = data.visualReviewPages ?? [];
+      setVisualReviewPages(reviewPages);
+      setVisualReviewDecisions(Object.fromEntries(reviewPages.map(page => [page.locator, { include: page.candidateIncluded, reviewed: false }])));
+      setVisualSelectionDirty(false);
       setPreviewRows(data.previewRows ?? []);
       setPreview(data.preview);
       setPhase('preview');
@@ -166,6 +172,26 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
       setPhase('idle');
     }
   }, [lectureId]);
+
+  const refreshVisualPreview = async (targetMode: DatasetMode = mode) => {
+    if (!file) return;
+    setPhase('analysing'); setError('');
+    try {
+      const res = await datasetApi.upload(lectureId, file, { mode: targetMode, dryRun: true, visualReviewDecisions });
+      const data = res.data.data as { preview: DatasetPreview; previews?: Record<DatasetMode, DatasetPreview>; extractionWarnings?: string[]; documentQuality?: {sourceUnits:number;sourceCharacters:number;qaRecords:number;proseRecords:number;qaChildRecords:number;outputRecords:number;warnings:number}|null; visualReviewPages?: VisualReviewPage[]; previewRows?: Array<{index:number;question:string;answer:string;topic?:string;source?:string}> };
+      setPreview(data.preview);
+      setPreviews(data.previews ?? { [targetMode]: data.preview });
+      setExtractionWarnings(data.extractionWarnings ?? []);
+      setDocumentQuality(data.documentQuality ?? null);
+      setVisualReviewPages(data.visualReviewPages ?? []);
+      setPreviewRows(data.previewRows ?? []);
+      setVisualSelectionDirty(false);
+      setPhase('preview');
+    } catch (err) {
+      setError(apiMessage(err, 'Could not update the preview for those visual choices.'));
+      setPhase('preview');
+    }
+  };
 
   const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -180,7 +206,7 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
     setMode(m);
     if (!file || phase === 'applying') return;
     const known = previews[m];
-    if (known && phase === 'preview') {
+    if (known && phase === 'preview' && visualReviewPages.length === 0) {
       setPreview(known); setConfirmed(false); setVisualReviewConfirmed(false); setError('');
     } else {
       void analyse(file, m);
@@ -188,7 +214,7 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
   };
 
   const reset = () => {
-    setFile(null); setPreview(null); setPreviews({}); setPhase('idle'); setConfirmed(false); setVisualReviewConfirmed(false); setExtractionWarnings([]); setDocumentQuality(null); setPreviewRows([]); setVisualReviewPages([]);
+    setFile(null); setPreview(null); setPreviews({}); setPhase('idle'); setConfirmed(false); setVisualReviewConfirmed(false); setExtractionWarnings([]); setDocumentQuality(null); setPreviewRows([]); setVisualReviewPages([]); setVisualReviewDecisions({}); setVisualSelectionDirty(false);
     if (fileRef.current) fileRef.current.value = '';
   };
 
@@ -200,6 +226,7 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
         mode,
         confirmRemovals: preview.removed > 0 ? preview.removed : undefined,
         confirmVisualReview: visualReviewConfirmed || undefined,
+        visualReviewDecisions: Object.keys(visualReviewDecisions).length ? visualReviewDecisions : undefined,
       });
       setNotice(res.data.message);
       reset();
@@ -270,8 +297,12 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
   const busy = phase === 'analysing' || phase === 'applying' || !!inFlight || firstUploadRunning;
   const noChanges = !!preview && preview.added === 0 && preview.updated === 0 && preview.removed === 0 && !(preview.reembeddedForModel > 0);
   const needsConfirm = !!preview && preview.removed > 0;
-  const requiresVisualReview = extractionWarnings.some(warning => warning.startsWith('Visual review required:'));
-  const canApply = phase === 'preview' && !!preview && !noChanges && (!needsConfirm || confirmed) && (!requiresVisualReview || visualReviewConfirmed);
+  const requiresVisualReview = visualReviewPages.length > 0 || extractionWarnings.some(warning => warning.startsWith('Visual review required:'));
+  const needsGlobalVisualConfirmation = visualReviewPages.length === 0 && requiresVisualReview;
+  const everyVisualReviewed = visualReviewPages.every(page => visualReviewDecisions[page.locator]?.reviewed === true);
+  const canApply = phase === 'preview' && !!preview && !noChanges && !visualSelectionDirty &&
+    (!needsConfirm || confirmed) && (!visualReviewPages.length || everyVisualReviewed) &&
+    (!needsGlobalVisualConfirmation || visualReviewConfirmed);
 
   const pct = inFlight && inFlight.to_embed > 0
     ? Math.min(100, Math.round(((inFlight.to_embed - Number(inFlight.pending_count)) / inFlight.to_embed) * 100))
@@ -420,30 +451,52 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
               <ul className="list-disc ml-5 mt-1">{extractionWarnings.map((warning, i) => <li key={i}>{warning}</li>)}</ul>
               <p>Check the flagged page numbers in the uploaded document before applying.</p>
               {visualReviewPages.length > 0 && (
-                <div className="mt-4 grid gap-3 sm:grid-cols-2" data-testid="visual-review-pages">
-                  {visualReviewPages.map(page => (
-                    <article key={page.locator} className="rounded-control border border-[var(--border)] bg-[var(--surface)] p-3">
-                      <h4 className="font-semibold">{page.locator} · Review needed</h4>
-                      <img className="mt-2 max-h-80 w-full rounded object-contain bg-white" src={'data:image/jpeg;base64,' + page.image} alt={'Rendered ' + page.locator + ' for visual review'} />
-                      <p className="mt-2">Confidence: {Math.round(page.confidence * 100)}% · {page.reason}</p>
-                      {page.candidateDescription && (
-                        <div className="mt-2">
-                          <p className="font-medium">{page.candidateIncluded ? 'Candidate visual description (included in preview chunks):' : 'Candidate description (not added to chunks):'}</p>
-                          <p className="whitespace-pre-wrap">{page.candidateDescription}</p>
-                        </div>
-                      )}
-                    </article>
-                  ))}
-                </div>
-              )}
-              {requiresVisualReview && (
                 <>
-                  <p className="mt-3">If a useful visual is missing from the candidate, cancel the upload and add a text caption to the source document before uploading again.</p>
-                  <label className="mt-3 flex items-start gap-2">
-                    <input type="checkbox" checked={visualReviewConfirmed} onChange={e => setVisualReviewConfirmed(e.target.checked)} />
-                    <span>I reviewed the flagged page images and candidate descriptions.</span>
-                  </label>
+                  <p className="mt-3">Review every candidate. Clear “Include” for text-only pages such as an answer that merely talks about an image.</p>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2" data-testid="visual-review-pages">
+                    {visualReviewPages.map(page => {
+                      const decision = visualReviewDecisions[page.locator] ?? { include: page.candidateIncluded, reviewed: false };
+                      return (
+                        <article key={page.locator} className="rounded-control border border-[var(--border)] bg-[var(--surface)] p-3">
+                          <h4 className="font-semibold">{page.locator} · Review visual candidate</h4>
+                          <img className="mt-2 max-h-80 w-full rounded object-contain bg-white" src={'data:image/jpeg;base64,' + page.image} alt={'Rendered ' + page.locator + ' for visual review'} />
+                          <p className="mt-2">Confidence: {Math.round(page.confidence * 100)}% · {page.reason}</p>
+                          {page.candidateDescription ? (
+                            <div className="mt-2">
+                              <p className="font-medium">Candidate description:</p>
+                              <p className="whitespace-pre-wrap">{page.candidateDescription}</p>
+                            </div>
+                          ) : <p className="mt-2">No usable visual description was produced for this page.</p>}
+                          <label className="mt-3 flex items-start gap-2">
+                            <input type="checkbox" checked={decision.include} disabled={!page.candidateDescription.trim()}
+                              onChange={e => { setVisualReviewDecisions(all => ({ ...all, [page.locator]: { ...decision, include: e.target.checked } })); setVisualSelectionDirty(true); }} />
+                            <span>Include this visual description in the dataset</span>
+                          </label>
+                          <label className="mt-2 flex items-start gap-2">
+                            <input type="checkbox" checked={decision.reviewed}
+                              onChange={e => setVisualReviewDecisions(all => ({ ...all, [page.locator]: { ...decision, reviewed: e.target.checked } }))} />
+                            <span>I checked this page image and selected the right choice</span>
+                          </label>
+                        </article>
+                      );
+                    })}
+                  </div>
+                  {visualSelectionDirty && (
+                    <div className="mt-3">
+                      <p>Update the chunk counts after changing visual selections. Apply stays disabled until the preview is refreshed.</p>
+                      <button type="button" onClick={() => void refreshVisualPreview()} disabled={phase !== 'preview'}
+                        className="mt-2 rounded-control border border-[var(--border)] px-3 py-2 font-semibold hover:bg-[var(--surface)]">
+                        Update preview for these choices
+                      </button>
+                    </div>
+                  )}
                 </>
+              )}
+              {needsGlobalVisualConfirmation && (
+                <label className="mt-3 flex items-start gap-2">
+                  <input type="checkbox" checked={visualReviewConfirmed} onChange={e => setVisualReviewConfirmed(e.target.checked)} />
+                  <span>I reviewed the original document pages because visual analysis was unavailable or uncertain.</span>
+                </label>
               )}
             </div>
           )}
