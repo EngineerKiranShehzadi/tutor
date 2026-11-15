@@ -209,6 +209,14 @@ export async function enrichDocumentWithVision(
         warnings.push('Visual structure metadata for ' + batch[j].locator + ' had invalid optional fields (' + response[j].structureWarnings!.join(', ') + '); these fields were omitted. Review this page before applying.');
       }
       if (response[j].relevant) {
+        const description = response[j].description.toLowerCase();
+        const explicitlyTextOnly =
+          /\\bno diagrams, charts, or other visual elements\\b/i.test(description) ||
+          /\\btext-based with no diagrams or figures\\b/i.test(description);
+        if (explicitlyTextOnly && !response[j].nodes?.length && !response[j].connections?.length) {
+          warnings.push('Visual interpretation for ' + batch[j].locator + ' described a text-only page with no informative diagram; the extra description was omitted to avoid duplicate chunks.');
+          continue;
+        }
         const visual = formatVisualDescription(response[j]);
         if (visualTimeConflict(visual, sourceText)) {
           warnings.push('Visual interpretation for ' + batch[j].locator + ' conflicts with selectable source time ranges; visual description omitted. Original source text is preserved.');
