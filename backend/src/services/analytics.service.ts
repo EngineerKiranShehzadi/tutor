@@ -75,7 +75,7 @@ export const getQuestionsPerLecture = async () => {
 export const RECENT_QUESTIONS_MAX = 100;
 export const RECENT_QUESTIONS_PAGE_MAX = 200;
 
-export interface RecentQuestionsFilter { limit?: number | null; offset?: number | null; search?: string | null; lectureId?: number | null }
+export interface RecentQuestionsFilter { limit?: number | null; offset?: number | null; search?: string | null; lectureId?: number | null; courseId?: number | null }
 
 export const getRecentQuestionsPage = async (f: RecentQuestionsFilter) => {
   const limit = clampInt(f.limit, 20, 1, RECENT_QUESTIONS_PAGE_MAX);
@@ -84,40 +84,84 @@ export const getRecentQuestionsPage = async (f: RecentQuestionsFilter) => {
   const where: string[] = [];
   const params: unknown[] = [];
   if (search) {
-    // LIKE wildcards in the search text are matched literally.
+    // LIKE wildcards in the search text are matched literally. The answer is
+    // searched too now that it is returned: a page that shows the answer but
+    // will not search it is the kind of half-feature people stop trusting.
     params.push(likePattern(search));
-    where.push(`(sq.question ILIKE $${params.length} OR u.name ILIKE $${params.length})`);
+    where.push(`(ch.question ILIKE $${params.length} OR ch.answer ILIKE $${params.length} OR u.name ILIKE $${params.length})`);
   }
   if (typeof f.lectureId === 'number') {
     params.push(f.lectureId);
-    where.push(`sq.lecture_id = $${params.length}`);
+    where.push(`ch.lecture_id = $${params.length}`);
+  }
+  // Course narrows to the lectures inside it. Both filters can apply at once;
+  // picking a course then a lecture in it is simply a narrower query, and
+  // picking a lecture outside it correctly returns nothing.
+  if (typeof f.courseId === 'number') {
+    params.push(f.courseId);
+    where.push(`l.course_id = $${params.length}`);
   }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-  const from = `FROM student_questions sq
-     JOIN users u ON u.id = sq.student_id
-     JOIN lectures l ON l.id = sq.lecture_id`;
+
+  /**
+   * Reads chat_history, not student_questions.
+   *
+   * Both tables record the same event. student_questions holds the question
+   * alone and was described as "admin analytics"; chat_history holds the
+   * question, the answer, the chunks it was built from and the trace id. The
+   * admin page was reading the thin copy, which is the only reason two
+   * thousand answers were stored and never shown anywhere.
+   *
+   * The LEFT JOIN adds what happened: rag_request_log carries the outcome for
+   * the same trace. It is a LEFT JOIN on purpose — chat_history.trace_id was
+   * added later and is NULL on older rows, and a row with no outcome must
+   * still appear with its question and answer rather than vanish.
+   *
+   * Trade-off, stated because it changes what this page means: a question
+   * that errored before an answer existed has no chat_history row, so it is
+   * not listed here. Those are in Observability, Errors.
+   */
+  const from = `FROM chat_history ch
+     JOIN users u ON u.id = ch.student_id
+     JOIN lectures l ON l.id = ch.lecture_id
+     JOIN courses c ON c.id = l.course_id
+     LEFT JOIN rag_request_log rl ON rl.trace_id = ch.trace_id`;
 
   const [{ rows }, { rows: cnt }] = await Promise.all([
-    query<{ id: number; name: string; email: string; lecture_id: number; title: string; question: string; created_at: Date }>(
-      `SELECT sq.id, u.name, u.email, sq.lecture_id, l.title, sq.question, sq.created_at
+    query<{
+      id: number; name: string; email: string; lecture_id: number; title: string;
+      course_id: number; course_title: string;
+      question: string; answer: string; trace_id: string | null;
+      response_status: string | null; not_found_reason: string | null; created_at: Date;
+    }>(
+      `SELECT ch.id, u.name, u.email, ch.lecture_id, l.title,
+              c.id AS course_id, c.title AS course_title,
+              ch.question, ch.answer,
+              ch.trace_id, rl.response_status, rl.not_found_reason, ch.created_at
        ${from} ${whereSql}
-       ORDER BY sq.created_at DESC, sq.id DESC
+       ORDER BY ch.created_at DESC, ch.id DESC
        LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
       [...params, limit, offset]
     ),
     query<{ n: string }>(`SELECT COUNT(*) AS n ${from} ${whereSql}`, params),
   ]);
   const total = Number(cnt[0]?.n ?? 0);
-  logger.info(`[ANALYTICS] recentQuestionsPage: ${rows.length} of ${total} (offset ${offset}${search ? ', search' : ''}${f.lectureId != null ? `, lecture #${f.lectureId}` : ''})`);
+  logger.info(`[ANALYTICS] recentQuestionsPage: ${rows.length} of ${total} (offset ${offset}${search ? ', search' : ''}${f.courseId != null ? `, course #${f.courseId}` : ''}${f.lectureId != null ? `, lecture #${f.lectureId}` : ''})`);
   return {
     items: rows.map(r => ({
-      id:           r.id,
-      studentName:  r.name,
-      studentEmail: r.email,
-      lectureId:    r.lecture_id,
-      lectureTitle: r.title,
-      question:     r.question,
-      createdAt:    r.created_at.toISOString(),
+      id:             r.id,
+      studentName:    r.name,
+      studentEmail:   r.email,
+      lectureId:      r.lecture_id,
+      lectureTitle:   r.title,
+      courseId:       r.course_id,
+      courseTitle:    r.course_title,
+      question:       r.question,
+      answer:         r.answer,
+      traceId:        r.trace_id,
+      outcome:        r.response_status,
+      notFoundReason: r.not_found_reason,
+      createdAt:      r.created_at.toISOString(),
     })),
     total,
     hasMore: offset + rows.length < total,
@@ -366,188 +410,173 @@ export const getStudentJourney = async (
   };
 };
 
-const STOP_WORDS = new Set([
-  'the','a','an','is','are','was','were','what','how','why','when','where','which',
-  'can','do','does','did','in','on','at','for','of','to','and','or','but','not',
-  'with','that','this','it','its','be','has','have','had','will','would','could',
-  'should','i','you','we','they','he','she','my','your','their','our','me','us',
-  'him','her','if','so','than','then','there','here','from','by','about','as',
-  'into','through','during','before','after','above','below','between','each',
-  'few','more','most','other','some','such','no','nor','only','same','too','very',
-  'just','because','while','although','though','since','until','unless','however',
-  'also','both','either','neither','once','any','all','get','got','make','made',
-  'use','used','using','want','need','give','take','tell','explain','define','mean',
-  'means','difference','between','example','examples','work','works','like','know',
-  'please','thanks','thank','hello','help','understand','understanding','concept',
-]);
-
-function tokenize(text: string): Set<string> {
-  return new Set(
-    text.toLowerCase()
-      .replace(/[^a-z0-9\s]/g, ' ')
-      .split(/\s+/)
-      .filter(w => w.length > 3 && !STOP_WORDS.has(w))
-  );
-}
-
-// Content Gaps is bounded: it reads at most the newest CONTENT_GAPS_MAX_QUESTIONS
-// questions from the last CONTENT_GAPS_WINDOW_DAYS days and at most
-// CONTENT_GAPS_MAX_CHUNKS Q&As (shared evenly between the lectures), and
-// tokenises them one by one — it used to load
-// every question ever asked plus every active chunk and tokenise one giant joined
-// string, stalling the shared event loop (and every student's chat) as both grew.
+// Content Gaps reads what actually happened to each question rather than
+// guessing from word overlap.
+//
+// The old implementation tokenised student questions and lecture Q&As and
+// called a question "answered" when any single word of it appeared in the
+// lecture's vocabulary. That produced two wrong answers. A question whose
+// every word was a stop word or shorter than four letters ("what is QA?")
+// contributed nothing to the score but still counted as a miss, so a lecture
+// could report 100% coverage while most of its questions went unanswered.
+// And a question a student asked to test the tutor, about something the
+// lecture never claimed to cover, was reported as a gap to fill.
+//
+// Both are already solved in the data. Every request is logged with its
+// outcome, and a not-found outcome carries the reason the retrieval stage
+// gave:
+//
+//   ALL_CANDIDATES_BELOW_RERANK_FLOOR — related material was found and the
+//     reranker judged all of it too weak to answer with. The question belongs
+//     to this lecture and the material is thin: a real gap.
+//   NO_VECTOR_CANDIDATES — nothing in the lecture resembles the question at
+//     all. Off topic. Uploading material for it would be a mistake.
+//   EMPTY_LECTURE / NO_ACTIVE_VERSION — nothing is published yet. An upload
+//     is owed, but that is a lecture-setup problem, not a content gap.
 export const CONTENT_GAPS_WINDOW_DAYS = 90;
+// The windows the report offers. Anything else is refused rather than passed
+// into an interval, and the default is used.
+export const CONTENT_GAPS_WINDOWS = [7, 30, 90, 180, 365];
+// Bounded like the implementation it replaces: at most this many unanswered
+// rows are read back for grouping, newest first.
 export const CONTENT_GAPS_MAX_QUESTIONS = 20_000;
-export const CONTENT_GAPS_MAX_CHUNKS = 20_000;
+// And at most this many distinct questions are returned for one lecture.
+export const CONTENT_GAPS_QUESTIONS_PER_LECTURE = 20;
 
-// opts.maxChunksPerLecture overrides the even share (tests).
-export const getContentGaps = async (opts: { maxChunksPerLecture?: number } = {}) => {
-  logger.info('[ANALYTICS] getContentGaps: comparing student questions vs AI training data');
+const REASON_MISSING_MATERIAL = 'ALL_CANDIDATES_BELOW_RERANK_FLOOR';
+const REASON_OFF_TOPIC        = 'NO_VECTOR_CANDIDATES';
+const REASONS_NO_MATERIAL     = ['EMPTY_LECTURE', 'NO_ACTIVE_VERSION'];
 
-  // Exact per-lecture counts for the window — the headline number never
-  // depends on the sample below. Only lectures with a trained AI agent: READY
-  // and serving a published dataset. A legacy READY lecture with no active
-  // version has nothing to compare against (chat refuses it too); scoring it
-  // 0% would label it a "Critical Gap".
-  const { rows: askedRows } = await query<{ lecture_id: number; lecture_title: string; asked: string }>(
-    `SELECT sq.lecture_id, l.title AS lecture_title, COUNT(*) AS asked
-     FROM student_questions sq
-     JOIN lectures l ON l.id = sq.lecture_id
-     WHERE l.status = 'READY' AND l.active_version_id IS NOT NULL
-       AND sq.created_at >= NOW() - make_interval(days => $1)
-     GROUP BY sq.lecture_id, l.title`,
-    [CONTENT_GAPS_WINDOW_DAYS]
-  );
-  if (askedRows.length === 0) return [];
-  const totalInWindow = askedRows.reduce((n, r) => n + Number(r.asked), 0);
+export const getContentGaps = async (opts: { days?: number; courseId?: number } = {}) => {
+  const windowDays = CONTENT_GAPS_WINDOWS.includes(Number(opts.days))
+    ? Number(opts.days)
+    : CONTENT_GAPS_WINDOW_DAYS;
+  // Every lecture belongs to exactly one course (lectures.course_id is NOT
+  // NULL since migration 022), so the course is a join, never a left join,
+  // and a lecture can never be dropped by adding it.
+  const courseId = Number.isInteger(Number(opts.courseId)) && Number(opts.courseId) > 0
+    ? Number(opts.courseId)
+    : null;
+  logger.info(`[ANALYTICS] getContentGaps: reading recorded question outcomes (${windowDays}d${courseId ? `, course #${courseId}` : ''})`);
 
-  const { rows: studentQs } = await query<{ lecture_id: number; question: string }>(
-    `SELECT sq.lecture_id, sq.question
-     FROM student_questions sq
-     JOIN lectures l ON l.id = sq.lecture_id
-     WHERE l.status = 'READY' AND l.active_version_id IS NOT NULL
-       AND sq.created_at >= NOW() - make_interval(days => $1)
-     ORDER BY sq.created_at DESC
-     LIMIT $2`,
-    [CONTENT_GAPS_WINDOW_DAYS, CONTENT_GAPS_MAX_QUESTIONS]
-  );
-  const sampled = totalInWindow > studentQs.length;
-
-  const lectureIds = askedRows.map(r => r.lecture_id);
-
-  // Training vocabulary: the question, topic and keywords of each active Q&A.
-  // Its first piece is enough (a long answer is split into pieces; the other
-  // fields are the same on every piece). Capped PER LECTURE, in a fixed order:
-  // a bare LIMIT across all lectures could hand one lecture none of its
-  // vocabulary and score it 0%.
-  const perLectureCap = opts.maxChunksPerLecture ?? Math.max(1, Math.floor(CONTENT_GAPS_MAX_CHUNKS / lectureIds.length));
-  const { rows: chunks } = await query<{
-    lecture_id: number; topic: string | null; question: string; keywords: string | null;
+  // Per lecture, in the window: how many requests, and how each not-found
+  // outcome was classified. Archived lectures are left out — they are no
+  // longer served to students, so there is nothing to act on.
+  const { rows: outcomeRows } = await query<{
+    lecture_id: number; lecture_title: string;
+    course_id: number; course_title: string;
+    analysed: number; unanswered: number;
+    missing_material: number; off_topic: number; no_material: number;
   }>(
-    `SELECT lecture_id, topic, question, keywords FROM (
-       SELECT c.lecture_id, c.topic, c.question, c.keywords,
-              ROW_NUMBER() OVER (PARTITION BY c.lecture_id ORDER BY c.id) AS rn
-       FROM lecture_qna_chunks c
-       JOIN lectures l ON l.id = c.lecture_id
-       JOIN dataset_version_chunks d ON d.chunk_id = c.id AND d.version_id = l.active_version_id AND d.chunk_index = 0
-       WHERE c.lecture_id = ANY($1::int[])
-     ) t
-     WHERE rn <= $2`,
-    [lectureIds, perLectureCap]
+    `SELECT r.lecture_id,
+            l.title AS lecture_title,
+            c.id    AS course_id,
+            c.title AS course_title,
+            COUNT(*)::int                                                      AS analysed,
+            COUNT(*) FILTER (WHERE r.response_status = 'NOT_FOUND')::int       AS unanswered,
+            COUNT(*) FILTER (WHERE r.not_found_reason = $2)::int               AS missing_material,
+            COUNT(*) FILTER (WHERE r.not_found_reason = $3)::int               AS off_topic,
+            COUNT(*) FILTER (WHERE r.not_found_reason = ANY($4::text[]))::int  AS no_material
+       FROM rag_request_log r
+       JOIN lectures l ON l.id = r.lecture_id
+       JOIN courses  c ON c.id = l.course_id
+      WHERE r.created_at >= NOW() - make_interval(days => $1)
+        AND l.archived_at IS NULL
+        AND ($5::int IS NULL OR l.course_id = $5)
+      GROUP BY r.lecture_id, l.title, c.id, c.title`,
+    [windowDays, REASON_MISSING_MATERIAL, REASON_OFF_TOPIC, REASONS_NO_MATERIAL, courseId]
   );
+  if (outcomeRows.length === 0) return [];
+  const lectureIds = outcomeRows.map(r => r.lecture_id);
 
-  // Exact chunk (piece) and Q&A counts per lecture.
-  const { rows: countRows } = await query<{ lecture_id: number; count: string; qas: string }>(
-    `SELECT c.lecture_id, COUNT(*) AS count, COUNT(*) FILTER (WHERE d.chunk_index = 0) AS qas
-     FROM lecture_qna_chunks c
-     JOIN lectures l ON l.id = c.lecture_id
-     JOIN dataset_version_chunks d ON d.chunk_id = c.id AND d.version_id = l.active_version_id
-     WHERE c.lecture_id = ANY($1::int[])
-     GROUP BY c.lecture_id`,
-    [lectureIds]
+  // How many questions were asked at all. The request log began with its
+  // migration, so a lecture used before that has questions this analysis
+  // cannot see; the difference is reported rather than hidden.
+  const { rows: askedRows } = await query<{ lecture_id: number; asked: number }>(
+    `SELECT lecture_id, COUNT(*)::int AS asked
+       FROM student_questions
+      WHERE lecture_id = ANY($1::int[])
+        AND created_at >= NOW() - make_interval(days => $2)
+      GROUP BY lecture_id`,
+    [lectureIds, windowDays]
   );
-  const chunkCountMap = new Map(countRows.map(r => [r.lecture_id, Number(r.count)]));
-  const qaCountMap = new Map(countRows.map(r => [r.lecture_id, Number(r.qas)]));
-  const vocabRowsRead = new Map<number, number>();
-  for (const c of chunks) vocabRowsRead.set(c.lecture_id, (vocabRowsRead.get(c.lecture_id) ?? 0) + 1);
+  const askedMap = new Map(askedRows.map(r => [r.lecture_id, Number(r.asked)]));
 
-  // Per-lecture sampled questions
-  const lectureStudentQs = new Map<number, string[]>();
-  for (const q of studentQs) {
-    if (!lectureStudentQs.has(q.lecture_id)) lectureStudentQs.set(q.lecture_id, []);
-    lectureStudentQs.get(q.lecture_id)!.push(q.question);
-  }
-
-  // Build chunk vocabulary per lecture
-  const chunkVocabMap = new Map<number, Set<string>>();
-  for (const c of chunks) {
-    if (!chunkVocabMap.has(c.lecture_id)) chunkVocabMap.set(c.lecture_id, new Set());
-    const vocab = chunkVocabMap.get(c.lecture_id)!;
-    // Add tokenized question words
-    for (const w of tokenize(c.question)) vocab.add(w);
-    // Add explicit keywords field (comma-separated)
-    if (c.keywords) c.keywords.split(',').map(k => k.trim().toLowerCase()).filter(Boolean).forEach(k => vocab.add(k));
-    // Add topic words
-    if (c.topic) for (const w of tokenize(c.topic)) vocab.add(w);
-  }
-
-  const results = [];
-
-  for (const { lecture_id: lectureId, lecture_title: title, asked } of askedRows) {
-    const questions = lectureStudentQs.get(lectureId) ?? [];
-    const chunkVocab = chunkVocabMap.get(lectureId) ?? new Set<string>();
-    const chunkCount = chunkCountMap.get(lectureId) ?? 0;
-
-    // Each question is tokenised once: its keywords go into the lecture-wide
-    // set, and it counts as "answered from lecture" if ANY of them appears in
-    // the chunk vocabulary (otherwise it was unanswerable from lecture content).
-    const studentKeywords = new Set<string>();
-    let answeredFromLecture = 0;
-    let notInLecture = 0;
-    for (const q of questions) {
-      const qKeywords = tokenize(q);
-      let hasMatch = false;
-      for (const kw of qKeywords) {
-        studentKeywords.add(kw);
-        if (chunkVocab.has(kw)) hasMatch = true;
-      }
-      if (hasMatch) answeredFromLecture++;
-      else notInLecture++;
+  // The questions themselves, for the gaps worth acting on only. The text
+  // lives in chat_history, which the request log joins by trace id. Repeats
+  // are grouped so five students asking the same thing read as one job, with
+  // a count — punctuation and case are normalised so they group together.
+  const { rows: missedRows } = await query<{
+    lecture_id: number; question: string; asked_count: number; last_asked: Date;
+  }>(
+    `SELECT r.lecture_id,
+            MIN(ch.question)   AS question,
+            COUNT(*)::int      AS asked_count,
+            MAX(r.created_at)  AS last_asked
+       FROM (
+         SELECT trace_id, lecture_id, created_at
+           FROM rag_request_log
+          WHERE created_at >= NOW() - make_interval(days => $1)
+            AND not_found_reason = $2
+            AND lecture_id = ANY($3::int[])
+          ORDER BY created_at DESC
+          LIMIT $4
+       ) r
+       JOIN chat_history ch ON ch.trace_id = r.trace_id
+      GROUP BY r.lecture_id, lower(regexp_replace(ch.question, '[^a-zA-Z0-9]+', ' ', 'g'))
+      ORDER BY r.lecture_id, COUNT(*) DESC, MAX(r.created_at) DESC`,
+    [windowDays, REASON_MISSING_MATERIAL, lectureIds, CONTENT_GAPS_MAX_QUESTIONS]
+  );
+  // One entry per DISTINCT question. The count of rows in rag_request_log is
+  // how many times questions were asked, which is a different number: one
+  // question asked twice is one thing to write, not two. The list is capped
+  // for display, so the distinct total is counted before the cap applies.
+  const missedMap = new Map<number, { question: string; askedCount: number; lastAskedAt: string }[]>();
+  const distinctMap = new Map<number, number>();
+  for (const m of missedRows) {
+    distinctMap.set(m.lecture_id, (distinctMap.get(m.lecture_id) ?? 0) + 1);
+    const list = missedMap.get(m.lecture_id) ?? [];
+    if (list.length < CONTENT_GAPS_QUESTIONS_PER_LECTURE) {
+      list.push({
+        question:    m.question,
+        askedCount:  Number(m.asked_count),
+        lastAskedAt: new Date(m.last_asked).toISOString(),
+      });
     }
-
-    // Partition: covered vs gap
-    const covered: string[] = [];
-    const gaps: string[] = [];
-    for (const kw of studentKeywords) {
-      (chunkVocab.has(kw) ? covered : gaps).push(kw);
-    }
-
-    const total = covered.length + gaps.length;
-    const coverageScore = total > 0 ? Math.round((covered.length / total) * 100) : 100;
-    const status = coverageScore >= 70 ? 'GOOD' : coverageScore >= 40 ? 'MODERATE' : 'POOR';
-
-    results.push({
-      lectureId,
-      lectureTitle:        title,
-      questionsAsked:      Number(asked),
-      chunkCount,
-      coverageScore,
-      gapTopics:           gaps.slice(0, 20),
-      coveredTopics:       covered.slice(0, 20),
-      status,
-      answeredFromLecture,
-      notInLecture,
-      // True when the window held more questions than were analysed (the
-      // newest CONTENT_GAPS_MAX_QUESTIONS were used).
-      sampled,
-      // True when only part of this lecture's Q&As fed the vocabulary.
-      chunksSampled:       (vocabRowsRead.get(lectureId) ?? 0) < (qaCountMap.get(lectureId) ?? 0),
-      windowDays:          CONTENT_GAPS_WINDOW_DAYS,
-    });
+    missedMap.set(m.lecture_id, list);
   }
 
-  // Sort by worst coverage first so admin sees biggest gaps at top
-  return results.sort((a, b) => a.coverageScore - b.coverageScore);
+  const results = outcomeRows.map(r => {
+    const missingMaterial = Number(r.missing_material);
+    const analysed = Number(r.analysed);
+    const asked = askedMap.get(r.lecture_id) ?? analysed;
+    return {
+      lectureId:       r.lecture_id,
+      lectureTitle:    r.lecture_title,
+      // Carried on every row so the page can both filter by course and say
+      // which course a lecture belongs to. With one course it is redundant;
+      // with several, a flat list of lectures is unreadable without it.
+      courseId:        r.course_id,
+      courseTitle:     r.course_title,
+      questionsAsked:  asked,
+      // Below `asked` when the lecture was in use before request logging began.
+      questionsAnalysed: analysed,
+      unanswered:      Number(r.unanswered),
+      // How many different questions need writing: the unit of work.
+      questionsToAnswer: distinctMap.get(r.lecture_id) ?? 0,
+      // How many times those questions were asked, across all students.
+      missingMaterial,
+      offTopic:        Number(r.off_topic),
+      noMaterial:      Number(r.no_material),
+      status:          missingMaterial > 0 ? 'NEEDS_MATERIAL' : 'CLEAR',
+      missedQuestions: missedMap.get(r.lecture_id) ?? [],
+      windowDays,
+    };
+  });
+
+  // Most material owed first; that is the order the work should be done in.
+  return results.sort((a, b) => b.questionsToAnswer - a.questionsToAnswer
+    || b.missingMaterial - a.missingMaterial || b.unanswered - a.unanswered);
 };
 
 // Rankings below order by the numeric aggregate: the ::text aliases (kept for

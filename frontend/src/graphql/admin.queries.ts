@@ -2,8 +2,8 @@ import { gql } from '@apollo/client';
 
 // One page of users, filtered on the server (AD6).
 export const GET_ALL_USERS = gql`
-  query AllUsers($limit: Int!, $offset: Int!, $search: String, $role: String) {
-    allUsers(limit: $limit, offset: $offset, search: $search, role: $role) {
+  query AllUsers($limit: Int!, $offset: Int!, $search: String, $role: String, $sort: String) {
+    allUsers(limit: $limit, offset: $offset, search: $search, role: $role, sort: $sort) {
       items {
         id
         name
@@ -53,6 +53,20 @@ export const GET_LECTURE_AGENT_DETAILS = gql`
       agentProfileStatus
       chatReady
       notReadyReason
+    }
+  }
+`;
+
+/** Admin invitations waiting for the person to sign up. */
+export const GET_ADMIN_INVITATIONS = gql`
+  query AdminInvitations {
+    adminInvitations {
+      id
+      email
+      invitedByName
+      createdAt
+      expiresAt
+      status
     }
   }
 `;

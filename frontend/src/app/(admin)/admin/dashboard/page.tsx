@@ -6,6 +6,7 @@ import {
   GET_QUESTIONS_PER_LECTURE,
   GET_RECENT_QUESTIONS,
   GET_REGISTERED_STUDENTS,
+  GET_LECTURE_STATUS_LIST,
 } from '@/graphql/analytics.queries';
 import { AdminPageHero } from '@/components/admin/AdminPageHero';
 
@@ -40,6 +41,9 @@ export default function AdminDashboard() {
 
   // Only the summary counts are needed here; the list itself is paged (AD6).
   const { data: studentsData } = useQuery(GET_REGISTERED_STUDENTS, { variables: { limit: 1, offset: 0 }, fetchPolicy: 'network-only' });
+  // Every lecture, so the "no questions yet" line can name the ones it means.
+  const { data: lectureListData } = useQuery<{ lectureStatusList: { id: number; title: string }[] }>(GET_LECTURE_STATUS_LIST);
+  const lectureList = lectureListData?.lectureStatusList ?? [];
 
   const summary     = summaryData?.analyticsSummary;
   const qPerLecture: LectureCount[] = perLecture?.questionsPerLecture ?? [];
@@ -57,6 +61,12 @@ export default function AdminDashboard() {
   // with the numbers above them.
   const notReady    = Math.max(totalLectures - readyAgents, 0);
   const unasked     = Math.max(totalLectures - qPerLecture.length, 0);
+  // Which lectures those are. questionsPerLecture only returns lectures that
+  // have questions, so the ones missing from it are the unasked ones. The
+  // count above stays as it was; this only puts names to it, and falls back
+  // to the bare count if the lecture list has not loaded.
+  const askedIds = new Set(qPerLecture.map(l => l.lectureId));
+  const unaskedLectures = lectureList.filter(l => !askedIds.has(l.id));
   const maxCount    = qPerLecture.reduce((m, l) => Math.max(m, l.count), 0);
   const askedTotal  = qPerLecture.reduce((s, l) => s + l.count, 0);
 
@@ -115,8 +125,29 @@ export default function AdminDashboard() {
             )}
             {unasked > 0 && (
               <li className="flex flex-wrap items-center gap-x-2 text-label text-[var(--text)]">
-                <span>{unasked} {unasked === 1 ? 'lecture has' : 'lectures have'} had no questions yet.</span>
-                <Link href="/admin/content-gaps" className="font-semibold text-[var(--accent)] hover:underline">Open Content Gaps</Link>
+                {/* Content Gaps lists questions the material could not answer.
+                    A lecture with no questions has none to list, so it could
+                    never appear there: the old link sent the reader to a page
+                    that cannot show the thing this line had just told them
+                    about. Naming the lecture answers "which one?" in the same
+                    breath, and links where something can be done about it. */}
+                {unaskedLectures.length > 0 ? (
+                  <span>
+                    No questions yet for{' '}
+                    {unaskedLectures.slice(0, 2).map((l, i) => (
+                      <span key={l.id}>
+                        {i > 0 && ', '}
+                        <Link href={`/admin/lectures/${l.id}`} className="font-semibold text-[var(--accent)] hover:underline">{l.title}</Link>
+                      </span>
+                    ))}
+                    {unaskedLectures.length > 2 && ` and ${unaskedLectures.length - 2} more`}.
+                  </span>
+                ) : (
+                  <>
+                    <span>{unasked} {unasked === 1 ? 'lecture has' : 'lectures have'} had no questions yet.</span>
+                    <Link href="/admin/lectures" className="font-semibold text-[var(--accent)] hover:underline">Open Lectures</Link>
+                  </>
+                )}
               </li>
             )}
           </ul>
@@ -156,7 +187,12 @@ export default function AdminDashboard() {
                   </div>
                   <div className="h-2 rounded-full bg-[var(--surface)] border border-[var(--border)] overflow-hidden">
                     <div
-                      className="h-full rounded-full bg-[var(--accent)]"
+                      /* accent-dim, not full accent. Six bars of the darkest
+                         navy in the palette sat on the page as solid blocks.
+                         One colour, not six: the bar length already carries
+                         the value, so colouring each bar differently would
+                         encode nothing and only add noise. */
+                      className="h-full rounded-full bg-[var(--accent-dim)]"
                       style={{ width: `${maxCount ? Math.max(Math.round((item.count / maxCount) * 100), 2) : 0}%` }}
                     />
                   </div>

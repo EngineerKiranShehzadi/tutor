@@ -26,57 +26,50 @@ interface MetricCardProps {
   sampleNote?: string;
 }
 
-const ACCENTS: Record<string, string> = {
-  indigo: 'bg-indigo-50 text-indigo-600',
-  emerald: 'bg-emerald-50 text-emerald-600',
-  red: 'bg-red-50 text-red-600',
-  amber: 'bg-amber-50 text-amber-600',
-  cyan: 'bg-cyan-50 text-cyan-600',
-  violet: 'bg-violet-50 text-violet-600',
-};
-
 export function MetricCard({
-  label, value, tooltip, icon, accent = 'indigo', comparisonPct, loading,
+  label, value, tooltip, icon, comparisonPct, loading,
   available, unavailableReason, emptyMessage, sampleNote,
 }: MetricCardProps) {
   const isUnavailable = value === null && (available === undefined ? true : !available);
   const isEmpty = value === null && !isUnavailable;
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm hover:shadow-md transition-shadow group relative">
-      <div className="flex items-start justify-between mb-5">
-        <div className={`w-11 h-11 rounded-xl flex items-center justify-center ${ACCENTS[accent] ?? ACCENTS.indigo}`}>
-          <i className={`${icon} text-[15px]`} />
-        </div>
-        <div className="relative">
-          <i className="fas fa-circle-info text-slate-300 text-[13px] cursor-help peer" />
-          <div className="pointer-events-none peer-hover:opacity-100 opacity-0 transition-opacity absolute right-0 top-6 z-10 w-56 bg-slate-900 text-white text-[12px] rounded-lg px-3 py-2 shadow-xl leading-snug">
+    <div className="bg-[var(--card)] rounded-card border border-[var(--border)] p-5 group relative">
+      {/* Built the same way as SummaryCard on Tutor Health: the label and a
+          small icon, then the number. The tinted icon tile is gone — six
+          accent names all pointed at the same two colours anyway. */}
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <p className="flex items-center gap-2 text-caption font-medium text-[var(--muted)]">
+          <i className={`${icon} text-[12px] text-[var(--muted2)]`} aria-hidden="true" />
+          {label}
+        </p>
+        <div className="relative shrink-0">
+          <i className="fas fa-circle-info text-[var(--muted2)] text-caption cursor-help peer" />
+          <div className="pointer-events-none peer-hover:opacity-100 opacity-0 transition-opacity absolute right-0 top-6 z-10 w-56 bg-[var(--ink)] text-white text-caption rounded-control px-3 py-2 leading-snug shadow-[0_8px_24px_rgba(22,26,31,0.22)]">
             {tooltip}
           </div>
         </div>
       </div>
       {loading ? (
-        <div className="h-9 w-20 rounded-lg bg-slate-100 animate-pulse mb-1" />
+        <div className="h-9 w-20 rounded-card bg-[var(--surface)] animate-pulse mb-1" />
       ) : isUnavailable ? (
         <div className="py-1" title={unavailableReason}>
-          <p className="text-[15px] font-semibold text-slate-300 leading-none">Unavailable</p>
-          {unavailableReason && <p className="text-[11px] text-slate-400 mt-1.5 leading-snug">{unavailableReason}</p>}
+          <p className="text-label font-semibold text-[var(--muted2)] leading-none">Unavailable</p>
+          {unavailableReason && <p className="text-[11px] text-[var(--muted2)] mt-1.5 leading-snug">{unavailableReason}</p>}
         </div>
       ) : isEmpty ? (
-        <p className="text-[14px] font-medium text-slate-400 italic leading-snug py-2">{emptyMessage ?? 'No data'}</p>
+        <p className="text-label font-medium text-[var(--muted2)] italic leading-snug py-2">{emptyMessage ?? 'No data'}</p>
       ) : (
-        <p className="text-[32px] font-extrabold text-slate-900 leading-none">{value}</p>
+        <p className="text-h1 font-semibold text-[var(--text)] leading-none tabular-nums">{value}</p>
       )}
-      <div className="flex items-center gap-2 mt-2">
-        <p className="text-[13px] text-slate-500 font-medium">{label}</p>
-        {comparisonPct !== undefined && comparisonPct !== null && !loading && (
-          <span className={`text-[11px] font-bold ${comparisonPct >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-            {comparisonPct >= 0 ? '▲' : '▼'} {Math.abs(comparisonPct).toFixed(0)}%
-          </span>
-        )}
-      </div>
+      {comparisonPct !== undefined && comparisonPct !== null && !loading && (
+        <p className={`text-caption font-medium mt-2 ${comparisonPct >= 0 ? 'text-[var(--accent)]' : 'text-[var(--gold)]'}`}>
+          {comparisonPct >= 0 ? '▲' : '▼'} {Math.abs(comparisonPct).toFixed(0)}%
+          <span className="font-normal text-[var(--muted2)]"> vs previous period</span>
+        </p>
+      )}
       {!loading && sampleNote && !isUnavailable && (
-        <p className="text-[11px] text-slate-400 mt-1.5">{sampleNote}</p>
+        <p className="text-[11px] text-[var(--muted2)] mt-1.5">{sampleNote}</p>
       )}
     </div>
   );

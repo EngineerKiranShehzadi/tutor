@@ -9,7 +9,6 @@ interface AdminPageHeroProps {
   title: string;
   subtitle: string;
   action?: React.ReactNode;
-  badge?: string;
   /** A section between Admin and this page, e.g. Lectures on one lecture. */
   parent?: { label: string; href: string };
 }
@@ -27,7 +26,11 @@ interface AdminPageHeroProps {
  * 17px section headings beneath it: at 20px the two were close enough that
  * nothing on the page read as a level above anything else.
  */
-export function AdminPageHero({ title, subtitle, action, badge, parent }: AdminPageHeroProps) {
+// No status pill beside the title. The one page that used it repeated a field
+// already shown in the summary below, in a different spelling, in the one
+// shape the tables had just stopped using. Removed from the hero as well as
+// from that page, so it cannot quietly come back.
+export function AdminPageHero({ title, subtitle, action, parent }: AdminPageHeroProps) {
   return (
     <div className="mb-7 border-b border-[var(--border)] pb-5">
       {/* The trail is how you go back up, so a page one level down needs no
@@ -49,14 +52,7 @@ export function AdminPageHero({ title, subtitle, action, badge, parent }: AdminP
           heading does not: the breadcrumb already places you. */}
       <div className="mt-3 flex items-start gap-4">
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2.5">
-            <h1 className="text-h1 font-semibold text-[var(--text)]">{title}</h1>
-            {badge && (
-              <span className="rounded-full border border-[var(--border)] bg-[var(--surface)] px-2.5 py-0.5 text-caption font-medium text-[var(--muted)]">
-                {badge}
-              </span>
-            )}
-          </div>
+          <h1 className="text-h1 font-semibold text-[var(--text)]">{title}</h1>
           <p className="mt-1 text-label text-[var(--muted)]">{subtitle}</p>
         </div>
 

@@ -193,6 +193,17 @@ async function listTracesFromRequestLog(filters: TraceListFilters, limit: number
   };
 }
 
+// The overview's counts use this, so they are computed over exactly the rows
+// the trace tables list: same table, same filters, same row-to-summary mapping.
+// Counting from Phoenix instead put "Total requests: 1" directly above a list
+// of a hundred requests whenever Phoenix's own history was shorter than the
+// request log's.
+export async function listTraceSummariesFromRequestLog(filters: TraceListFilters, limit: number): Promise<TraceSummary[]> {
+  const { sql, params } = buildTraceListQuery(filters, limit);
+  const { rows } = await query<LogListRow>(sql, params);
+  return rows.slice(0, limit).map(summaryFromLogRow);
+}
+
 // ── Fallback: Phoenix's own list, when the request log is switched off ──
 // How many traces one filtered request reads at most — the same window the
 // overview's counts (e.g. "Total errors") are computed over.
@@ -309,6 +320,19 @@ export async function listTraces(filters: TraceListFilters): Promise<TraceListRe
   };
 }
 
+/**
+ * The one request-log row for a trace id, as a TraceSummary.
+ *
+ * Reuses the list's own row shape and mapping, so a trace recovered this way
+ * carries exactly the values the row the reader clicked was showing.
+ * Returns null when the log has no such request, which is a real not-found.
+ */
+async function traceSummaryFromLog(traceId: string): Promise<TraceSummary | null> {
+  if (!env.OBSERVABILITY.REQUEST_LOG_ENABLED) return null;
+  const rows = await listTraceSummariesFromRequestLog({ traceId, sort: 'start_time', order: 'desc' }, 1);
+  return rows[0] ?? null;
+}
+
 export async function getTraceDetail(traceId: string): Promise<TraceDetail> {
   const caps = await getPhoenixCapabilities();
   if (!caps.reachable) throw new ObservabilityError('PHOENIX_UNREACHABLE', 'Phoenix server is unreachable');
@@ -322,7 +346,32 @@ export async function getTraceDetail(traceId: string): Promise<TraceDetail> {
 
   const rawSpans = result.spans as unknown as RawPhoenixSpan[];
   if (rawSpans.length === 0) {
-    throw new ObservabilityError('TRACE_NOT_FOUND', `No spans found for trace ${traceId}`);
+    // The two stores keep different amounts of history. The trace list reads
+    // rag_request_log, which holds every request since the project started;
+    // this view reads Phoenix, which holds only what is still in its own
+    // database. So a listed row can point at a trace Phoenix no longer has,
+    // and that is retention, not a missing request.
+    //
+    // Throwing sent the reader to an error page with a Retry button that
+    // could never succeed, and threw away the row they had just clicked.
+    // The log still holds what it was: when, which route, how long, which
+    // model, how many tokens, what memory did, how it ended. That is most of
+    // the summary already on screen, so it is returned with no spans, and the
+    // page says the step-by-step part is the piece that is gone.
+    const logged = await traceSummaryFromLog(traceId);
+    if (!logged) throw new ObservabilityError('TRACE_NOT_FOUND', `No spans found for trace ${traceId}`);
+    return {
+      summary: logged,
+      rootSpan: null,
+      spans: [],
+      spanTree: [],
+      timeline: [],
+      criticalPath: [],
+      annotations: [],
+      notes: [],
+      phoenixTraceUrl: null,
+      raw: { trace: null, spans: [] },
+    };
   }
 
   const spans = rawSpans.map(s => mapPhoenixSpan(s, traceId)).sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());

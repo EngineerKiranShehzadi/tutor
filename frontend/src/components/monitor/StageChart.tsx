@@ -1,59 +1,76 @@
 'use client';
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { monitorApi, type MonitorWindow, type StageStats } from './monitor-api';
 import { SectionCard } from './SectionCard';
 import { useMonitorData } from './useMonitorData';
 import { stageLabel } from '@/lib/monitor-labels';
 
-const MAX_STAGES = 10;
-const ROW_H = 34;
-const fmtMs = (ms: number) => (ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(2)} s`);
+/**
+ * Why an answer takes as long as it does.
+ *
+ * This was a bar chart of each step's p95, and it was misleading twice over.
+ * p95 is the slowest one in twenty, so a step that ran three times and was
+ * slow once drew a bar three minutes long and flattened every step that runs
+ * on every question into a stub against it. And nothing said how often a
+ * step ran, so there was no way to tell the two apart.
+ *
+ * It is a list now: the typical time for each step, how many times it ran,
+ * and its slowest. Sorted by typical time, because the question is where a
+ * normal answer spends its seconds. A bar is kept as a proportion of the
+ * slowest typical step, which is a comparison that holds.
+ */
 
-interface Point { name: string; p95Ms: number; p50Ms: number }
-
-function StageTooltip({ active, payload }: { active?: boolean; payload?: { payload: Point }[] }) {
-  if (!active || !payload?.length) return null;
-  const p = payload[0].payload;
-  return (
-    <div className="bg-white border border-slate-200 rounded-xl shadow-lg px-3 py-2 text-[12px]">
-      <p className="font-semibold text-slate-800 mb-1">{p.name}</p>
-      <p className="text-slate-600">Slowest 1 in 20 (p95): <span className="font-semibold">{fmtMs(p.p95Ms)}</span></p>
-      <p className="text-slate-600">Typical (p50): <span className="font-semibold">{fmtMs(p.p50Ms)}</span></p>
-    </div>
-  );
-}
+// Six, not eight. Past the sixth the bars are stubs and the list is just
+// long; the point is which two or three steps hold everything up.
+const MAX_STEPS = 6;
+const fmt = (ms: number) => (ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`);
 
 export function StageChart({ windowKey, tick }: { windowKey: MonitorWindow; tick: number }) {
-  const { data, loading, error, reload } = useMonitorData<StageStats[]>((s) => monitorApi.getStages(windowKey, s), windowKey, tick);
-  const points: Point[] = [...(data ?? [])]
-    .sort((a, b) => b.p95Ms - a.p95Ms)
-    .slice(0, MAX_STAGES)
-    .map((s) => ({ name: stageLabel(s.stage), p95Ms: s.p95Ms, p50Ms: s.p50Ms }));
-  const axis = { fontSize: 11, fill: '#64748b' };
+  const { data, loading, error, reload } = useMonitorData<StageStats[]>(
+    (s) => monitorApi.getStages(windowKey, s), windowKey, tick);
+
+  const steps = [...(data ?? [])].sort((a, b) => b.p50Ms - a.p50Ms).slice(0, MAX_STEPS);
+  const slowest = steps[0]?.p50Ms ?? 1;
 
   return (
     <SectionCard
-      title="Slowest pipeline steps"
-      subtitle="How long each step takes. p95 means 19 out of 20 answers were faster."
+      title="Why answers take as long as they do"
+      subtitle="The typical time each step takes, longest first. Use it to see which step to speed up when answers are slow."
       loading={loading}
       error={error}
       hasData={!!data}
-      empty={!!data && points.length === 0}
-      emptyText="No step timings were recorded in this period"
+      empty={!!data && steps.length === 0}
+      emptyText="No step timings were recorded"
       emptyIcon="fas fa-stopwatch"
       onRetry={reload}
     >
-      <div style={{ height: points.length * ROW_H + 30 }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={points} layout="vertical" margin={{ top: 0, right: 16, bottom: 0, left: 0 }}>
-            <CartesianGrid stroke="#f1f5f9" horizontal={false} />
-            <XAxis type="number" tick={axis} tickLine={false} axisLine={{ stroke: '#e2e8f0' }} tickFormatter={(v: number) => fmtMs(v)} />
-            <YAxis type="category" dataKey="name" width={140} tick={axis} tickLine={false} axisLine={false} interval={0} />
-            <Tooltip content={<StageTooltip />} cursor={{ fill: '#f8fafc' }} />
-            <Bar dataKey="p95Ms" name="p95" fill="#7c3aed" radius={[0, 6, 6, 0]} barSize={16} isAnimationActive={false} />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
+      <ul className="space-y-3.5">
+        {steps.map((s) => (
+          <li key={s.stage}>
+            <div className="flex items-baseline justify-between gap-4">
+              <p className="text-label text-[var(--text)] truncate">{stageLabel(s.stage)}</p>
+              {/* Said in words. A number alone on the right of a bar is a
+                  number the reader has to guess the meaning of. */}
+              <p className="shrink-0 text-label text-[var(--text)] tabular-nums">
+                {fmt(s.p50Ms)}<span className="text-caption text-[var(--muted2)]"> typically</span>
+              </p>
+            </div>
+            {/* The pale navy, not the full one. Six solid accent bars down a
+                card is a block of colour the eye cannot separate; the bar
+                only has to show one step against the next. */}
+            <div className="mt-1.5 h-1.5 rounded-full bg-[var(--surface)] overflow-hidden">
+              <div
+                className="h-full rounded-full bg-[var(--accent-dim)]"
+                style={{ width: `${Math.max((s.p50Ms / slowest) * 100, 2)}%` }}
+              />
+            </div>
+            {/* How often it ran, so a step that happens on three questions
+                in a hundred is not read as part of every answer. */}
+            <p className="text-caption text-[var(--muted2)] mt-1">
+              ran {s.count.toLocaleString()} {s.count === 1 ? 'time' : 'times'} · slowest {fmt(s.p95Ms)}
+            </p>
+          </li>
+        ))}
+      </ul>
     </SectionCard>
   );
 }

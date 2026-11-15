@@ -81,6 +81,106 @@ const emailHtml = (userName: string, heading: string, subtext: string, otp: stri
 </body>
 </html>`;
 
+// ── PLAIN MESSAGE WRAPPER ─────────────────────────────
+// The same shell as the OTP mail without the code box, for messages that ask
+// the reader to do something rather than to copy six digits.
+const noticeHtml = (userName: string, heading: string, paragraphs: string[], note: string) =>
+  emailHtml(userName, heading, paragraphs.join('</p><p>'), '', note)
+    .replace(/<div class="otp-box">[\s\S]*?<\/div>\s*<\/div>/, '');
+
+// ── ADMIN INVITATION ──────────────────────────────────
+export const sendAdminInviteEmail = async (
+  to: string,
+  invitedByName: string,
+  validDays: number,
+): Promise<void> => {
+  const appUrl = env.FRONTEND_URL ?? '';
+  await transporter.sendMail({
+    from:    FROM,
+    to,
+    subject: 'You have been invited to administer AskAITutor',
+    text:    `${invitedByName} invited you to administer AskAITutor. Create an account with this email address `
+           + `(${to}) and you will have the admin role when you sign in. The invitation expires in ${validDays} days.`
+           + (appUrl ? ` Sign up: ${appUrl}/register` : ''),
+    html: noticeHtml(
+      // An invited person has no account yet, so there is no name to greet
+      // them by. Their own address back at them reads like a mail merge that
+      // failed.
+      'there',
+      'Invitation to administer',
+      [
+        `<strong>${invitedByName}</strong> has invited you to administer AskAITutor.`,
+        `Create an account using this email address and you will have the admin role the first time you sign in. `
+        + `You will still set your own password and verify your email as normal.`,
+        appUrl ? `<a href="${appUrl}/register" style="color:#065fd4;font-weight:600">Create your account</a>` : '',
+      ].filter(Boolean),
+      `This invitation expires in ${validDays} days. If you were not expecting it, you can ignore this email — `
+      + `nothing has been created in your name.`,
+    ),
+  });
+  logger.info(`Admin invitation email sent to ${to}`);
+};
+
+// ── ADMIN ROLE GRANTED ────────────────────────────────
+export const sendAdminRoleGrantedEmail = async (
+  to: string,
+  userName: string,
+  byName: string,
+): Promise<void> => {
+  const appUrl = env.FRONTEND_URL ?? '';
+  await transporter.sendMail({
+    from:    FROM,
+    to,
+    subject: 'You are now an administrator on AskAITutor',
+    text:    `${byName} gave you the admin role on AskAITutor. You can manage courses, lectures and students. `
+           + `You will be signed out once, so sign in again to pick up the change.`
+           + (appUrl ? ` ${appUrl}/admin/dashboard` : ''),
+    html: noticeHtml(
+      userName,
+      'You are now an administrator',
+      [
+        `<strong>${byName}</strong> gave you the admin role on AskAITutor.`,
+        `You can now manage courses and lectures, upload teaching material, and see what students are asking.`,
+        `You will be signed out once so the change takes effect; sign in again as usual.`,
+        appUrl ? `<a href="${appUrl}/admin/dashboard" style="color:#065fd4;font-weight:600">Open the admin console</a>` : '',
+      ].filter(Boolean),
+      `If you were not expecting this, contact whoever runs your course — being made an administrator `
+      + `gives access to every student's questions.`,
+    ),
+  });
+  logger.info(`Admin role notice email sent to ${to}`);
+};
+
+/**
+ * Tell someone their password changed.
+ *
+ * Every account system does this, and for one reason: it is the only warning
+ * an account holder gets when somebody else changes it. The mail carries no
+ * link to click and nothing to undo — a reset link in an unexpected message
+ * is itself a way in. It says what happened and who to talk to.
+ */
+export const sendPasswordChangedEmail = async (to: string, userName: string): Promise<void> => {
+  const when = new Date().toUTCString();
+  await transporter.sendMail({
+    from:    FROM,
+    to,
+    subject: 'Your AskAITutor password was changed',
+    text:    `The password for your AskAITutor account was changed on ${when}. `
+           + `Every other signed-in device was signed out. `
+           + `If this was not you, contact whoever runs your course straight away.`,
+    html: noticeHtml(
+      userName,
+      'Your password was changed',
+      [
+        `The password for your AskAITutor account was changed on <strong>${when}</strong>.`,
+        `Every other device that was signed in has been signed out. The device used to make the change stays signed in.`,
+      ],
+      `If this was not you, contact whoever runs your course straight away: someone else may have access to this account.`,
+    ),
+  });
+  logger.info(`Password change notice email sent to ${to}`);
+};
+
 // ── OTP EMAIL ─────────────────────────────────────────
 export const sendPasswordResetOtp = async (
   to: string,

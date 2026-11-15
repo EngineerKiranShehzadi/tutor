@@ -314,6 +314,13 @@ export const env = {
 
   HEALTH: {
     CACHE_TTL_MS:          nonNegativeInt('HEALTH_CHECK_CACHE_TTL_MS', 60000),
+    // How often the maintenance scheduler records a readiness check into
+    // health_check_log, which is what the System Health page reads uptime and
+    // last-failure from. Five minutes is 288 samples a day per component: fine
+    // for the free provider probes, and fine for Neon storage with retention.
+    // Well above CACHE_TTL_MS, so every poll measures rather than re-reading a
+    // cached result.
+    POLL_INTERVAL_MS:      positiveInt('HEALTH_POLL_INTERVAL_MS', 300000),
   },
 
   // ── Provider-neutral LLM configuration ─────────────────────────

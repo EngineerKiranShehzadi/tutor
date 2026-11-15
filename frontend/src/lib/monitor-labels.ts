@@ -30,7 +30,11 @@ export const ERROR_CODE_LABELS: Record<string, string> = {
   CONNECTION_ERROR: 'The connection was lost',
   EXTENSION_NOT_INSTALLED: 'A required database extension is not installed',
   NOT_CONFIGURED: 'Setup is incomplete',
-  UNKNOWN_ERROR: 'Unknown problem',
+  UNKNOWN_ERROR: 'Failed, cause not recorded',
+  // Only /health/ready produces this one: the provider is configured, but its
+  // adapter has no free probe, so there is nothing to call that would prove it
+  // is reachable without paying for a real request. Not a fault.
+  UNVERIFIED_PROVIDER: 'Could not be confirmed without a paid call',
 };
 
 // Keys of rag_request_log.stage_ms: the chat pipeline's span names, mirroring
@@ -38,6 +42,12 @@ export const ERROR_CODE_LABELS: Record<string, string> = {
 // (*_call) are never keys — request-log.service.ts leaves them out of stage_ms.
 export const STAGE_LABELS: Record<string, string> = {
   'validate-chat-session': 'Session check',
+  // These two were missing, so both were drawn as "Other step" — a bar with
+  // no name on a chart whose whole job is naming where the time goes.
+  'load-lecture': 'Loading the lecture',
+  'record-student-question': 'Saving the question',
+  'check-dataset-readiness': 'Checking the material is ready',
+  'resolve-dataset-version': 'Finding the current material',
   'load-agent-profile': 'Loading lecture settings',
   'load-session-history': 'Loading earlier conversation',
   'input-guardrail': 'Checking the question',
@@ -135,7 +145,7 @@ export const ATTENTION_ERROR_LABELS: Record<string, string> = {
   CONNECTION_ERROR: 'Connection lost',
   EXTENSION_NOT_INSTALLED: 'Database extension missing',
   NOT_CONFIGURED: 'Setup is incomplete',
-  UNKNOWN_ERROR: 'Unknown problem',
+  UNKNOWN_ERROR: 'Failed, cause not recorded',
 };
 
 // Same keys as VERIFIER_REASON_LABELS; outages say so, so a verifier outage
@@ -167,15 +177,53 @@ export const COMPONENT_LABELS: Record<string, string> = {
 const GENERIC = {
   responseStatus: 'Unknown outcome',
   notFoundReason: 'Reason unknown',
-  errorCode: 'Unknown problem',
+  errorCode: 'Failed, cause not recorded',
   stage: 'Other step',
   verifierReason: 'Check result unknown',
   attentionReason: 'Needs attention',
   component: 'A service',
 } as const;
 
+/**
+ * How a request was classified. The Traces filter already spelled these in
+ * words while the table beside it printed the stored code, so one screen
+ * showed the same value two ways.
+ */
+export const ROUTE_LABELS: Record<string, string> = {
+  FACT_QUESTION: 'Fact question',
+  CONTEXTUAL_FOLLOW_UP: 'Contextual follow-up',
+  LECTURE_SUMMARY: 'Lecture summary',
+  GREETING: 'Greeting',
+};
+
+/**
+ * What the answer-memory lookup did.
+ *
+ * The filter's "Miss" matches MISS, ENTRY_CREATED and WRITE_FAILED together
+ * (MEMORY_RESULT_MATCHES, backend traces.service.ts), so filtering for a miss
+ * returned rows reading ENTRY_CREATED with nothing to say they were the same
+ * thing. These labels say so: all three begin with the word "Miss".
+ */
+export const MEMORY_RESULT_LABELS: Record<string, string> = {
+  EXACT_HIT: 'Exact hit',
+  SEMANTIC_HIT: 'Semantic hit',
+  MISS: 'Miss',
+  ENTRY_CREATED: 'Miss, answer saved',
+  WRITE_FAILED: 'Miss, save failed',
+  STALE: 'Hit, too old to use',
+  INVALID_SOURCE: 'Hit, source no longer valid',
+  LOOKUP_FAILED: 'Lookup failed',
+  NOT_ATTEMPTED: 'Not attempted',
+};
+
 const pick = (map: Record<string, string>, code: string | null | undefined, fallback: string): string =>
   (code != null && Object.prototype.hasOwnProperty.call(map, code) ? map[code] : fallback);
+
+// These two fall back to the raw code rather than to a generic phrase: an
+// unmapped route or memory result is a real value the reader may need to see,
+// not an unknown.
+export const routeLabel = (c?: string | null) => (c ? pick(ROUTE_LABELS, c, c) : '—');
+export const memoryResultLabel = (c?: string | null) => (c ? pick(MEMORY_RESULT_LABELS, c, c) : '—');
 
 export const responseStatusLabel = (c?: string | null) => pick(RESPONSE_STATUS_LABELS, c, GENERIC.responseStatus);
 export const notFoundReasonLabel = (c?: string | null) => pick(NOT_FOUND_REASON_LABELS, c, GENERIC.notFoundReason);

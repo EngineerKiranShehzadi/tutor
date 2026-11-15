@@ -4,87 +4,124 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
-  AreaChart, Area, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Cell,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Cell,
 } from 'recharts';
 import { ObservabilityHeader } from '@/components/observability/ObservabilityHeader';
 import { ObservabilityTabs } from '@/components/observability/ObservabilityTabs';
-import { MetricCard } from '@/components/observability/MetricCard';
+import { Figures, type Figure } from '@/components/monitor/Figures';
 import { PhoenixUnavailablePanel, EmptyState } from '@/components/observability/PhoenixConnectionState';
 import { useAutoRefresh } from '@/components/observability/useAutoRefresh';
 import { observabilityApi, ObservabilityApiError } from '@/lib/observability-api';
-import type { OverviewMetrics, ObservabilityStatus, MetricResult } from '@/types/observability';
+import { fmtAxisNumber, bucketTickFormatter, fmtDateTime } from '@/lib/chart-format';
+import type { OverviewMetrics, ObservabilityStatus } from '@/types/observability';
 
 // Six tints of the two theme colours, so a chart with several series
 // stays readable without introducing a third hue.
 const COLORS = ['#1f3a5f', '#4a6b8a', '#8fb0d0', '#a35f0d', '#c2802f', '#8e8e92'];
-const CHART_TOOLTIP_STYLE = { borderRadius: 12, border: '1px solid #e5e3df', fontSize: 13, color: '#1c1f24', padding: '10px 14px', boxShadow: '0 4px 16px rgba(0,0,0,0.08)' };
+// Tighter than before, and sat closer to the bar: the old padding pushed the
+// box well clear of whatever was being hovered.
+const CHART_TOOLTIP_STYLE = { borderRadius: 10, border: '1px solid #e5e3df', fontSize: 12, color: '#1c1f24', padding: '7px 10px', boxShadow: '0 4px 16px rgba(0,0,0,0.08)' };
+// No hover band behind the bar. Recharts draws it across the whole category
+// slot and the full height of the plot, so on a near-flat bar it became a tall
+// empty grey rectangle. The tooltip's first line already names the bar it
+// belongs to, which is what the band was there to do.
 
 function fmtMs(ms: number): string {
   return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(2)}s`;
 }
 
-// Turns a backend MetricResult<number> into the MetricCard props that
-// render its three states distinctly: a real measured value (incl. 0), a
-// fetched-but-nothing-to-measure state (value:null, available:true — the
-// backend's `unavailableReason` already carries the right copy, e.g. "No
-// memory lookups in this period" / "No traces in this period"), or a
-// genuinely-unavailable state (value:null, available:false — Phoenix
-// unreachable, enrichment unsupported/failed, or every enriched trace
-// lacked telemetry this metric requires).
+
+
+// The headline figures.
 //
-// The disclosure note under the value keeps three distinct reasons separate
-// rather than collapsing them into one generic "sampled" label:
-//   - sampled:  only the most recent `sampleSize` traces were fetched at all
-//   - partial:  some of those fetched traces lacked the telemetry this
-//               specific metric needs (legacy/incomplete instrumentation)
-//               and were excluded from `value`, not counted as a negative
-//   - both:     shown together, sampling first then the coverage caveat
-function metricResultProps(m: MetricResult<number> | undefined, format: (n: number) => string = (n) => n.toLocaleString()) {
-  if (!m) return { value: null as string | number | null };
-  let sampleNote: string | undefined;
-  if (m.partial && m.eligibleSampleSize !== undefined && m.incompleteSampleSize !== undefined) {
-    const elig = m.eligibleSampleSize, inc = m.incompleteSampleSize;
-    sampleNote = `Based on ${elig} compatible trace${elig === 1 ? '' : 's'}; ${inc} older trace${inc === 1 ? '' : 's'} excluded`;
-    if (m.sampled) sampleNote += ` (sampled from the most recent ${m.sampleSize})`;
-  } else if (m.sampled) {
-    sampleNote = `Based on the most recent ${m.sampleSize} requests`;
-  }
-  return {
-    value: m.value === null ? null : format(m.value),
-    available: m.available,
-    unavailableReason: m.unavailableReason,
-    emptyMessage: m.unavailableReason,
-    sampleNote,
-  };
+// These were eleven cards in a grid, and several of them said the same thing
+// more than once: success rate and error rate are one fact, and memory hits,
+// memory misses and memory-hit rate are another. Three more repeated what
+// Tutor Health already shows in plainer words, and zero-retrieval can no
+// longer be measured at all, because the request log does not record how many
+// candidates came back.
+//
+// What is left is five: how many requests, how many failed, how slow the worst
+// of them were, what they cost in tokens, and how often an answer was reused.
+// Drawn by the same component Tutor Health uses, so the two pages match.
+function headlineFigures(m: OverviewMetrics | null): Figure[] {
+  if (!m) return [
+    { label: 'Requests', value: null },
+    { label: 'Failed', value: null },
+    { label: 'Slowest 5% took', value: null },
+    { label: 'Tokens used', value: null },
+    { label: 'Answered from memory', value: null },
+  ];
+
+  const hits = m.memory.hits.value;
+  const misses = m.memory.misses.value;
+  const lookups = hits !== null && misses !== null ? hits + misses : null;
+  const hitRate = m.memory.hitRate.value;
+
+  return [
+    { label: 'Requests', value: m.totalTraces.toLocaleString() },
+    {
+      label: 'Failed',
+      value: m.failedTraces.toLocaleString(),
+      note: m.totalTraces > 0 ? `${(m.errorRate * 100).toFixed(1)}% of requests` : undefined,
+      warn: m.failedTraces > 0,
+    },
+    {
+      label: 'Slowest 5% took',
+      value: fmtMs(m.latencyMs.p95),
+      note: `typically ${fmtMs(m.latencyMs.median)}`,
+    },
+    {
+      label: 'Tokens used',
+      value: m.tokens.total.toLocaleString(),
+      note: m.totalTraces > 0 ? `${Math.round(m.tokens.avgPerRequest).toLocaleString()} per request` : undefined,
+    },
+    {
+      // The only figure in this row still read from a sample. Memory needs a
+      // per-request field that does not aggregate the way the counts do, so it
+      // covers the most recent requests rather than all of them. Standing
+      // beside a true total, "122 of 428 lookups" reads as 428 out of every
+      // request, so the note says which requests it actually looked at.
+      label: 'Answered from memory',
+      value: hitRate === null ? null : `${(hitRate * 100).toFixed(0)}%`,
+      note: lookups && lookups > 0
+        ? (m.memory.hitRate.sampled
+            ? `${hits} of ${lookups} lookups in the last ${m.memory.hitRate.sampleSize.toLocaleString()} requests`
+            : `${hits} of ${lookups} lookups`)
+        : m.memory.hitRate.unavailableReason,
+    },
+  ];
 }
 
-function ChartCard({ title, subtitle, icon, children, empty, unavailable }: { title: string; subtitle: string; icon: string; children: React.ReactNode; empty?: boolean; unavailable?: string }) {
+// No icon tile beside the title: a tinted circle holding a decorative glyph
+// repeated on every card added nothing the heading did not already say.
+function ChartCard({ title, subtitle, children, empty, unavailable }: { title: string; subtitle: string; children: React.ReactNode; empty?: boolean; unavailable?: string }) {
   return (
     <div className="bg-[var(--card)] rounded-card border border-[var(--border)] overflow-hidden">
-      <div className="flex items-center justify-between px-6 pt-5 pb-3">
-        <div>
-          <h2 className="text-label font-semibold text-[var(--text)]">{title}</h2>
-          <p className="text-caption text-[var(--muted2)] mt-0.5">{subtitle}</p>
-        </div>
-        <div className="w-8 h-8 rounded-card bg-[var(--accent-soft)] flex items-center justify-center">
-          <i className={`${icon} text-[var(--accent)] text-caption`} />
-        </div>
+      <div className="px-6 pt-5 pb-3">
+        <h2 className="text-label font-semibold text-[var(--text)]">{title}</h2>
+        <p className="text-caption text-[var(--muted2)] mt-0.5">{subtitle}</p>
       </div>
       {unavailable ? (
         <div className="py-14 px-6 text-center">
-          <i className="fas fa-circle-info text-[var(--muted2)] text-h2 mb-3" />
           <p className="text-caption font-semibold text-[var(--muted)]">Unavailable</p>
           <p className="text-caption text-[var(--muted2)] mt-1 max-w-[320px] mx-auto">{unavailable}</p>
         </div>
       ) : empty ? (
-        <div className="py-14"><EmptyState icon="fa-chart-simple" title="No data in range" message="Try a wider time range or ask a lecture question to generate traces." /></div>
+        <div className="py-14"><EmptyState title="No data in range" message="Try a wider time range or ask a lecture question to generate traces." /></div>
       ) : children}
     </div>
   );
 }
 
+// Remembered per browser, so the pointer to Tutor Health does not reappear
+// on every visit once it has been read. Wrapped because storage throws in a
+// private window, and the notice simply shows in that case.
+const NOTICE_DISMISSED_KEY = 'askaitutor.observability.monitorNotice.dismissed';
+
 export default function ObservabilityOverviewPage() {
   const router = useRouter();
+  const [showNotice, setShowNotice] = useState(false);
   const [status, setStatus] = useState<ObservabilityStatus | null>(null);
   const [metrics, setMetrics] = useState<OverviewMetrics | null>(null);
   const [loading, setLoading] = useState(true);
@@ -109,6 +146,16 @@ export default function ObservabilityOverviewPage() {
     }
   }, []);
 
+  useEffect(() => {
+    try { setShowNotice(localStorage.getItem(NOTICE_DISMISSED_KEY) !== '1'); }
+    catch { setShowNotice(true); }
+  }, []);
+
+  const dismissNotice = () => {
+    setShowNotice(false);
+    try { localStorage.setItem(NOTICE_DISMISSED_KEY, '1'); } catch { /* private window */ }
+  };
+
   const { autoRefresh, setAutoRefresh, refresh, lastRefreshedAt, setLastRefreshedAt } = useAutoRefresh(() => load());
 
   useEffect(() => {
@@ -122,16 +169,27 @@ export default function ObservabilityOverviewPage() {
 
   return (
     <div className="max-w-[1180px]">
-      <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-card border border-[var(--border)] bg-[var(--accent-soft)] px-4 py-3 text-caption text-[var(--accent)]">
-        <i className="fas fa-circle-info text-[var(--accent)]" />
-        <span>
-          For day-to-day monitoring use{' '}
-          <Link href="/admin/monitor" className="font-semibold text-[var(--accent)] underline">AI Tutor Monitor</Link>.
-          {' '}These pages show deep technical detail for engineers.
-        </span>
-      </div>
+      {showNotice && (
+        <div className="mb-4 flex items-start gap-3 rounded-card border border-[var(--border)] bg-[var(--accent-soft)] px-4 py-3 text-caption text-[var(--accent)]">
+          <i className="fas fa-circle-info mt-0.5 shrink-0" aria-hidden="true" />
+          <span className="flex-1">
+            For day-to-day monitoring use{' '}
+            <Link href="/admin/monitor" className="font-semibold text-[var(--accent)] underline">Tutor Health</Link>.
+            {' '}These pages show deep technical detail for engineers.
+          </span>
+          <button
+            type="button"
+            onClick={dismissNotice}
+            aria-label="Dismiss this notice"
+            className="-mr-1 -mt-0.5 shrink-0 w-6 h-6 inline-flex items-center justify-center rounded-control text-[var(--accent)] hover:bg-[#dde6f0] transition-colors"
+          >
+            <i className="fas fa-xmark text-caption" aria-hidden="true" />
+          </button>
+        </div>
+      )}
       <ObservabilityHeader
-        subtitle="Live RAG pipeline monitoring — sourced from Phoenix, rendered in our own admin theme."
+        title="Overview"
+        subtitle="Request volume, token cost, and where time is spent inside each request."
         onRefresh={refresh}
         refreshing={loading}
         autoRefresh={autoRefresh}
@@ -150,155 +208,68 @@ export default function ObservabilityOverviewPage() {
         </div>
       ) : (
         <>
-          {metrics && metrics.telemetryCoverage.legacyOrIncompleteTraces > 0 && (
-            <p className="text-caption text-[var(--muted2)] mb-3">
-              <i className="fas fa-circle-info mr-1.5" />
-              {metrics.telemetryCoverage.eligibleTraces} of {metrics.telemetryCoverage.totalTraces} recently sampled traces carry full observability telemetry;
-              {' '}{metrics.telemetryCoverage.legacyOrIncompleteTraces} older/incomplete trace{metrics.telemetryCoverage.legacyOrIncompleteTraces === 1 ? '' : 's'} {metrics.telemetryCoverage.legacyOrIncompleteTraces === 1 ? 'is' : 'are'} excluded from schema-gated metrics below rather than counted as a negative result.
-            </p>
-          )}
-          {/* KPI cards */}
-          <div className="grid grid-cols-4 gap-5 mb-6">
-            <MetricCard loading={loading} label="Total requests" value={metrics ? metrics.totalTraces : null} tooltip="Count of root RAG traces in the selected range." icon="fas fa-inbox" accent="indigo" />
-            <MetricCard loading={loading} label="Success rate" value={metrics ? `${(metrics.successRate * 100).toFixed(1)}%` : null} tooltip="Traces that completed without an ERROR status, divided by total traces." icon="fas fa-circle-check" accent="emerald" />
-            <MetricCard loading={loading} label="Error rate" value={metrics ? `${(metrics.errorRate * 100).toFixed(1)}%` : null} tooltip="Traces with ERROR status, divided by total traces." icon="fas fa-circle-exclamation" accent="red" />
-            <MetricCard loading={loading} label="Avg latency" value={metrics ? fmtMs(metrics.latencyMs.avg) : null} tooltip="Mean root-trace duration across all traces in range." icon="fas fa-gauge-high" accent="violet" />
-            <MetricCard loading={loading} label="P95 latency" value={metrics ? fmtMs(metrics.latencyMs.p95) : null} tooltip="95th percentile root-trace duration — 95% of requests finished at or below this." icon="fas fa-stopwatch" accent="amber" />
-            <MetricCard loading={loading} label="Total tokens" value={metrics ? metrics.tokens.total.toLocaleString() : null} tooltip="Cumulative prompt + completion tokens across every LLM span in range, as reported by Phoenix." icon="fas fa-coins" accent="cyan" />
-            <MetricCard
-              loading={loading}
-              label="Memory hits"
-              tooltip="FACT_QUESTION traces answered from cached answer-memory (exact or semantic match), from the same enriched sample used for route/model — see the sampling note below."
-              icon="fas fa-brain"
-              accent="violet"
-              {...metricResultProps(metrics?.memory.hits)}
-            />
-            <MetricCard
-              loading={loading}
-              label="Memory misses"
-              tooltip="FACT_QUESTION traces whose answer-memory lookup found nothing, so a fresh generation ran. Excludes lookup failures and requests where memory wasn't attempted."
-              icon="fas fa-brain"
-              accent="amber"
-              {...metricResultProps(metrics?.memory.misses)}
-            />
-            <MetricCard
-              loading={loading}
-              label="Memory-hit rate"
-              tooltip="Hits ÷ (hits + misses) among completed memory lookups only — lookup failures, disabled memory, and not-attempted requests are excluded from both sides of the ratio."
-              icon="fas fa-percent"
-              accent="violet"
-              {...metricResultProps(metrics?.memory.hitRate, n => `${(n * 100).toFixed(0)}%`)}
-            />
-            <MetricCard
-              loading={loading}
-              label="Zero-retrieval count"
-              tooltip={`Retrieval-attempting requests (vector search ran) where 0 candidates came back.${metrics?.zeroRetrievalCount.available && metrics.zeroRetrievalCount.value !== null ? ` ${metrics.zeroRetrievalCount.attemptedCount} request(s) attempted retrieval in this sample.` : ' Routes that skip retrieval (greetings, lecture summaries) are excluded.'}`}
-              icon="fas fa-magnifying-glass-minus"
-              accent="red"
-              {...metricResultProps(metrics?.zeroRetrievalCount)}
-            />
-            <MetricCard
-              loading={loading}
-              label="Fallback count"
-              tooltip="Requests that returned a hardcoded not-found answer or hit a classified retrieval/generation failure, instead of a fresh grounded answer."
-              icon="fas fa-life-ring"
-              accent="red"
-              {...metricResultProps(metrics?.fallbackCount)}
-            />
+          <div className="mb-6">
+            <Figures loading={loading} items={headlineFigures(metrics)} />
+            {metrics && metrics.telemetryCoverage.legacyOrIncompleteTraces > 0 && (
+              <p className="text-caption text-[var(--muted2)] mt-3">
+                {metrics.telemetryCoverage.legacyOrIncompleteTraces} of {metrics.telemetryCoverage.totalTraces} requests
+                {' '}predate the current telemetry fields, so they are left out of the memory figure rather than counted as a miss.
+              </p>
+            )}
           </div>
 
           {/* Charts */}
-          <div className="grid grid-cols-2 gap-5 mb-5">
-            <ChartCard title="Requests over time" subtitle="Traces per bucket" icon="fas fa-chart-area" empty={!loading && (metrics?.timeSeries.length ?? 0) === 0}>
+          <div className="grid grid-cols-1 gap-5 mb-5">
+            {/* Requests over time, latency over time and success-vs-errors
+                over time all lived here. Tutor Health draws the same three in
+                plainer language, so this page kept a second copy for the same
+                reader to compare against the first. What is left is what only
+                the tracing data knows. */}
+            <ChartCard title="Token usage over time" subtitle="Prompt vs completion, per bucket" empty={!loading && (metrics?.timeSeries.length ?? 0) === 0}>
               <ResponsiveContainer width="100%" height={220}>
-                <AreaChart data={metrics?.timeSeries ?? []} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="reqFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#1f3a5f" stopOpacity={0.35} />
-                      <stop offset="95%" stopColor="#1f3a5f" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
+                <BarChart data={metrics?.timeSeries ?? []} margin={{ top: 10, right: 20, left: 8, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e5e3df" vertical={false} />
-                  <XAxis dataKey="bucket" tickFormatter={(v) => new Date(v).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })} tick={{ fontSize: 11, fill: '#8e8e92' }} axisLine={false} tickLine={false} />
-                  <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#8e8e92' }} axisLine={false} tickLine={false} />
-                  <Tooltip contentStyle={CHART_TOOLTIP_STYLE} labelFormatter={(v) => new Date(v).toLocaleString()} />
-                  <Area type="monotone" dataKey="requestCount" name="Requests" stroke="#1f3a5f" strokeWidth={2} fill="url(#reqFill)" />
-                </AreaChart>
-              </ResponsiveContainer>
-            </ChartCard>
-
-            <ChartCard title="Latency over time" subtitle="Average vs P95, per bucket" icon="fas fa-gauge-high" empty={!loading && (metrics?.timeSeries.length ?? 0) === 0}>
-              <ResponsiveContainer width="100%" height={220}>
-                <LineChart data={metrics?.timeSeries ?? []} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e3df" vertical={false} />
-                  <XAxis dataKey="bucket" tickFormatter={(v) => new Date(v).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })} tick={{ fontSize: 11, fill: '#8e8e92' }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fontSize: 11, fill: '#8e8e92' }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}ms`} />
-                  <Tooltip contentStyle={CHART_TOOLTIP_STYLE} labelFormatter={(v) => new Date(v).toLocaleString()} formatter={(v) => `${Math.round(Number(v))}ms`} />
+                  <XAxis dataKey="bucket" tickFormatter={bucketTickFormatter(metrics?.timeSeries ?? [])} tick={{ fontSize: 11, fill: '#8e8e92' }} axisLine={false} tickLine={false} />
+                  <YAxis allowDecimals={false} width={54} tickFormatter={fmtAxisNumber} tick={{ fontSize: 11, fill: '#8e8e92' }} axisLine={false} tickLine={false} />
+                  <Tooltip cursor={false} offset={8} contentStyle={CHART_TOOLTIP_STYLE} labelFormatter={(v) => fmtDateTime(String(v))} />
                   <Legend wrapperStyle={{ fontSize: 12 }} />
-                  <Line type="monotone" dataKey="avgLatencyMs" name="Avg" stroke="#1f3a5f" strokeWidth={2} dot={false} />
-                  <Line type="monotone" dataKey="p95LatencyMs" name="P95" stroke="#a35f0d" strokeWidth={2} dot={false} strokeDasharray="4 3" />
-                </LineChart>
-              </ResponsiveContainer>
-            </ChartCard>
-
-            <ChartCard title="Token usage over time" subtitle="Prompt vs completion, per bucket" icon="fas fa-coins" empty={!loading && (metrics?.timeSeries.length ?? 0) === 0}>
-              <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={metrics?.timeSeries ?? []} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e3df" vertical={false} />
-                  <XAxis dataKey="bucket" tickFormatter={(v) => new Date(v).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })} tick={{ fontSize: 11, fill: '#8e8e92' }} axisLine={false} tickLine={false} />
-                  <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#8e8e92' }} axisLine={false} tickLine={false} />
-                  <Tooltip contentStyle={CHART_TOOLTIP_STYLE} labelFormatter={(v) => new Date(v).toLocaleString()} />
-                  <Legend wrapperStyle={{ fontSize: 12 }} />
-                  <Bar dataKey="promptTokens" name="Prompt" stackId="tok" fill="#1f3a5f" radius={[0, 0, 0, 0]} />
-                  <Bar dataKey="completionTokens" name="Completion" stackId="tok" fill="#8fb0d0" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="promptTokens" name="Prompt" stackId="tok" fill="#1f3a5f" maxBarSize={56} radius={[0, 0, 0, 0]} />
+                  <Bar dataKey="completionTokens" name="Completion" stackId="tok" fill="#8fb0d0" maxBarSize={56} radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </ChartCard>
 
-            <ChartCard title="Success vs errors over time" subtitle="Per bucket" icon="fas fa-check-double" empty={!loading && (metrics?.timeSeries.length ?? 0) === 0}>
-              <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={metrics?.timeSeries ?? []} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e3df" vertical={false} />
-                  <XAxis dataKey="bucket" tickFormatter={(v) => new Date(v).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })} tick={{ fontSize: 11, fill: '#8e8e92' }} axisLine={false} tickLine={false} />
-                  <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#8e8e92' }} axisLine={false} tickLine={false} />
-                  <Tooltip contentStyle={CHART_TOOLTIP_STYLE} labelFormatter={(v) => new Date(v).toLocaleString()} />
-                  <Legend wrapperStyle={{ fontSize: 12 }} />
-                  <Bar dataKey="successCount" name="Success" stackId="s" fill="#1f3a5f" />
-                  <Bar dataKey="errorCount" name="Error" stackId="s" fill="#a35f0d" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </ChartCard>
           </div>
 
           <div className="grid grid-cols-3 gap-5 mb-5">
             <ChartCard
               title="Route distribution"
               subtitle={metrics?.routeDistribution.sampled ? `Most recent ${metrics.routeDistribution.sampleSize} requests (sampled)` : 'Where requests were classified'}
-              icon="fas fa-signs-post"
               unavailable={metrics && !metrics.routeDistribution.available ? metrics.routeDistribution.unavailableReason ?? 'Unavailable' : undefined}
               empty={!loading && Object.keys(metrics?.routeDistribution.data ?? {}).length === 0}
             >
               <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={Object.entries(metrics?.routeDistribution.data ?? {}).map(([name, value]) => ({ name, value }))} layout="vertical" margin={{ top: 8, right: 20, left: 8, bottom: 8 }}>
+                <BarChart data={Object.entries(metrics?.routeDistribution.data ?? {}).map(([name, value]) => ({ name, value }))} layout="vertical" margin={{ top: 8, right: 20, left: 0, bottom: 8 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e5e3df" horizontal={false} />
-                  <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11, fill: '#8e8e92' }} axisLine={false} tickLine={false} />
-                  <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: '#5f6068' }} axisLine={false} tickLine={false} width={110} />
-                  <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
-                  <Bar dataKey="value" radius={[0, 6, 6, 0]} onClick={(d) => router.push(`/admin/rag-traces/traces?route=${encodeURIComponent(String((d as { name: string }).name))}`)} cursor="pointer">
+                  <XAxis type="number" allowDecimals={false} tickFormatter={fmtAxisNumber} tick={{ fontSize: 11, fill: '#8e8e92' }} axisLine={false} tickLine={false} />
+                  {/* 110px clipped CONTEXTUAL_FOLLOW_UP to "EXTUAL_FOLLOW_UP". */}
+                  <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#5f6068' }} axisLine={false} tickLine={false} width={152} />
+                  <Tooltip cursor={false} offset={8} contentStyle={CHART_TOOLTIP_STYLE} />
+                  <Bar dataKey="value" maxBarSize={26} radius={[0, 6, 6, 0]} onClick={(d) => router.push(`/admin/rag-traces/traces?route=${encodeURIComponent(String((d as { name: string }).name))}`)} cursor="pointer">
                     {Object.keys(metrics?.routeDistribution.data ?? {}).map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </ChartCard>
 
-            <ChartCard title="Span-kind distribution" subtitle="OpenInference span kinds in range" icon="fas fa-layer-group" empty={!loading && Object.keys(metrics?.spanKindDistribution ?? {}).length === 0}>
+            <ChartCard title="Operation types" subtitle="How many spans of each kind the tracing recorded" empty={!loading && Object.keys(metrics?.spanKindDistribution ?? {}).length === 0}>
               <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={Object.entries(metrics?.spanKindDistribution ?? {}).map(([name, value]) => ({ name, value }))} margin={{ top: 8, right: 12, left: -10, bottom: 0 }}>
+                <BarChart data={Object.entries(metrics?.spanKindDistribution ?? {}).map(([name, value]) => ({ name, value }))} margin={{ top: 8, right: 12, left: 8, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e5e3df" vertical={false} />
                   <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#8e8e92' }} axisLine={false} tickLine={false} />
-                  <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#8e8e92' }} axisLine={false} tickLine={false} />
-                  <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
-                  <Bar dataKey="value" radius={[6, 6, 0, 0]}>
+                  <YAxis allowDecimals={false} width={46} tickFormatter={fmtAxisNumber} tick={{ fontSize: 11, fill: '#8e8e92' }} axisLine={false} tickLine={false} />
+                  <Tooltip cursor={false} offset={8} contentStyle={CHART_TOOLTIP_STYLE} />
+                  <Bar dataKey="value" maxBarSize={56} radius={[6, 6, 0, 0]}>
                     {Object.keys(metrics?.spanKindDistribution ?? {}).map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                   </Bar>
                 </BarChart>
@@ -308,17 +279,16 @@ export default function ObservabilityOverviewPage() {
             <ChartCard
               title="Model usage"
               subtitle={metrics?.modelDistribution.sampled ? `Most recent ${metrics.modelDistribution.sampleSize} requests (sampled)` : 'LLM span calls by model'}
-              icon="fas fa-robot"
               unavailable={metrics && !metrics.modelDistribution.available ? metrics.modelDistribution.unavailableReason ?? 'Unavailable' : undefined}
               empty={!loading && Object.keys(metrics?.modelDistribution.data ?? {}).length === 0}
             >
               <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={Object.entries(metrics?.modelDistribution.data ?? {}).map(([name, value]) => ({ name, value }))} margin={{ top: 8, right: 12, left: -10, bottom: 0 }}>
+                <BarChart data={Object.entries(metrics?.modelDistribution.data ?? {}).map(([name, value]) => ({ name, value }))} margin={{ top: 8, right: 12, left: 8, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e5e3df" vertical={false} />
                   <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#8e8e92' }} axisLine={false} tickLine={false} />
-                  <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#8e8e92' }} axisLine={false} tickLine={false} />
-                  <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
-                  <Bar dataKey="value" radius={[6, 6, 0, 0]}>
+                  <YAxis allowDecimals={false} width={46} tickFormatter={fmtAxisNumber} tick={{ fontSize: 11, fill: '#8e8e92' }} axisLine={false} tickLine={false} />
+                  <Tooltip cursor={false} offset={8} contentStyle={CHART_TOOLTIP_STYLE} />
+                  <Bar dataKey="value" maxBarSize={56} radius={[6, 6, 0, 0]}>
                     {Object.keys(metrics?.modelDistribution.data ?? {}).map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                   </Bar>
                 </BarChart>
@@ -326,10 +296,10 @@ export default function ObservabilityOverviewPage() {
             </ChartCard>
           </div>
 
-          <div className="grid grid-cols-2 gap-5">
+          <div className="grid grid-cols-2 gap-5 items-start">
             <div className="bg-[var(--card)] rounded-card border border-[var(--border)]">
               <div className="px-6 pt-5 pb-3"><h2 className="text-label font-semibold text-[var(--text)]">Slowest pipeline stages</h2><p className="text-caption text-[var(--muted2)] mt-0.5">Average duration by span name</p></div>
-              {(metrics?.slowestOperations.length ?? 0) === 0 ? <EmptyState icon="fa-stopwatch" title="No spans yet" message="Slow-span data will appear once traces exist." /> : (
+              {(metrics?.slowestOperations.length ?? 0) === 0 ? <EmptyState title="No spans yet" message="Step timings appear once traces exist." /> : (
                 <div className="divide-y divide-[var(--border)] pb-2">
                   {metrics!.slowestOperations.map(op => (
                     <div key={op.name} className="flex items-center gap-3 px-6 py-2.5">
@@ -343,14 +313,16 @@ export default function ObservabilityOverviewPage() {
             </div>
 
             <div className="bg-[var(--card)] rounded-card border border-[var(--border)]">
-              <div className="px-6 pt-5 pb-3"><h2 className="text-label font-semibold text-[var(--text)]">Most common errors</h2><p className="text-caption text-[var(--muted2)] mt-0.5">Click to filter the Traces tab</p></div>
-              {(metrics?.mostFrequentErrors.length ?? 0) === 0 ? <EmptyState icon="fa-face-smile" title="No errors in range" message="Nothing to show — that's a good sign." /> : (
+              <div className="px-6 pt-5 pb-3"><h2 className="text-label font-semibold text-[var(--text)]">Most common errors</h2><p className="text-caption text-[var(--muted2)] mt-0.5">Select a code to see the requests that failed with it</p></div>
+              {(metrics?.mostFrequentErrors.length ?? 0) === 0 ? <EmptyState title="No errors in range" message="No request failed in this period." /> : (
                 <div className="divide-y divide-[var(--border)] pb-2">
                   {metrics!.mostFrequentErrors.map(e => (
-                    <button key={e.errorCode} onClick={() => router.push(`/admin/rag-traces/errors?code=${encodeURIComponent(e.errorCode)}`)} className="w-full flex items-center gap-3 px-6 py-2.5 hover:bg-[var(--surface)] transition-colors text-left">
-                      <span className="w-1.5 h-1.5 rounded-full bg-[var(--gold)] shrink-0" />
+                    <button key={e.errorCode} onClick={() => router.push(`/admin/rag-traces/errors?code=${encodeURIComponent(e.errorCode)}`)} className="group w-full flex items-center gap-3 px-6 py-2.5 hover:bg-[var(--surface)] transition-colors text-left">
+                      {/* A chevron, not a bullet: these rows navigate, and a
+                          dot down the left read as a list marker. */}
                       <span className="flex-1 text-caption font-mono text-[var(--text)] truncate">{e.errorCode}</span>
                       <span className="text-caption font-semibold text-[var(--gold)] tabular-nums">{e.count}</span>
+                      <i className="fas fa-chevron-right text-[11px] text-[var(--muted2)] group-hover:text-[var(--accent)] transition-colors" aria-hidden="true" />
                     </button>
                   ))}
                 </div>

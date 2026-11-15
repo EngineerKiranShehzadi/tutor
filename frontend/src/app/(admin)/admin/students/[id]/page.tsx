@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useApolloClient, useQuery } from '@apollo/client';
 import { GET_STUDENT_JOURNEY } from '@/graphql/analytics.queries';
 import { AdminPageHero } from '@/components/admin/AdminPageHero';
+import { btnRow } from '@/components/admin/buttons';
 
 interface JourneyQuestion { id: number; question: string; lectureTitle: string; lectureId: number; createdAt: string }
 interface LectureEngagement { lectureId: number; lectureTitle: string; questionCount: number; firstAsked: string; lastAsked: string }
@@ -19,7 +20,9 @@ interface StudentJourney {
 // The question list is served a page at a time (AD6); "Load more" appends.
 const QUESTIONS_PAGE = 25;
 
-const outlineBtn = 'rounded-control border border-[var(--border)] px-3.5 py-2 text-caption font-semibold text-[var(--text)] hover:bg-[var(--surface)] transition-colors disabled:opacity-50';
+// Defined once in components/admin/buttons.ts; a local copy here is how the
+// same button ended up at two different sizes.
+const outlineBtn = btnRow;
 
 /**
  * One student.

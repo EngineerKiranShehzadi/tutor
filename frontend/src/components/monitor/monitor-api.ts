@@ -12,6 +12,9 @@ export interface PeriodSummary {
   notFoundRate: number | null;
   guardrailRejectedRate: number | null;
   errorRate: number | null;
+  errorCount: number;
+  slowCount: number;
+  slowThresholdMs: number;
   p50Ms: number | null;
   p95Ms: number | null;
   totalCostUsd: number | null;
@@ -33,6 +36,19 @@ export interface ReadinessResult {
   checkedAt: string;
   components: Record<string, { status: ComponentStatus; latencyMs: number; errorCode?: string }>;
 }
+
+/**
+ * What /health/ready has been returning over time, from health_check_log.
+ * `uptime` is 0..1 over the window and null when nothing was counted;
+ * `lastFailureAt` is across all retained history, not just the window.
+ */
+export interface ComponentHistory {
+  component: string;
+  uptime: number | null;
+  sampleCount: number;
+  lastFailureAt: string | null;
+}
+export interface HealthHistory { windowHours: number; components: ComponentHistory[] }
 
 export interface TimeseriesBucket { bucket: string; answered: number; notFound: number; errors: number; p95Ms: number }
 export interface MonitorTimeseries { window: MonitorWindow; bucketSize: 'hour' | 'day'; buckets: TimeseriesBucket[] }
@@ -56,6 +72,19 @@ export interface AttentionRow {
 }
 export interface AttentionPage { rows: AttentionRow[]; nextBefore: string | null }
 
+export interface FailureGroup {
+  responseStatus: string | null;
+  notFoundReason: string | null;
+  errorCode: string | null;
+  answerVerificationReason: string | null;
+  formatRepairRejected: string | null;
+  errored: boolean;
+  occurrences: number;
+  lectures: number;
+  lectureTitles: string[];
+  lastAt: string;
+}
+
 export interface LectureStats {
   lectureId: number;
   title: string;
@@ -74,11 +103,15 @@ export const monitorApi = {
   getTimeseries: async (window: MonitorWindow, signal?: AbortSignal): Promise<MonitorTimeseries> =>
     (await api.get('/observability/monitor/timeseries', { params: { window }, signal })).data.data,
 
-  // Not windowed on the backend: newest problems first, paged by `before`.
-  getAttention: async (before: string | null, signal?: AbortSignal): Promise<AttentionPage> => {
-    const res = (await api.get('/observability/monitor/attention', { params: { limit: 25, ...(before ? { before } : {}) }, signal })).data;
+  // Newest problems first, paged by `before`, inside the same period as the
+  // rest of the page.
+  getAttention: async (window: MonitorWindow, before: string | null, signal?: AbortSignal): Promise<AttentionPage> => {
+    const res = (await api.get('/observability/monitor/attention', { params: { window, limit: 25, ...(before ? { before } : {}) }, signal })).data;
     return { rows: res.data, nextBefore: res.meta?.nextBefore ?? null };
   },
+
+  getFailures: async (window: MonitorWindow, signal?: AbortSignal): Promise<FailureGroup[]> =>
+    (await api.get('/observability/monitor/failures', { params: { window }, signal })).data.data,
 
   getLectures: async (window: MonitorWindow, signal?: AbortSignal): Promise<LectureStats[]> =>
     (await api.get('/observability/monitor/lectures', { params: { window }, signal })).data.data.lectures,
@@ -90,6 +123,11 @@ export const monitorApi = {
   // is down — that is the data we want, not an error, so accept it.
   getReadiness: async (signal?: AbortSignal): Promise<ReadinessResult> =>
     (await api.get('/health/ready', { signal, validateStatus: (s) => s === 200 || s === 503 })).data,
+
+  // getReadiness is the live check; this is the record of what it has been
+  // returning, written by the maintenance scheduler every few minutes.
+  getHealthHistory: async (hours = 24, signal?: AbortSignal): Promise<HealthHistory> =>
+    (await api.get('/observability/monitor/health-history', { params: { hours }, signal })).data.data,
 };
 
 export const isCanceled = (err: unknown): boolean =>

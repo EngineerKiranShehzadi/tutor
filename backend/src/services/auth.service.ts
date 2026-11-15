@@ -6,9 +6,10 @@ import { AppError } from '../middleware/errorHandler';
 import { hashPassword, comparePassword, hashToken } from '../utils/password';
 import { validatePassword } from '../utils/password-policy';
 import { generateAccessToken, generateRefreshToken, verifyRefreshToken } from '../utils/jwt';
-import { sendPasswordResetOtp, sendSignupVerificationOtp, sendAccountExistsNotice } from './email.service';
+import { sendPasswordResetOtp, sendSignupVerificationOtp, sendAccountExistsNotice, sendPasswordChangedEmail } from './email.service';
 import { env } from '../config/env';
 import { logger } from '../utils/logger';
+import { claimAdminInvite } from './admin-invite.service';
 import { User, PasswordResetToken, EmailVerificationToken } from '../types';
 
 // The OTP now lives 5 minutes, but the client uses the number we return as the
@@ -606,6 +607,9 @@ export const signupUser = async (
     [name.trim(), normalizedEmail, password_hash]
   );
   const user = rows[0];
+  // If this address was invited to administer, the account is an admin from
+  // its first sign-in. Never throws, so an invitation can never block a signup.
+  await claimAdminInvite(user.id, normalizedEmail);
 
   const verificationTicket = newVerificationTicket();
   const otp = await issueEmailVerificationOtp(user.id, verificationTicket, code);
@@ -844,6 +848,9 @@ export const googleOAuthUser = async (profile: {
         [name.trim(), email, googleId, avatarUrl ?? null]
       );
       user = newRows[0];
+      // Same as the email signup path: an invited address arrives as an admin
+      // however the account was made.
+      await claimAdminInvite(user.id, email);
       logger.info(`[AUTH] googleOAuthUser: new user created "${email}" (id=${user.id})`);
     }
   }
@@ -919,6 +926,9 @@ export const updateProfile = async (
   if (newPassword) {
     if (!currentPassword) throw new AppError('Current password is required to set a new one.', 400);
     if (!user.password_hash) throw new AppError('This account uses Google sign-in and has no password to change.', 400);
+    // Setting the same password again is not a change: it re-hashes the same
+    // value and signs the account out everywhere else for no reason.
+    if (currentPassword === newPassword) throw new AppError('The new password must be different from the current one.', 400);
     const valid = await comparePassword(currentPassword, user.password_hash);
     if (!valid) throw new AppError('Current password is incorrect.', 401);
     validatePassword(newPassword, 'New password');
@@ -935,7 +945,17 @@ export const updateProfile = async (
      RETURNING id, name, email, role, avatar_url`,
     [name?.trim() || null, newHash, avatarUrl ?? null, userId]
   );
-  if (newHash) await revokeOtherSessions(userId, currentRefreshToken);
+  if (newHash) {
+    await revokeOtherSessions(userId, currentRefreshToken);
+    // The same notice an administrator gets. A password change nobody made is
+    // the one account event worth interrupting someone for, and students were
+    // the only ones not being told. Never allowed to undo the change itself.
+    try {
+      await sendPasswordChangedEmail(user.email, user.name);
+    } catch (err) {
+      logger.error(`[AUTH] password change notice failed for ${user.email}`, err);
+    }
+  }
 
   logger.info(`[AUTH] ✅ Profile updated for user ${userId}`);
   return updated[0];

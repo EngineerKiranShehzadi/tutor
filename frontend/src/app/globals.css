@@ -116,3 +116,29 @@ select:focus-visible { outline: none; }
 .sidebar-scroll::-webkit-scrollbar-thumb { background: transparent; border-radius: 999px; }
 .sidebar-scroll:hover { scrollbar-color: rgba(255,255,255,0.30) transparent; }
 .sidebar-scroll:hover::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.30); }
+
+/* Dropdown arrow placement.
+
+   A browser draws a <select>'s arrow against the right edge of the BORDER
+   box, not the padding box, so padding-right moves the text and leaves the
+   arrow sitting on the control's own border. Adding padding was tried twice
+   and changed nothing, because there was nothing it could change.
+
+   The only way to place the arrow is to switch the native one off and draw
+   it ourselves, which is what this does. background-position decides exactly
+   how far in it sits: raise the 14px to move it further from the edge.
+
+   Every select in the admin console carries this, through `filterSelect` in
+   components/admin/buttons.ts. No select sets its own arrow. */
+.select-arrow {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%231f3a5f' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  /* 10x6 read as heavy beside 13px text. */
+  background-size: 9px 5px;
+}
+/* Edge and IE draw their own arrow on top of ours. */
+.select-arrow::-ms-expand { display: none; }

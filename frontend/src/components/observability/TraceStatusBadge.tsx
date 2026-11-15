@@ -1,22 +1,32 @@
 'use client';
 import { cn } from '@/lib/cn';
 
-const STYLES: Record<string, string> = {
-  SUCCESS: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-  OK: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-  ERROR: 'bg-red-50 text-red-700 border-red-200',
-  FALLBACK: 'bg-amber-50 text-amber-700 border-amber-200',
-  SKIPPED: 'bg-slate-100 text-slate-500 border-slate-200',
-  UNSET: 'bg-slate-100 text-slate-500 border-slate-200',
-  UNKNOWN: 'bg-slate-100 text-slate-500 border-slate-200',
+/**
+ * The word, and nothing else.
+ *
+ * This was a tinted, bordered, rounded-full badge with a dot inside it: four
+ * pieces of decoration for one word, on every row of every table. The dot
+ * went too. A column of two hundred rows reading "Success" does not need two
+ * hundred dots to say so, and once only failures carry colour, the eye finds
+ * them without anything being drawn for it.
+ */
+
+// Sentence case, not the stored SUCCESS / ERROR. A column of shouting codes
+// is the shape the data is saved in, not the shape a table should read in.
+// An unmapped status still shows its raw value rather than "Unknown".
+const LABELS: Record<string, string> = {
+  SUCCESS: 'Success', OK: 'Success', ERROR: 'Error',
+  FALLBACK: 'Fallback', SKIPPED: 'Skipped', UNSET: 'Not set', UNKNOWN: 'Unknown',
 };
 
 export function TraceStatusBadge({ status, className }: { status: string; className?: string }) {
   const key = (status || 'UNKNOWN').toUpperCase();
+  const failed = key === 'ERROR' || key === 'FALLBACK';
   return (
-    <span className={cn('inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-full border uppercase tracking-wide', STYLES[key] ?? STYLES.UNKNOWN, className)}>
-      <span className={cn('w-1.5 h-1.5 rounded-full', key === 'SUCCESS' || key === 'OK' ? 'bg-emerald-500' : key === 'ERROR' ? 'bg-red-500' : key === 'FALLBACK' ? 'bg-amber-500' : 'bg-slate-400')} />
-      {status || 'Unknown'}
+    // No size of its own: it inherits the cell it sits in, so Status can
+    // never end up a different size from the columns beside it.
+    <span className={cn('whitespace-nowrap', failed ? 'font-medium text-[var(--gold)]' : 'text-[var(--text)]', className)}>
+      {LABELS[key] ?? status ?? 'Unknown'}
     </span>
   );
 }

@@ -71,7 +71,7 @@ export const analyticsResolvers = {
 
     recentQuestionsPage: (
       _: unknown,
-      args: { limit: number; offset: number; search?: string | null; lectureId?: number | null },
+      args: { limit: number; offset: number; search?: string | null; lectureId?: number | null; courseId?: number | null },
       ctx: GraphQLContext
     ) => {
       requireAdmin(ctx);
@@ -127,11 +127,11 @@ export const analyticsResolvers = {
       return getStudentJourney(id, page);
     },
 
-    contentGaps: (_: unknown, __: unknown, ctx: GraphQLContext) => {
+    contentGaps: (_: unknown, { days, courseId }: { days?: number; courseId?: number }, ctx: GraphQLContext) => {
       requireAdmin(ctx);
       const user = (ctx.req as AuthenticatedRequest).user;
-      logger.info(`[GRAPHQL] contentGaps query by admin "${user?.email}"`);
-      return getContentGaps();
+      logger.info(`[GRAPHQL] contentGaps query by admin "${user?.email}" (days=${days ?? 'default'}, course=${courseId ?? 'all'})`);
+      return getContentGaps({ days, courseId });
     },
   },
 };

@@ -568,7 +568,14 @@ export const askLectureAgent = async (
         await touchSession(studentId, sessionId, question);
       }, () => ({ sourceChunkCount: 0 }));
       logger.info(`[CHAT] ✅ Greeting answered for session #${sessionId}`);
-      finishTrace('SUCCESS', { responseStatus: 'GREETING_ANSWERED', memoryResult: 'NOT_ATTEMPTED' });
+      // OUTPUT_VALUE was set only on the ANSWERED path, so every other route
+      // that produced real text recorded the question and not the reply, and
+      // the admin "Input and output" tab showed half a conversation.
+      finishTrace('SUCCESS', {
+        responseStatus: 'GREETING_ANSWERED',
+        memoryResult: 'NOT_ATTEMPTED',
+        ...(isContentCaptureEnabled() ? { [ATTR.OUTPUT_VALUE]: truncateContent(answer, 2000).value } : {}),
+      });
       return { answer, sources: [] };
     }
 
@@ -601,13 +608,26 @@ export const askLectureAgent = async (
         return { answer: summaryUnavailable, sources: [] };
       }
 
+      // A summary is a pure function of this version's chunks, so it is
+      // written once and read afterwards. Without this every student paid the
+      // full generation cost for an answer that could not differ: measured at
+      // 130 s typically. A stored summary cannot go stale — new material means
+      // a new version, and a new version has no row yet.
       currentStage = 'summarize-lecture-content';
-      const result = await trace.span(
-        'summarize-lecture-content', // covers batching + per-batch summarize + combine as one stage
-        () => generateLectureSummaryFn(allChunks, lecture.title),
-        r => ({ summaryProduced: !!r.summary, summaryBatchesAttempted: r.batchesAttempted, summaryBatchesSucceeded: r.batchesSucceeded }),
-        r => (!r.summary ? 'ERROR' : r.batchesSucceeded < r.batchesAttempted ? 'FALLBACK' : 'SUCCESS')
+      const stored = await trace.span(
+        'read-stored-summary',
+        () => summaryModule.getStoredLectureSummary(lectureId, pinnedVersionId ?? undefined),
+        v => ({ storedSummaryHit: !!v })
       );
+
+      const result = stored
+        ? { summary: stored, batchesAttempted: 0, batchesSucceeded: 0 }
+        : await trace.span(
+            'summarize-lecture-content', // covers batching + per-batch summarize + combine as one stage
+            () => generateLectureSummaryFn(allChunks, lecture.title),
+            r => ({ summaryProduced: !!r.summary, summaryBatchesAttempted: r.batchesAttempted, summaryBatchesSucceeded: r.batchesSucceeded }),
+            r => (!r.summary ? 'ERROR' : r.batchesSucceeded < r.batchesAttempted ? 'FALLBACK' : 'SUCCESS')
+          );
       trace.setAttributes({ summaryBatchesAttempted: result.batchesAttempted, summaryBatchesSucceeded: result.batchesSucceeded });
 
       // Content exists but nothing could be summarised — an LLM outage, not
@@ -630,6 +650,13 @@ export const askLectureAgent = async (
       const partial = result.batchesSucceeded < result.batchesAttempted;
       const summary = partial ? `${result.summary}${summaryModule.PARTIAL_SUMMARY_NOTE}` : result.summary;
 
+      // Kept only when it is whole and freshly generated. A partial summary
+      // carries a note saying part of the lecture is missing, and storing that
+      // would make one outage permanent.
+      if (!stored && !partial) {
+        await summaryModule.storeLectureSummary(lectureId, pinnedVersionId ?? null, result.summary, result.batchesAttempted);
+      }
+
       const chunkIds = allChunks.map(c => c.id);
       currentStage = 'save-chat-entry';
       await trace.span('save-chat-entry', async () => {
@@ -637,7 +664,12 @@ export const askLectureAgent = async (
         await touchSession(studentId, sessionId, question);
       }, () => ({ sourceChunkCount: chunkIds.length }));
       logger.info(`[CHAT] ✅ Summary answered for session #${sessionId} (${allChunks.length} chunk(s)${partial ? `, partial ${result.batchesSucceeded}/${result.batchesAttempted}` : ''})`);
-      finishTrace('SUCCESS', { responseStatus: 'SUMMARY_ANSWERED', selectedChunkCount: chunkIds.length, memoryResult: 'NOT_ATTEMPTED' });
+      finishTrace('SUCCESS', {
+        responseStatus: 'SUMMARY_ANSWERED',
+        selectedChunkCount: chunkIds.length,
+        memoryResult: 'NOT_ATTEMPTED',
+        ...(isContentCaptureEnabled() ? { [ATTR.OUTPUT_VALUE]: truncateContent(summary, 2000).value } : {}),
+      });
       return { answer: summary, sources: allChunks };
     }
 
@@ -725,6 +757,7 @@ export const askLectureAgent = async (
           responseStatus: 'MEMORY_HIT_ANSWERED',
           memoryResult: memoryResultAttr,
           selectedChunkCount: memoryResult.hit.sourceChunkIds.length,
+          ...(isContentCaptureEnabled() ? { [ATTR.OUTPUT_VALUE]: truncateContent(memoryResult.hit.answer, 2000).value } : {}),
         });
         return { answer: memoryResult.hit.answer, sources: memoryResult.hit.chunks };
       }
