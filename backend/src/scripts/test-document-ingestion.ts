@@ -119,6 +119,12 @@ async function run() {
   });
   assert.equal(standalone.quality.qaRecords,1);
   assert.match(standalone.rows.find(x=>x.question?.includes('Best Learning'))?.answer??'',/DO IT YOURSELF/);
+  const standaloneAnswer = standalone.rows.find(x=>x.question?.includes('Best Learning'));
+  assert.ok(standaloneAnswer,'standalone Q&A is present');
+  assert.doesNotMatch(standaloneAnswer!.answer??'',/^nswer\b/i,'Answer label must not leak into answer');
+  assert.match(standaloneAnswer!.answer??'',/Topic: Achieve Excellence in Technical Skills/,'topic must accompany QA evidence');
+  assert.equal(standaloneAnswer!.topic,'Achieve Excellence in Technical Skills');
+
   const typoLabel = await documentToRows('intro.docx',{
     units:[{locator:'Slide 2',text:[
       'Life','Quesiton','Life = Technical Skills (?) + Human Engineering (?)',
