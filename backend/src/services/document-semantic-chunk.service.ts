@@ -26,64 +26,44 @@ export function isSlideBoundary(text:string):boolean {
  return slideLine.test(text.trim());
 }
 export function parseLogicalSections(text:string):LogicalSection[] {
- const lines=text.replace(/\r\n?/g,'\n').split('\n');
+ const lines=text.replace(/\r\n?/g,'\n').split('\n').map(x=>x.trim()).filter(Boolean);
  const result:LogicalSection[]=[];
- let question:string|null=null;
- let explicitQuestion=false;
- let hasAnswerLabel=false;
- let answer:string[]=[];
- let prose:string[]=[];
- let sectionHeading:string|null=null;
- const flushProse=()=>{
-  if(prose.some(x=>x.trim()))result.push({kind:'TEXT',text:[sectionHeading,...prose].filter(Boolean).join('\n').trim()});
-  prose=[];
- };
- const flushQA=()=>{
-  if(question!==null){
-   if(hasAnswerLabel && answer.some(x=>x.trim()))result.push({kind:'QA',question,answer:answer.join('\n').trim(),heading:sectionHeading??undefined});
-   else if(explicitQuestion && !answer.some(x=>x.trim()))throw new AppError('An explicit Question has no matching Answer. Keep each question and its answer in the same slide or section.',422);
-   else result.push({kind:'TEXT',text:[question,...answer].join('\n').trim()});
-  }
-  question=null;explicitQuestion=false;hasAnswerLabel=false;answer=[];
- };
- for(const raw of lines){
-  const line=raw.trim();
-  if(!line){
-   if(question!==null && answer.length)answer.push('');
-   else if(question===null && prose.length)prose.push('');
-   continue;
-  }
-  if(isSlideBoundary(line)){
-   flushQA();flushProse();
-   sectionHeading=line;
-   continue;
-  }
+ let heading:string|null=null, prose:string[]=[];
+ const flushProse=()=>{if(prose.length)result.push({kind:'TEXT',text:[heading,...prose].filter(Boolean).join('\n')});prose=[];};
+ const standaloneQ=/^(?:questions?|quesiton|q)$/i;
+ const standaloneA=/^(?:answers?|a)$/i;
+ const isQ=(line:string)=>standaloneQ.test(line)||/^(?:question|quesiton)\s*:/i.test(line);
+ const isA=(line:string)=>standaloneA.test(line)||/^answer\s*:/i.test(line);
+ for(let i=0;i<lines.length;){
+  const line=lines[i];
+  if(isSlideBoundary(line)){flushProse();heading=line;i++;continue;}
   const inline=inlinePair.exec(line);
-  if(inline){
-   flushQA();flushProse();
-   result.push({kind:'QA',question:inline[1].trim(),answer:inline[2].trim(),heading:sectionHeading??undefined});
-   continue;
+  if(inline){flushProse();result.push({kind:'QA',question:inline[1].trim(),answer:inline[2].trim(),heading:heading??undefined});i++;continue;}
+  if(isQ(line)){
+   const qParts:string[]=[];const explicit=qLine.exec(line);
+   if(explicit?.[1])qParts.push(explicit[1]);
+   let j=i+1;
+   while(j<lines.length&&!isA(lines[j])&&!isQ(lines[j])&&!isSlideBoundary(lines[j])){
+    qParts.push(lines[j]);j++;
+   }
+   if(j<lines.length&&isA(lines[j])&&qParts.length){
+    const aParts:string[]=[];const initial=lines[j].replace(/^answers?\s*:?\s*/i,'').trim();
+    if(initial)aParts.push(initial);j++;
+    while(j<lines.length&&!isQ(lines[j])&&!isSlideBoundary(lines[j])){aParts.push(lines[j]);j++;}
+    if(aParts.length){
+     flushProse();
+     result.push({kind:'QA',question:qParts.join(' ').trim(),answer:aParts.join('\n'),heading:heading??undefined});
+     i=j;continue;
+    }
+   }
+   // Explicit question with no answer is ordinary source text, not fabricated QA.
+   prose.push(...lines.slice(i,j));i=j;continue;
   }
-  const matchQ=qLine.exec(line);
   const matchA=aLine.exec(line);
-  const matchExplanation=explanationLine.exec(line);
-  const candidate=matchQ?.[1]?.trim()??(naturalQuestion.test(line)?line:null);
-  if(candidate){
-   flushQA();flushProse();question=candidate;explicitQuestion=!!matchQ;
-   continue;
-  }
-  if(matchA || (matchExplanation && question!==null)){
-   if(question===null)throw new AppError('An Answer was found without its Question. Keep both in one logical section.',422);
-   const text=(matchA ?? matchExplanation)![1].trim();
-   hasAnswerLabel=true;
-   if(text)answer.push(text);
-   continue;
-  }
-  if(question!==null)answer.push(line);
-  else prose.push(line);
+  if(matchA||standaloneA.test(line)){prose.push(line);i++;continue;}
+  prose.push(line);i++;
  }
- flushQA();flushProse();
- return result;
+ flushProse();return result;
 }
 export interface PreservedPart {
  kind:'QA'|'TEXT';question?:string;text:string;part:number;heading?:string;
