@@ -304,7 +304,7 @@ export async function enrichDocumentWithVision(
       }
     }
   }
-  for (const candidate of visualReviewPages) candidate.candidateIncluded = explanations.has(candidate.locator);
+  for (const candidate of visualReviewPages) candidate.candidateIncluded = candidate.candidateIncluded && explanations.has(candidate.locator);
   const groupedStatuses = new Map<string, string[]>();
   for (const page of pages) {
     const status = pageStatuses.get(page.locator) ?? 'not processed';

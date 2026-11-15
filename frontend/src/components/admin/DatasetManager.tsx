@@ -206,7 +206,9 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
     setMode(m);
     if (!file || phase === 'applying') return;
     const known = previews[m];
-    if (known && phase === 'preview' && visualReviewPages.length === 0) {
+    if (visualReviewPages.length > 0 && phase === 'preview') {
+      void refreshVisualPreview(m);
+    } else if (known && phase === 'preview') {
       setPreview(known); setConfirmed(false); setVisualReviewConfirmed(false); setError('');
     } else {
       void analyse(file, m);

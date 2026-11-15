@@ -98,7 +98,7 @@ export const uploadDataset = async (
     }
     let effectiveRows = document?.rows;
     if (document && visualReviewPages.length) {
-      const safeName = file.originalname.replace(/[\\r\\n\\x00-\\x1f]/g, ' ').trim().slice(0, 180);
+      const safeName = file.originalname.replace(/[\r\n\x00-\x1f]/g, ' ').trim().slice(0, 180);
       let rows = [...document.rows];
       for (const page of visualReviewPages) {
         const decision = visualReviewDecisions[page.locator];
@@ -109,7 +109,7 @@ export const uploadDataset = async (
         if (include && !hasVisualRow && page.candidateDescription.trim().length >= 15) {
           rows.push({
             question: 'Source excerpt: ' + safeName + ' | ' + page.locator + ' | Visual reviewed',
-            answer: '[Diagram and figure interpretation]\\n' + page.candidateDescription,
+            answer: '[Diagram and figure interpretation]\n' + page.candidateDescription,
             topic: page.locator,
             start_time: safeName + ' | ' + page.locator,
           });
