@@ -81,7 +81,8 @@ def docx_units(data, warnings):
     locator = "Document"
     heading_count = 0
     inside_slides = False
-    slide_heading = re.compile(r"^(?:slide|page)\s*(?:no\.?|number|#)?\s*[:.\\-]?\s*(\d+)\b", re.I)
+    slide_number = 0
+    slide_heading = re.compile(r"^(?:slide|page)\s*(?:no\.?|number|#)?\s*[:.\-]?\s*(\d+)\b", re.I)
 
     def flush():
         nonlocal current
@@ -95,18 +96,21 @@ def docx_units(data, warnings):
             if not value:
                 continue
             slide = slide_heading.match(value)
+            standalone_slide = value.strip().upper() == "SLIDE"
             style = (element.style.name or "").lower() if element.style else ""
             structured_heading = style.startswith("heading ") or style == "title"
-            if slide or (structured_heading and not inside_slides):
+            if standalone_slide or slide or (structured_heading and not inside_slides):
                 flush()
-                if slide:
+                if standalone_slide or slide:
                     inside_slides = True
-                    locator = "Slide " + slide.group(1)
+                    slide_number = int(slide.group(1)) if slide else slide_number + 1
+                    locator = "Slide " + str(slide_number)
                 else:
                     heading_count += 1
                     locator = "Section " + str(heading_count) + ": " + value[:75]
                 # Retain the heading itself as searchable evidence.
-                current.append(value)
+                if not standalone_slide:
+                    current.append(value)
             else:
                 current.append(value)
         elif isinstance(element, Table):
