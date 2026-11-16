@@ -46,7 +46,19 @@ def persist_canonical_pdf(pdf_bytes, canonical_pdf_path):
     return canonical
 
 
+def _restore_office_address_space():
+    """Let LibreOffice use the inherited hard limit, not Python's 1 GiB soft cap."""
+    import resource
+    _soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+    resource.setrlimit(resource.RLIMIT_AS, (hard, hard))
+
+
 def office_to_pdf(data, extension, canonical_pdf_path=None):
+    import resource
+    _soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+    one_gib = 1024 * 1024 * 1024
+    if hard != resource.RLIM_INFINITY and hard <= one_gib:
+        raise ValueError("PowerPoint rendering is blocked by an inherited RLIMIT_AS hard limit of 1 GiB or less; the LibreOffice worker needs a higher address-space limit")
     from extract_document import convert_legacy_ppt
     if extension == ".ppt":
         data = convert_legacy_ppt(data)
@@ -65,7 +77,8 @@ def office_to_pdf(data, extension, canonical_pdf_path=None):
         try:
             p = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, timeout=25, cwd=root,
-                               env={**os.environ, "HOME": root})
+                               env={**os.environ, "HOME": root},
+                               preexec_fn=_restore_office_address_space)
         except subprocess.TimeoutExpired as exc:
             raise ValueError("PowerPoint rendering timed out; split this presentation") from exc
         result = dest / "upload.pdf"
@@ -164,7 +177,12 @@ def visual_pages(data, extension, limit, canonical_pdf_path=None):
 def main():
     try:
         import resource
-        resource.setrlimit(resource.RLIMIT_AS, (1024 * 1024 * 1024, 1024 * 1024 * 1024))
+        _soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+        one_gib = 1024 * 1024 * 1024
+        address_space_soft = one_gib if hard == resource.RLIM_INFINITY else min(one_gib, hard)
+        # Keep the hard limit intact so the isolated LibreOffice subprocess can
+        # raise its soft limit for PDF export; this Python worker remains capped.
+        resource.setrlimit(resource.RLIMIT_AS, (address_space_soft, hard))
         resource.setrlimit(resource.RLIMIT_CPU, (60, 65))
     except (ImportError, OSError, ValueError):
         pass
