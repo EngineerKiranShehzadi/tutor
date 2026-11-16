@@ -67,7 +67,14 @@ def office_to_pdf(data, extension, canonical_pdf_path=None):
     soffice = shutil.which("soffice") or shutil.which("libreoffice")
     if not soffice:
         raise ValueError("Visual analysis of DOCX/PPTX requires LibreOffice on the backend")
-    with tempfile.TemporaryDirectory(prefix="askaitutor-vis-") as root:
+    # LibreOffice installations with sandboxing (for example, snap packages)
+    # may not be allowed to read sources from /tmp. Prefer a private temp folder
+    # under the service user's home, then fall back to the system temp directory.
+    try:
+        office_temp = tempfile.TemporaryDirectory(prefix="askaitutor-vis-", dir=str(Path.home()))
+    except OSError:
+        office_temp = tempfile.TemporaryDirectory(prefix="askaitutor-vis-")
+    with office_temp as root:
         source = Path(root) / ("upload.docx" if extension == ".docx" else "upload.pptx")
         source.write_bytes(data)
         dest = Path(root) / "pdf"
