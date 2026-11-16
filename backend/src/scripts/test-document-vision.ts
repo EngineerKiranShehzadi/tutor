@@ -19,6 +19,10 @@ async function run() {
   assert.match(merged[2].text, /Loop diagram/);
   assert.equal(merged[2].locator, 'Slide 3');
 
+  const unmatchedVisual = mergeVisionIntoUnits([], new Map([['Page 18', 'A bar chart with labeled axes.']]));
+  assert.equal(unmatchedVisual[0].locator, 'Page 18');
+  assert.match(unmatchedVisual[0].text, /^\[Diagram and figure interpretation from Page 18\]/);
+
   const structured = formatVisualDescription({relevant:true,description:'A conditional branch.',confidence:0.95,visualEvidence:[{kind:'diagram',region:[100,100,900,900],visibleEvidence:'A decision diamond branches to pass and fail.'}],topic:'If statements',nodes:['Start','Decision: marks >= 50','Pass','Fail'],connections:['Decision --Yes--> Pass','Decision --No--> Fail'],uncertainty:[]});
   assert.match(structured,/Decision --Yes--> Pass/);
   assert.match(structured,/Visual topic: If statements/);
