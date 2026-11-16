@@ -72,12 +72,13 @@ def office_to_pdf(data, extension, canonical_pdf_path=None):
         source.write_bytes(data)
         dest = Path(root) / "pdf"
         dest.mkdir()
+        export_filter = "impress_pdf_Export" if extension in (".pptx", ".ppt") else "writer_pdf_Export"
         cmd = [soffice, "-env:UserInstallation=" + (Path(root) / "profile").as_uri(),
-               "--headless", "--convert-to", "pdf", "--outdir", str(dest), str(source)]
+               "--headless", "--convert-to", "pdf:" + export_filter, "--outdir", str(dest), str(source)]
         try:
             p = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, timeout=25, cwd=root,
-                               env={**os.environ, "HOME": root},
+                               env=os.environ.copy(),
                                preexec_fn=_restore_office_address_space)
         except subprocess.TimeoutExpired as exc:
             raise ValueError("PowerPoint rendering timed out; split this presentation") from exc
