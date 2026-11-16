@@ -82,9 +82,20 @@ def office_to_pdf(data, extension, canonical_pdf_path=None):
         except subprocess.TimeoutExpired as exc:
             raise ValueError("PowerPoint rendering timed out; split this presentation") from exc
         result = dest / "upload.pdf"
-        if p.returncode or not result.exists() or result.stat().st_size > 64 * 1024 * 1024:
-            raise ValueError("Unable to render PowerPoint slides for visual grounding")
+        if not result.exists() or result.stat().st_size < 5 or result.stat().st_size > 64 * 1024 * 1024:
+            output_lines = (p.stderr + b"\n" + p.stdout).decode("utf-8", "replace").splitlines()
+            meaningful = next((line.strip() for line in reversed(output_lines)
+                               if any(token in line.lower() for token in
+                                      ("fatal", "signal", "error", "failed", "cannot", "denied", "not found"))), "")
+            detail = meaningful[:180] if meaningful else "no usable PDF was produced"
+            raise ValueError("Unable to render PowerPoint slides for visual grounding "
+                             "(LibreOffice exit " + str(p.returncode) + ": " + detail + ")")
         pdf_bytes = result.read_bytes()
+        if not pdf_bytes.startswith(b"%PDF-"):
+            raise ValueError("Unable to render PowerPoint slides for visual grounding "
+                             "(LibreOffice output is not a valid PDF; exit " + str(p.returncode) + ")")
+        # Some LibreOffice builds can report a shutdown error after completing a
+        # valid export. Trust a bounded, valid PDF output rather than the exit code.
         persist_canonical_pdf(pdf_bytes, canonical_pdf_path)
         return pdf_bytes
 
