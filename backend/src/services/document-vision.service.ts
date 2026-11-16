@@ -128,7 +128,7 @@ export function mergeVisionIntoUnits(units: VisionUnit[], descriptions: Map<stri
     };
   });
   for (const [locator, visual] of descriptions) {
-    if (!matched.has(locator)) merged.push({ locator, text: '[Diagram and figure interpretation]\n' + visual });
+    if (!matched.has(locator)) merged.push({ locator, text: '[Diagram and figure interpretation from ' + locator + ']\n' + visual });
   }
   return merged;
 }
