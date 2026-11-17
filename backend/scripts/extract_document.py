@@ -70,7 +70,10 @@ def pdf_units(data, warnings, include_empty=False):
         contents = page.get_contents()
         if contents is not None and len(contents.get_data()) > 3 * 1024 * 1024:
             raise ValueError(f"PDF page {number} is too complex to extract safely")
-        text = clean(page.extract_text(extraction_mode="layout") or "")
+        # A page with no /Contents stream has no selectable text. pypdf's layout
+        # extractor indexes self["/Contents"] directly and raises KeyError on
+        # such pages, so treat them as empty (routed to visual analysis) instead.
+        text = clean(page.extract_text(extraction_mode="layout") or "") if contents is not None else ""
         pages.append((number, text))
 
     # Strip exact lines repeated at the top or bottom of multiple pages. This
