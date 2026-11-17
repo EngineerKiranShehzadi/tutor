@@ -58,22 +58,24 @@ def zip_guard(data, max_bytes=MAX_BYTES):
 
 
 def pdf_units(data, warnings, include_empty=False):
-    from pypdf import PdfReader
-    reader = PdfReader(io.BytesIO(data), strict=False)
-    if reader.is_encrypted:
+    # PyMuPDF reads PDF text in natural reading order without the intra-word
+    # spacing artifacts pypdf's layout mode introduces on justified or kerned
+    # text (e.g. "British" -> "Br itish", "1857" -> "1 857", "based" -> "base d"),
+    # which otherwise break keyword/full-text search and pollute embeddings.
+    # A page with no selectable text yields an empty string and is routed to
+    # visual analysis, exactly as before. PyMuPDF is already a dependency.
+    import pymupdf
+    try:
+        doc = pymupdf.open(stream=data, filetype="pdf")
+    except Exception as exc:
+        raise ValueError("This is not a valid PDF file") from exc
+    if doc.needs_pass:
         raise ValueError("Password-protected PDFs are not supported")
-    if len(reader.pages) > MAX_UNITS:
+    if doc.page_count > MAX_UNITS:
         raise ValueError("PDF has too many pages; split it into smaller files")
     pages = []
-    for number, page in enumerate(reader.pages, 1):
-        # pypdf warns that huge expanded page streams can exhaust memory.
-        contents = page.get_contents()
-        if contents is not None and len(contents.get_data()) > 3 * 1024 * 1024:
-            raise ValueError(f"PDF page {number} is too complex to extract safely")
-        # A page with no /Contents stream has no selectable text. pypdf's layout
-        # extractor indexes self["/Contents"] directly and raises KeyError on
-        # such pages, so treat them as empty (routed to visual analysis) instead.
-        text = clean(page.extract_text(extraction_mode="layout") or "") if contents is not None else ""
+    for number in range(1, doc.page_count + 1):
+        text = clean(doc[number - 1].get_text("text") or "")
         pages.append((number, text))
 
     # Strip exact lines repeated at the top or bottom of multiple pages. This

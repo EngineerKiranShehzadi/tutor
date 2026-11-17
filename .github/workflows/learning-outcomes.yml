@@ -131,7 +131,7 @@ jobs:
       - name: Python structured Word/PDF/PPT parsing regression
         working-directory: backend
         run: |
-          python3 -m pip install --break-system-packages --quiet python-docx python-pptx pypdf beautifulsoup4
+          python3 -m pip install --break-system-packages --quiet python-docx python-pptx pypdf pymupdf beautifulsoup4
           python3 scripts/test_extract_document.py
       - name: Backend TypeScript
         working-directory: backend
