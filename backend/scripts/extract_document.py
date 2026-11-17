@@ -288,6 +288,29 @@ def pptx_units(data, warnings, include_empty=False, max_bytes=MAX_BYTES):
             warnings.append(f"Slide {number} has no selectable text (visual analysis needed)")
             if include_empty:
                 output.append({"locator": f"Slide {number}", "text": ""})
+    # Strip a running header/footer repeated across most slides (e.g. a textbook
+    # footer), without touching meaningful titles that repeat on only a few
+    # slides. A line counts as chrome only when it appears on at least half the
+    # slides (and at least 3), so a "(cont'd.)" heading on a handful of slides is
+    # preserved.
+    slide_count = sum(1 for unit in output if unit["text"])
+    if slide_count >= 4:
+        line_slides = {}
+        for unit in output:
+            for line in {re.sub(r"\s+", " ", ln).strip().casefold() for ln in unit["text"].splitlines()}:
+                if len(line) > 3:
+                    line_slides[line] = line_slides.get(line, 0) + 1
+        threshold = max(3, (slide_count + 1) // 2)
+        chrome = {line for line, count in line_slides.items() if count >= threshold}
+        if chrome:
+            for unit in output:
+                if not unit["text"]:
+                    continue
+                kept = [ln for ln in unit["text"].splitlines()
+                        if re.sub(r"\s+", " ", ln).strip().casefold() not in chrome]
+                stripped = clean("\n".join(kept))
+                if stripped:
+                    unit["text"] = stripped
     return output
 
 
