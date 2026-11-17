@@ -15,6 +15,7 @@ assertThrowawayDb('test-admin-hardening');
 import * as XLSX from 'xlsx';
 import express from 'express';
 import { AddressInfo } from 'net';
+import { request as httpRequest } from 'http';
 import { deflateRawSync } from 'zlib';
 import { spawnSync } from 'child_process';
 import { existsSync, readdirSync, readFileSync } from 'fs';
@@ -44,6 +45,13 @@ import { getAllUsers } from '../services/user.service';
 import { analyticsResolvers } from '../graphql/resolvers/analytics.resolver';
 import { queryLimitsRule } from '../graphql/query-limits';
 import { typeDefs } from '../graphql/typeDefs';
+import { practiceQuizRetakeTypeDefs } from '../graphql/practice-quiz.schema';
+import { learningOutcomeTypeDefs } from '../graphql/learning-outcome.schema';
+import { facultyLearningGapTypeDefs } from '../graphql/faculty-learning-gap.schema';
+import { revisionPlanTypeDefs } from '../graphql/revision-plan.schema';
+import { ragBenchmarkTypeDefs } from '../graphql/rag-benchmark.schema';
+import { learningEffectivenessTypeDefs } from '../graphql/learning-effectiveness.schema';
+import { misconceptionTypeDefs } from '../graphql/misconception.schema';
 import datasetRoutes from '../routes/dataset.routes';
 import { errorHandler, AppError } from '../middleware/errorHandler';
 import { formatGraphQLError } from '../graphql';
@@ -427,9 +435,13 @@ const run = async () => {
   {
     const lec = (await query<{ id: number }>(`INSERT INTO lectures (title, youtube_url, youtube_video_id) VALUES ('[a11] questions', 'https://youtu.be/xxxxxxxxxxx', 'xxxxxxxxxxx') RETURNING id`)).rows[0].id;
     const stu = (await query<{ id: string }>(`INSERT INTO users (name, email, password_hash, is_verified, role) VALUES ('A11 Student', $1, 'x', TRUE, 'STUDENT') RETURNING id`, [`a11-${Date.now()}@example.test`])).rows[0].id;
-    await query(`INSERT INTO student_questions (student_id, lecture_id, question)
-                 SELECT $1, $2, 'bulk question ' || g FROM generate_series(1, 260) g`, [stu, lec]);
-    await query(`INSERT INTO student_questions (student_id, lecture_id, question) VALUES ($1, $2, 'what is 100% accuracy?'), ($1, $2, 'what is 100 accuracy?')`, [stu, lec]);
+    const session = (await query<{ id: number }>(
+      `INSERT INTO chat_sessions (student_id, lecture_id, title) VALUES ($1, $2, 'A11 paging') RETURNING id`, [stu, lec]
+    )).rows[0].id;
+    await query(`INSERT INTO chat_history (student_id, lecture_id, session_id, question, answer)
+                 SELECT $1, $2, $3, 'bulk question ' || g, 'answer' FROM generate_series(1, 260) g`, [stu, lec, session]);
+    await query(`INSERT INTO chat_history (student_id, lecture_id, session_id, question, answer)
+                 VALUES ($1, $2, $3, 'what is 100% accuracy?', 'answer'), ($1, $2, $3, 'what is 100 accuracy?', 'answer')`, [stu, lec, session]);
     const list = await getRecentQuestions(undefined);
     const huge = await getRecentQuestions(10000);
     const page = await getRecentQuestionsPage({ limit: 10000, offset: 0, lectureId: lec });
@@ -443,7 +455,10 @@ const run = async () => {
 
   // ── A12: GraphQL limits and introspection ────────────────────────────
   {
-    const schema = makeExecutableSchema({ typeDefs });
+    const completeTypeDefs = [typeDefs, practiceQuizRetakeTypeDefs, learningOutcomeTypeDefs,
+      misconceptionTypeDefs, facultyLearningGapTypeDefs, revisionPlanTypeDefs,
+      ragBenchmarkTypeDefs, learningEffectivenessTypeDefs];
+    const schema = makeExecutableSchema({ typeDefs: completeTypeDefs });
     const rule = queryLimitsRule({ maxDepth: env.GRAPHQL.MAX_DEPTH, maxFields: env.GRAPHQL.MAX_FIELDS });
     const errs = (q: string) => validate(schema, parse(q), [...specifiedRules, rule]).map(e => e.message);
     const wide = `query { ${Array.from({ length: env.GRAPHQL.MAX_FIELDS + 1 }, (_, i) => `f${i}: lectureStatusList { id }`).join(' ')} }`;
@@ -471,7 +486,7 @@ const run = async () => {
         && ops > 20 && problems.length === 0,
       `deep=${deepErrs[0]} viaFragment=${fragDeepErrs[0]} wide=${wideErrs.find(m => /too many/.test(m))} frontendOps=${ops} problems=${problems.slice(0, 3).join(' | ') || 'none'}`);
 
-    const server = new ApolloServer({ typeDefs, resolvers: {}, introspection: false, validationRules: [rule] });
+    const server = new ApolloServer({ typeDefs: completeTypeDefs, resolvers: {}, introspection: false, validationRules: [rule] });
     await server.start();
     const intro = await server.executeOperation({ query: '{ __schema { types { name } } }' });
     await server.stop();
@@ -536,9 +551,9 @@ const run = async () => {
     const good = await upload('ok.xlsx', 'application/octet-stream', workbook([['question', 'answer'], ['q', 'a']]));
     const badJson = await fetch(`${base}/echo`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"broken": ' });
     srv.close();
-    check('A16-1. Too large → 413; a .csv/.pdf (even renamed .xlsx) → 400; a non-zip "xlsx" → 400; a real workbook as octet-stream → accepted; malformed JSON → 400 (all were 500 or parser errors)',
+    check('A16-1. Too large → 413; unsupported CSV → 400; a PDF needing visual review → 422; a non-zip "xlsx" → 400; a real workbook as octet-stream → accepted; malformed JSON → 400',
       big.status === 413 && /too large/.test(big.message) && csvRenamed.status === 400 && /Only \.xlsx/.test(csvRenamed.message)
-        && pdf.status === 400 && notZip.status === 400 && /not a valid \.xlsx/.test(notZip.message) && good.status === 200 && badJson.status === 400,
+        && pdf.status === 422 && /review/i.test(pdf.message) && notZip.status === 400 && /not a valid \.xlsx/.test(notZip.message) && good.status === 200 && badJson.status === 400,
       `big=${big.status} csvRenamed=${csvRenamed.status} pdf=${pdf.status} notZip=${notZip.status}("${notZip.message}") good=${good.status} badJson=${badJson.status}`);
     check('A16-2. xlsx is SheetJS 0.20.3 (fixes CVE-2023-30533 prototype pollution and CVE-2024-22363 ReDoS), pinned to the SheetJS CDN tarball',
       XLSX.version === '0.20.3' && /cdn\.sheetjs\.com\/xlsx-0\.20\.3/.test(JSON.parse(readFileSync(join(__dirname, '../../package.json'), 'utf8')).dependencies.xlsx),
@@ -782,7 +797,10 @@ const run = async () => {
                  SELECT $1, $2, 'q' || g, date_trunc('day', NOW()) - INTERVAL '1 day' + INTERVAL '3 hours' FROM generate_series(1, 10) g`, [stu, ten]);
     await query(`INSERT INTO student_questions (student_id, lecture_id, question, created_at)
                  SELECT $1, $2, 'q' || g, date_trunc('day', NOW()) - INTERVAL '1 day' + INTERVAL '5 hours' FROM generate_series(1, 9) g`, [stu, nine]);
-    const tenHour = Number((await query<{ h: string }>(`SELECT EXTRACT(HOUR FROM date_trunc('day', NOW()) - INTERVAL '1 day' + INTERVAL '3 hours')::text AS h`)).rows[0].h);
+    const tenHour = Number((await query<{ h: string }>(
+      `SELECT EXTRACT(HOUR FROM (date_trunc('day', NOW()) - INTERVAL '1 day' + INTERVAL '3 hours') AT TIME ZONE $1)::text AS h`,
+      [env.REPORTING_TIMEZONE]
+    )).rows[0].h);
     const stats = await getMyStats(stu);
     check('AD5-1. A lecture with 10 questions ranks above one with 9 (most-asked topic, lecture breakdown, peak hour)',
       stats.mostAskedTopic === '[ad5] ten questions' && stats.lectureBreakdown[0]?.lectureId === ten
@@ -857,6 +875,8 @@ const run = async () => {
   // ── S16: the SSE heartbeat stops when the client goes away ───────────
   {
     const stu = (await query<{ id: string }>(`INSERT INTO users (name, email, password_hash, is_verified, role) VALUES ('S16', $1, 'x', TRUE, 'STUDENT') RETURNING id`, [`s16-${Date.now()}@example.test`])).rows[0].id;
+    const lec = (await query<{ id: number }>(`INSERT INTO lectures (title, youtube_url, youtube_video_id) VALUES ('[s16] slow lookup', 'https://youtu.be/xxxxxxxxxxx', 'xxxxxxxxxxx') RETURNING id`)).rows[0].id;
+    const session = (await query<{ id: number }>(`INSERT INTO chat_sessions (student_id, lecture_id, title) VALUES ($1, $2, 'S16') RETURNING id`, [stu, lec])).rows[0].id;
     const chat = env.CHAT as { RATE_LIMIT_PER_MINUTE: number; DAILY_QUESTION_LIMIT: number };
     const savedChat = { ...chat };
     chat.RATE_LIMIT_PER_MINUTE = 0; chat.DAILY_QUESTION_LIMIT = 0;
@@ -870,27 +890,36 @@ const run = async () => {
     (global as { clearInterval: unknown }).clearInterval = ((h: NodeJS.Timeout) => { if (h === heartbeat) clearedAt.push(Date.now()); return realClear(h); }) as unknown;
     // A slow pipeline: the lecture lookup takes 1.5 s.
     (pool as unknown as { query: unknown }).query = async (text: string, params?: unknown[]) => {
-      if (/^SELECT \* FROM lectures WHERE id = \$1/.test(text)) { await new Promise(r => setTimeout(r, 1500)); pipelineResumedAt = Date.now(); }
+      if (/FROM lectures l\s+LEFT JOIN lecture_agent_profiles ap ON ap\.lecture_id = l\.id\s+WHERE l\.id = \$1/i.test(text)) {
+        await new Promise(r => setTimeout(r, 1500)); pipelineResumedAt = Date.now();
+      }
       return (realQuery as unknown as (t: string, p?: unknown[]) => Promise<unknown>).call(pool, text, params);
     };
     const app = express(); app.use(express.json()); app.use('/chat', chatRoutes);
     const srv = app.listen(0, '127.0.0.1');
     await new Promise<void>(r => srv.once('listening', () => r()));
     try {
-      const ac = new AbortController();
       const started = Date.now();
-      const res = await fetch(`http://127.0.0.1:${(srv.address() as AddressInfo).port}/chat/ask-stream`, {
-        method: 'POST', signal: ac.signal,
+      const req = httpRequest({
+        hostname: '127.0.0.1', port: (srv.address() as AddressInfo).port,
+        path: '/chat/ask-stream', method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${generateAccessToken(stu, 'STUDENT')}` },
-        body: JSON.stringify({ lectureId: 999999, question: 'slow question?', sessionId: 1 }),
+      });
+      const statusCode = await new Promise<number>((resolve, reject) => {
+        req.once('error', reject);
+        req.once('response', response => {
+          response.on('data', () => undefined);
+          resolve(response.statusCode ?? 0);
+        });
+        req.end(JSON.stringify({ lectureId: lec, question: 'slow question?', sessionId: session }));
       });
       await new Promise(r => setTimeout(r, 300));
-      ac.abort(); // the student closes the tab
+      req.destroy(); // the student closes the tab; avoid leaving an Undici fetch timer behind
       await new Promise(r => setTimeout(r, 2000)); // let the pipeline finish
       const first = clearedAt[0] ?? 0;
       check('S16-1. Client disconnects mid-answer → the heartbeat is cleared at once (before the slow pipeline finishes), not only in finally',
-        res.status === 200 && heartbeat !== null && first > 0 && pipelineResumedAt > 0 && first < pipelineResumedAt && first - started < 1200,
-        `stream=${res.status} clearedAfter=${first ? first - started : 'never'}ms pipelineResumedAfter=${pipelineResumedAt ? pipelineResumedAt - started : 'n/a'}ms clears=${clearedAt.length}`);
+        statusCode === 200 && heartbeat !== null && first > 0 && pipelineResumedAt > 0 && first < pipelineResumedAt && first - started < 1200,
+        `stream=${statusCode} clearedAfter=${first ? first - started : 'never'}ms pipelineResumedAfter=${pipelineResumedAt ? pipelineResumedAt - started : 'n/a'}ms clears=${clearedAt.length}`);
     } finally {
       srv.close();
       (global as { setInterval: unknown }).setInterval = realSet;
