@@ -13,7 +13,7 @@ export const GET_FACULTY_OUTCOME_SUMMARY = gql`
 export const GET_OUTCOME_QUESTIONS = gql`
   query LearningOutcomeQuestions($courseId:Int!,$limit:Int) {
     learningOutcomeQuestions(courseId:$courseId,limit:$limit) {
-      questionId lectureId lectureTitle question outcomeId
+      questionId lectureId lectureTitle question category evidenceQuote outcomeId
     }
   }
 `;
