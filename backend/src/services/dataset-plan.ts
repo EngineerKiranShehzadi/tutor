@@ -3,8 +3,8 @@
 // and the lecture's currently-active Q&As and acts on the result.
 //
 // Identity rules (a file row is matched to an existing Q&A of the SAME lecture):
-//  1. A row carrying a qa_id is that Q&A. An unknown qa_id is an error —
-//     ids are assigned by the backend, never invented by the file.
+//  1. A row carrying a qa_id is that Q&A. Unknown Excel IDs remain an error;
+//     internally generated document rows may carry deterministic source IDs.
 //  2. A row without qa_id matches only on an exact, unique question
 //     (whitespace-normalised). Zero matches => a new Q&A.
 //  3. If a question is not unique — several existing Q&As or several file rows
@@ -27,6 +27,9 @@ export interface QaFields {
 
 export interface FileRow extends QaFields {
   qaId: string | null;
+  /** Internal source-format marker; only documentToRows sets this. */
+  isDocumentChunk?: boolean;
+  isDocumentAtomic?: boolean;
   // 1-based spreadsheet row number (header is row 1) — only for messages.
   sheetRow: number;
 }
@@ -71,6 +74,30 @@ export const matchRows = (
   // 1. Explicit qa_ids.
   fileRows.forEach((row, i) => {
     if (!row.qaId) return;
+    if (!activeById.has(row.qaId) && row.isDocumentChunk) {
+      // Document IDs are deterministic, source-scoped identities. On an
+      // upgrade from older random IDs, reuse only an exact question+locator
+      // match; otherwise create the deterministic ID as a new row. Multiple
+      // old matches are ambiguous and still fail closed.
+      const candidates = activeQas.filter(q =>
+        !claimed.has(q.qaId) && normalizeQuestionKey(q.fields.question) === normalizeQuestionKey(row.question) &&
+        q.fields.start_time === row.start_time
+      );
+      if (candidates.length === 1) {
+        claimed.add(candidates[0].qaId);
+        matchByRow.set(i, { rowIndex: i, qaId: candidates[0].qaId, isNew: false });
+      } else if (candidates.length === 0) {
+        if (claimed.has(row.qaId)) {
+          errors.push(`Row ${row.sheetRow}: document source identity "${row.qaId}" appears more than once in the file`);
+          return;
+        }
+        claimed.add(row.qaId);
+        matchByRow.set(i, { rowIndex: i, qaId: row.qaId, isNew: true });
+      } else {
+        errors.push(`Row ${row.sheetRow}: document source identity matches multiple active rows at the same location`);
+      }
+      return;
+    }
     if (!activeById.has(row.qaId)) {
       errors.push(`Row ${row.sheetRow}: qa_id "${row.qaId}" does not exist in this lecture's dataset`);
       return;

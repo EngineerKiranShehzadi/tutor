@@ -13,7 +13,7 @@ from extract_document import extract, zip_guard
 class TestDocumentExtractor(unittest.TestCase):
     def test_plain_text(self):
         result = extract(b"Variables = values\nPython is readable", ".txt")
-        self.assertEqual(result["units"][0]["locator"], "Document")
+        self.assertEqual(result["units"][0]["locator"], "Section 1")
         self.assertIn("Variables = values", result["units"][0]["text"])
 
     def test_html_strips_scripts_and_navigation(self):
@@ -32,6 +32,24 @@ class TestDocumentExtractor(unittest.TestCase):
     def test_html_utf8(self):
         result = extract("Urdu: پروگرامنگ".encode("utf-8"), ".html")
         self.assertIn("پروگرامنگ", result["units"][0]["text"])
+
+    def test_html_and_txt_keep_heading_scoped_content(self):
+        html = b"""<main><h1>Loops</h1><p>Loops repeat instructions.</p>
+        <ul><li>for loops</li><li>while loops</li></ul>
+        <table><tr><th>Type</th><th>Use</th></tr><tr><td>for</td><td>known count</td></tr></table>
+        <h2>Conditions</h2><p>Conditions choose a branch.</p></main>"""
+        html_units = extract(html, ".html")["units"]
+        self.assertEqual(len(html_units), 2)
+        self.assertIn("Loops", html_units[0]["locator"])
+        self.assertIn("for loops", html_units[0]["text"])
+        self.assertIn("while loops", html_units[0]["text"])
+        self.assertIn("for | known count", html_units[0]["text"])
+        self.assertIn("Conditions", html_units[1]["locator"])
+
+        txt = extract(b"# Variables\nVariables store values.\n\n## Types\nPython has several types.", ".txt")["units"]
+        self.assertEqual(len(txt), 2)
+        self.assertIn("Variables", txt[0]["locator"])
+        self.assertIn("Types", txt[1]["locator"])
 
     def test_docx_extracts_paragraphs_and_tables(self):
         from docx import Document
@@ -64,6 +82,36 @@ class TestDocumentExtractor(unittest.TestCase):
         self.assertIn("Question: What is zero-shot prompting?", text)
         self.assertIn("Answer: It uses no worked examples.", text)
 
+    def test_docx_drops_tiny_stray_preamble(self):
+        from docx import Document
+        doc = Document()
+        doc.add_paragraph("tea")
+        doc.add_heading("Ethics", 1)
+        doc.add_paragraph("Ethics concerns right and wrong behavior.")
+        buf = io.BytesIO()
+        doc.save(buf)
+        result = extract(buf.getvalue(), ".docx")
+        self.assertEqual([unit["locator"] for unit in result["units"]], ["Section 1: Ethics"])
+        self.assertNotIn("tea", " ".join(unit["text"] for unit in result["units"]).lower())
+        self.assertTrue(any("preamble" in warning.lower() for warning in result["warnings"]))
+
+    def test_docx_prompt_evaluation_table_is_not_converted_to_qa(self):
+        from docx import Document
+        doc = Document()
+        table = doc.add_table(rows=2, cols=2)
+        table.cell(0, 0).text = "Prompt"
+        table.cell(0, 1).text = "AI Response"
+        table.cell(1, 0).text = "Prompt: Tell me about Mars"
+        table.cell(1, 1).text = "AI Response: Mars is red."
+        buf = io.BytesIO()
+        doc.save(buf)
+        result = extract(buf.getvalue(), ".docx")
+        text = "\n".join(unit["text"] for unit in result["units"])
+        self.assertIn("Prompt: Tell me about Mars", text)
+        self.assertIn("AI Response: Mars is red.", text)
+        self.assertNotIn("Question: Prompt:", text)
+        self.assertNotIn("Answer: AI Response:", text)
+
     def test_docx_slide_heading_preserves_question_answer_scope(self):
         from docx import Document
         doc = Document()
@@ -95,6 +143,23 @@ class TestDocumentExtractor(unittest.TestCase):
         result = extract(stream.getvalue(), ".pptx")
         self.assertEqual(result["units"][0]["locator"], "Slide 1")
         self.assertIn("Functions let us reuse", result["units"][0]["text"])
+
+    def test_pptx_cleans_vertical_tabs_and_trailing_slide_number(self):
+        from pptx import Presentation
+        from pptx.util import Inches
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[5])
+        content = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(5), Inches(1))
+        content.text = "Slide title\vBullet one"
+        footer = slide.shapes.add_textbox(Inches(1), Inches(6), Inches(1), Inches(.2))
+        footer.text = "1"
+        stream = io.BytesIO()
+        prs.save(stream)
+        text = extract(stream.getvalue(), ".pptx")["units"][0]["text"]
+        self.assertNotIn("\v", text)
+        self.assertIn("Slide title", text)
+        self.assertIn("Bullet one", text)
+        self.assertFalse(text.rstrip().endswith("\n1"))
 
     def test_pdf_text_and_page_number(self):
         # Test PDF contains standard Helvetica font and a small literal text stream.

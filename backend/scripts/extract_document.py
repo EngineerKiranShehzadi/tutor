@@ -25,7 +25,7 @@ MAX_TEXT_CHARS = 900_000
 
 
 def clean(text):
-    text = text.replace("\x00", "").replace("\r\n", "\n").replace("\r", "\n")
+    text = text.replace("\x00", "").replace("\x0b", "\n").replace("\r\n", "\n").replace("\r", "\n")
     # Remove known private-use citation/navigation glyphs that can leak into
     # copied Word text from rich web/LLM responses. They are not lecture text
     # and otherwise pollute embeddings and student answers.
@@ -64,13 +64,37 @@ def pdf_units(data, warnings, include_empty=False):
         raise ValueError("Password-protected PDFs are not supported")
     if len(reader.pages) > MAX_UNITS:
         raise ValueError("PDF has too many pages; split it into smaller files")
-    out = []
+    pages = []
     for number, page in enumerate(reader.pages, 1):
         # pypdf warns that huge expanded page streams can exhaust memory.
         contents = page.get_contents()
         if contents is not None and len(contents.get_data()) > 3 * 1024 * 1024:
             raise ValueError(f"PDF page {number} is too complex to extract safely")
         text = clean(page.extract_text(extraction_mode="layout") or "")
+        pages.append((number, text))
+
+    # Strip exact lines repeated at the top or bottom of multiple pages. This
+    # removes running course headers/footer chrome without touching repeated
+    # body text in the middle of a page.
+    chrome_counts = {}
+    for _, text in pages:
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        for line in set(lines[:3] + lines[-3:]):
+            normalized = re.sub(r"\s+", " ", line).strip().casefold()
+            if len(normalized) > 3:
+                chrome_counts[normalized] = chrome_counts.get(normalized, 0) + 1
+    repeated_chrome = {line for line, count in chrome_counts.items() if count >= 2}
+    out = []
+    for number, text in pages:
+        kept = []
+        for line in text.splitlines():
+            normalized = re.sub(r"\s+", " ", line).strip().casefold()
+            if re.fullmatch(r"page\s+\d+\s+of\s+\d+", normalized):
+                continue
+            if line.strip() and normalized in repeated_chrome:
+                continue
+            kept.append(line)
+        text = clean("\n".join(kept))
         if text:
             out.append({"locator": f"Page {number}", "text": text})
         else:
@@ -161,11 +185,19 @@ def docx_units(data, warnings):
                     continue
                 if qa_table and index == 0:
                     continue
-                if len(cells) >= 2 and (qa_table or (cells[0].endswith("?") and len(cells[0]) <= 350)):
+                if len(cells) >= 2 and qa_table:
                     current.append("Question: " + cells[0] + "\nAnswer: " + cells[1])
                 else:
                     current.append(" | ".join(cells))
     flush()
+    # A stray preamble fragment such as the observed "tea" extraction artifact
+    # is not a meaningful section. Drop only a tiny unstructured first unit
+    # when a real slide/heading follows; preserve short titles otherwise.
+    if len(sections) > 1 and sections[0]["locator"] == "Document":
+        preamble = sections[0]["text"].strip()
+        if len(preamble) < 25 and len(preamble.split()) < 5:
+            sections.pop(0)
+            warnings.append("Ignored a short, unstructured DOCX preamble before the first heading or slide.")
     if sections and sections[0]["locator"] == "Document":
         warnings.append("Text before the first slide marker was found; review this document preamble.")
     if len(sections) > MAX_UNITS:
@@ -194,11 +226,14 @@ def pptx_units(data, warnings, include_empty=False, max_bytes=MAX_BYTES):
                 for index, cells in enumerate(table_rows):
                     if not any(cells) or (qa_table and index == 0):
                         continue
-                    if len(cells) >= 2 and (qa_table or (cells[0].endswith("?") and len(cells[0]) <= 350)):
+                    if len(cells) >= 2 and qa_table:
                         blocks.append("Question: " + cells[0] + "\nAnswer: " + cells[1])
                     else:
                         blocks.append(" | ".join(cells))
         text = "\n\n".join(blocks)
+        # Office can append a standalone slide number after the extracted
+        # content. Remove only numeric-only trailing lines.
+        text = re.sub(r"(?:\n\s*\d{1,4}\s*)+$", "", text).strip()
         if text:
             output.append({"locator": f"Slide {number}", "text": text})
         else:
@@ -249,16 +284,89 @@ def html_units(data, warnings):
                        "nav", "footer", "aside"]):
         item.decompose()
     root = soup.find("main") or soup.find("article") or soup.body or soup
-    # Keep table rows together so cell values do not lose their relationship.
-    for tr in root.find_all("tr"):
-        cells = [clean(cell.get_text(" ", strip=True)) for cell in tr.find_all(["th", "td"], recursive=False)]
-        if cells:
-            tr.replace_with(soup.new_string("\n" + " | ".join(cells) + "\n"))
-    for element in root.find_all(["h1", "h2", "h3", "h4", "p", "li", "pre", "blockquote"]):
-        element.insert_before(soup.new_string("\n"))
-        element.insert_after(soup.new_string("\n"))
-    text = clean(root.get_text(" ", strip=False))
-    return [{"locator": "Document", "text": text}] if text else []
+    # Emit heading-scoped units in source order. Lists remain one block per
+    # item and table rows retain their cell relationships.
+    units, blocks = [], []
+    heading, section_number = None, 0
+
+    def flush():
+        nonlocal blocks, section_number
+        body = clean("\n".join(blocks))
+        # A heading alone is locator metadata; don't create a heading-only
+        # record if the following section contains the actual content.
+        if body and body.strip().casefold() != str(heading or "").strip().casefold():
+            section_number += 1
+            locator = f"Section {section_number}: {heading[:75]}" if heading else f"Section {section_number}"
+            units.append({"locator": locator, "text": body})
+        blocks = []
+
+    def walk(node):
+        nonlocal heading
+        for child in getattr(node, "children", []):
+            name = getattr(child, "name", None)
+            if not name:
+                value = clean(str(child))
+                if value:
+                    blocks.append(value)
+                continue
+            name = name.lower()
+            if name in {"h1", "h2", "h3", "h4"}:
+                flush()
+                heading = clean(child.get_text(" ", strip=True))[:150] or heading
+                blocks.append(heading)
+            elif name in {"p", "li", "pre", "blockquote"}:
+                value = clean(child.get_text(" ", strip=True))
+                if value:
+                    blocks.append(value)
+            elif name == "table":
+                for tr in child.find_all("tr"):
+                    cells = [clean(cell.get_text(" ", strip=True)) for cell in tr.find_all(["th", "td"], recursive=False)]
+                    if any(cells):
+                        blocks.append(" | ".join(cells))
+            elif name in {"section", "article"}:
+                if blocks:
+                    flush()
+                walk(child)
+                if blocks:
+                    flush()
+            else:
+                walk(child)
+
+    walk(root)
+    if blocks:
+        flush()
+    return units
+
+
+def txt_units(data):
+    text = clean(data.decode("utf-8-sig"))
+    if not text:
+        return []
+    lines = text.splitlines()
+    units, current = [], []
+    heading, section_number = None, 0
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        underline = i + 1 < len(lines) and re.fullmatch(r"\s*(?:=+|-{3,})\s*", lines[i + 1])
+        markdown_heading = re.match(r"^#{1,4}\s+(.+)$", line)
+        if markdown_heading or underline:
+            if current:
+                section_number += 1
+                locator = f"Section {section_number}: {heading[:75]}" if heading else f"Section {section_number}"
+                units.append({"locator": locator, "text": clean("\n".join(current))})
+                current = []
+            heading = (markdown_heading.group(1) if markdown_heading else line).strip()
+            current.append(heading)
+            i += 2 if underline else 1
+            continue
+        current.append(line)
+        i += 1
+    if current:
+        section_number += 1
+        locator = f"Section {section_number}: {heading[:75]}" if heading else f"Section {section_number}"
+        units.append({"locator": locator, "text": clean("\n".join(current))})
+    return units
 
 
 def extract(data, extension, include_empty=False, max_bytes=MAX_BYTES):
@@ -279,7 +387,7 @@ def extract(data, extension, include_empty=False, max_bytes=MAX_BYTES):
     elif ext in {".html", ".htm"}:
         units = html_units(data, warnings)
     elif ext == ".txt":
-        units = [{"locator": "Document", "text": clean(data.decode("utf-8-sig"))}]
+        units = txt_units(data)
     else:
         raise ValueError("Unsupported document type")
     units = [unit for unit in units if unit["text"] or (include_empty and ext in {".pdf", ".pptx", ".ppt"})]

@@ -17,8 +17,11 @@ const aLine=/^(?:a(?:ns(?:wer)?)?)\s*(?:#?\d+)?\s*:\s*(.*)$/i;
 const explanationLine=/^(?:explanation|solution)\s*:\s*(.*)$/i;
 const naturalQuestion=/^.{5,350}\?$/;
 const inlinePair=/^(?:Q(?:uestion)?\s*(?:no\.?\s*)?(?:#?\d+)?\s*[:.\-])\s*(.+?)\s+(?:(?:A(?:ns(?:wer)?)?|Explanation|Solution)\s*(?:#?\d+)?\s*[:.\-])\s*(.+)$/i;
-const MAX_UNIT=1050;
-const OVERLAP=130;
+// ~400 tokens of English prose with a small contextual overlap. This is a
+// soft ceiling: short Q&A records and slides remain atomic, while long source
+// units split only at the structural separators below.
+const MAX_UNIT=1600;
+const OVERLAP=160;
 const splitter=new RecursiveCharacterTextSplitter({
  chunkSize:MAX_UNIT,chunkOverlap:OVERLAP,separators:['\n\n','\n','. ',' ','']
 });

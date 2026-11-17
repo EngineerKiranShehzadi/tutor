@@ -15,6 +15,10 @@ export interface RawRow {
   end_time?: string;
   keywords?: string;
   llm_name?: string;
+  /** Set only by the document extractor; Excel uploads cannot opt into this path. */
+  is_document_chunk?: boolean;
+  /** Short PPTX slides stay one retrieval chunk to preserve slide citations. */
+  is_document_atomic?: boolean;
 }
 
 // Non-enumerable key holding a parsed row's real spreadsheet row number.
@@ -43,19 +47,22 @@ function buildChunkText(row: RawRow): string {
     .trim();
 }
 
-// The local embedding server (BAAI/bge-large-en-v1.5) truncates silently past
-// 512 tokens — anything beyond that is dropped from the vector with no error.
-// Rows below this char threshold (~450 tokens, ~4 chars/token, kept under
-// budget) are embedded whole, unchanged from before. Only rows that would
-// actually risk truncation get split.
-export const SPLIT_THRESHOLD_CHARS = 1800;
+// Curated Excel Q&A rows stay intact through 3,200 characters (~800 tokens).
+// This is below the configured text-embedding-3-small context limit and keeps
+// question/answer pairs atomic for retrieval. Larger answers split at semantic
+// separators with the row's question repeated on each child.
+export const SPLIT_THRESHOLD_CHARS = 3200;
 
-// Character-based, not token-based — no tokenizer dependency was added to
-// keep this addition small and auditable. Sized conservatively so a chunk
-// plus its Topic/Question prefix still lands safely under the 512-token
-// embedding limit for ordinary English text.
-export const SPLIT_CHUNK_SIZE = 1200;
+// Character-based rather than token-based; separators prefer paragraph and
+// sentence boundaries. The 3,200-character atomic threshold is the contract.
+export const SPLIT_CHUNK_SIZE = 1800;
 export const SPLIT_CHUNK_OVERLAP = 150;
+
+// Narrative document text uses a larger (~400-token) source-aware target than
+// spreadsheet rows. The row wrapper still counts against the conservative
+// local embedding budget, so its length is reserved before splitting answers.
+export const DOCUMENT_CHUNK_SIZE_CHARS = 1600;
+export const DOCUMENT_CHUNK_OVERLAP_CHARS = 160;
 
 // Largest structural break to smallest, so a split prefers paragraph and
 // sentence boundaries and only falls back to a raw word/character cut for
@@ -74,7 +81,7 @@ export const MAX_PIECES_PER_ROW = 20;
 // also changes chunk_text (hence content_hash) of any row it affects, which is
 // what triggers re-embedding of exactly those rows.
 export const CHUNKING_CONFIG_VERSION =
-  `rcts:${SPLIT_THRESHOLD_CHARS}/${SPLIT_CHUNK_SIZE}/${SPLIT_CHUNK_OVERLAP}/${MAX_PIECES_PER_ROW}:document-context-v4`;
+  `format-aware-v5:doc-${DOCUMENT_CHUNK_SIZE_CHARS}-${DOCUMENT_CHUNK_OVERLAP_CHARS}/slide-2200:excel-${SPLIT_THRESHOLD_CHARS}/${SPLIT_CHUNK_SIZE}/${SPLIT_CHUNK_OVERLAP}/${MAX_PIECES_PER_ROW}`;
 
 const splitter = new RecursiveCharacterTextSplitter({
   chunkSize: SPLIT_CHUNK_SIZE,
@@ -115,6 +122,42 @@ export async function buildChunkPieces(row: RawRow): Promise<ChunkPiece[]> {
 // the MAX_PIECES_PER_ROW cap — so the upload preview can show truncated rows.
 export async function buildChunkPiecesReport(row: RawRow): Promise<{ pieces: ChunkPiece[]; splitInto: number }> {
   const whole = buildChunkText(row);
+  // Document rows have already been split into source units/logical Q&A rows.
+  // Split only an oversized answer and keep its source question/title on every
+  // child. This gives every child one qa_id and lets version-scoped family
+  // expansion reunite adjacent pieces before reranking.
+  if (row.is_document_chunk) {
+    if (whole.length <= DOCUMENT_CHUNK_SIZE_CHARS || (row.is_document_atomic && String(row.answer ?? '').length <= 2200)) {
+      return { pieces: [{ chunkIndex: 0, chunkText: whole }], splitInto: 1 };
+    }
+    const question = String(row.question ?? '');
+    const topic = row.topic ? `Topic: ${row.topic}\n` : '';
+    const visualExcerpt = / \| Visual \d+$/.test(question);
+    const sourceQuestion = /^Source excerpt:/i.test(question)
+      ? question.replace(/ \| (?:Part|Visual) \d+$/, '')
+      : question;
+    const prefixLength = topic.length + `Question: ${sourceQuestion}\nAnswer: `.length;
+    const answerBudget = Math.max(400, DOCUMENT_CHUNK_SIZE_CHARS - prefixLength);
+    const documentSplitter = new RecursiveCharacterTextSplitter({
+      chunkSize: answerBudget,
+      chunkOverlap: Math.min(DOCUMENT_CHUNK_OVERLAP_CHARS, Math.floor(answerBudget / 5)),
+      separators: ['\n\n', '\n', '. ', ' ', ''],
+    });
+    const parts = await documentSplitter.splitText(String(row.answer ?? ''));
+    if (!parts.length) return { pieces: [{ chunkIndex: 0, chunkText: whole }], splitInto: 1 };
+    const pieces = parts.map((part, chunkIndex) => {
+      const childQuestion = /^Source excerpt:/i.test(question)
+        ? `${sourceQuestion} | ${visualExcerpt ? 'Visual' : 'Part'} ${chunkIndex + 1}`
+        : question;
+      return {
+        chunkIndex,
+        chunkText: [topic.trimEnd(), `Question: ${childQuestion}`, `Answer: ${part}`,
+          row.keywords ? `Keywords: ${row.keywords}` : null]
+          .filter(Boolean).join('\n').trim(),
+      };
+    });
+    return { pieces, splitInto: pieces.length };
+  }
   if (whole.length <= SPLIT_THRESHOLD_CHARS) {
     return { pieces: [{ chunkIndex: 0, chunkText: whole }], splitInto: 1 };
   }
@@ -217,6 +260,10 @@ export function parseExcel(buffer: Buffer): RawRow[] {
   // rows, so the array index alone is wrong once there is a gap).
   const rows = rawRows.map(r => {
     const n = normaliseRow(r);
+    // This is an internal marker used by extracted documents only. Never let a
+    // workbook cell choose the document chunking or version-matching path.
+    delete n.is_document_chunk;
+    delete n.is_document_atomic;
     const rowNum = (r as { __rowNum__?: number }).__rowNum__;
     if (typeof rowNum === 'number') Object.defineProperty(n, SHEET_ROW, { value: rowNum + 1, enumerable: false });
     return n;
@@ -259,6 +306,8 @@ export function toFileRowsReport(rows: RawRow[]): { rows: FileRow[]; skipped: Sk
     if (!a) { logger.warn(`[DATASET] ⚠️  Skipping row ${sheetRow}: empty answer`);   skipped.push({ sheetRow, reason: 'EMPTY_ANSWER' });   return; }
     out.push({
       qaId:       clean(row.qa_id),
+      isDocumentChunk: row.is_document_chunk === true,
+      isDocumentAtomic: row.is_document_atomic === true,
       sheetRow,
       topic:      clean(row.topic),
       question:   q,

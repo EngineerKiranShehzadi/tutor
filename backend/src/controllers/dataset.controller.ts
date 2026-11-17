@@ -1,4 +1,5 @@
 import { Response, NextFunction } from 'express';
+import { createHash } from 'crypto';
 import { AuthenticatedRequest } from '../types';
 import { getLectureById, updateLectureDatasetLocation } from '../services/lecture.service';
 import { AppError } from '../middleware/errorHandler';
@@ -122,7 +123,9 @@ export const uploadDataset = async (
         rows = rows.filter(row => typeof row.question !== 'string' || !row.question.includes(visualMarker) || include);
         if (include && !hasVisualRow && page.candidateDescription.trim().length >= 15) {
           rows.push({
-            question: 'Source excerpt: ' + safeName + ' | ' + page.locator + ' | Visual reviewed',
+            qa_id: 'doc_' + createHash('sha256').update([safeName, page.locator, 'Visual reviewed'].join('\0')).digest('hex').slice(0, 24),
+            is_document_chunk: true,
+            question: 'Source excerpt: ' + safeName + ' | ' + page.locator + ' | Visual 1',
             answer: '[Diagram and figure interpretation]\n' + page.candidateDescription,
             topic: page.locator,
             start_time: safeName + ' | ' + page.locator,
