@@ -560,7 +560,8 @@ const run = async () => {
     const badJson = await fetch(`${base}/echo`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"broken": ' });
     srv.close();
     check('A16-1. Too large → 413; unsupported CSV → 400; malformed PDF → bounded 422 extraction error; a non-zip "xlsx" → 400; a real workbook as octet-stream → accepted; malformed JSON → 400',
-      big.status === 413 && /too large/.test(big.message) && csvRenamed.status === 400 && /Only \.xlsx/.test(csvRenamed.message)
+      big.status === 413 && /too large/.test(big.message) && csvRenamed.status === 400
+        && /Unsupported file type/.test(csvRenamed.message) && /\.xlsx/.test(csvRenamed.message) && /\.pdf/.test(csvRenamed.message)
         && pdf.status === 422 && pdf.message.length > 0 && pdf.message.length <= 250
         && notZip.status === 400 && /not a valid \.xlsx/.test(notZip.message) && good.status === 200 && badJson.status === 400,
       `big=${big.status} csvRenamed=${csvRenamed.status} pdf=${pdf.status}("${pdf.message}") notZip=${notZip.status}("${notZip.message}") good=${good.status} badJson=${badJson.status}`);
