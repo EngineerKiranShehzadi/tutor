@@ -24,7 +24,7 @@ cases.push({ label: 'parseWindow(7) (non-string) falls back to 24h', run: () => 
 
 // bucket size
 cases.push({ label: 'bucketUnit 24h -> hour', run: () => bucketUnit('24h') === 'hour' });
-cases.push({ label: 'bucketUnit 7d -> hour', run: () => bucketUnit('7d') === 'hour' });
+cases.push({ label: 'bucketUnit 7d -> day', run: () => bucketUnit('7d') === 'day' });
 cases.push({ label: 'bucketUnit 30d -> day', run: () => bucketUnit('30d') === 'day' });
 
 // reasons
