@@ -107,6 +107,33 @@ def pdf_units(data, warnings, include_empty=False):
     return out
 
 
+_W_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+
+
+def _textbox_lines(paragraph_element):
+    # python-docx's paragraph/table iteration does not surface text inside
+    # DrawingML (w:txbxContent) or legacy VML (v:textbox, which wraps its own
+    # w:txbxContent) text boxes. Slide decks exported to Word place titles and
+    # whole slides in text boxes, so this content is otherwise silently dropped.
+    # Recover it, anchored to the paragraph it attaches to, deduped — title
+    # boxes are frequently duplicated across a handout/overlay layout.
+    lines = []
+    seen = set()
+    for box in paragraph_element.findall(".//" + _W_NS + "txbxContent"):
+        paragraphs = []
+        for p in box.findall(".//" + _W_NS + "p"):
+            runs = [t.text for t in p.findall(".//" + _W_NS + "t") if t.text]
+            text = "".join(runs).strip()
+            if text:
+                paragraphs.append(text)
+        block = "\n".join(paragraphs).strip()
+        key = re.sub(r"\s+", " ", block).casefold()
+        if block and key not in seen:
+            seen.add(key)
+            lines.append(block)
+    return lines
+
+
 def docx_units(data, warnings):
     from docx import Document
     from docx.table import Table
@@ -134,6 +161,18 @@ def docx_units(data, warnings):
     for element_index, element in enumerate(elements):
         if isinstance(element, Paragraph):
             value = clean(element.text)
+            box_lines = _textbox_lines(element._p)
+            if box_lines:
+                extra = clean("\n".join(box_lines))
+                # A tiny stray artifact (e.g. the observed "tea" export glitch)
+                # that merely anchors real text-box content must not ride in
+                # front of it; otherwise keep both in reading order.
+                if value and len(value) < 25 and len(value.split()) < 5:
+                    value = extra
+                elif value:
+                    value = (value + "\n" + extra).strip()
+                else:
+                    value = extra
             if not value:
                 continue
             slide = slide_heading.match(value)
