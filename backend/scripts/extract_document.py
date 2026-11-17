@@ -75,7 +75,11 @@ def pdf_units(data, warnings, include_empty=False):
         raise ValueError("PDF has too many pages; split it into smaller files")
     pages = []
     for number in range(1, doc.page_count + 1):
-        text = clean(doc[number - 1].get_text("text") or "")
+        # sort=True orders text blocks by their position on the page (top-to-
+        # bottom, left-to-right) rather than PDF content-stream order, which can
+        # differ from the visual reading order and otherwise scramble paragraph
+        # sequence (and break sentences that run across a page boundary).
+        text = clean(doc[number - 1].get_text("text", sort=True) or "")
         pages.append((number, text))
 
     # Strip exact lines repeated at the top or bottom of multiple pages. This
