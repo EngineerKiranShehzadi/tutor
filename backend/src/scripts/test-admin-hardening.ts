@@ -65,7 +65,7 @@ import { finishDatasetVersion, rollbackDataset, failDatasetVersion, reconcileLec
 import { EMBEDDING_MODEL_VERSION } from '../services/embedding.service';
 import observabilityRoutes from '../routes/observability.routes';
 import { resolveLlmProvider } from '../llm/llm-provider.resolver';
-import { generateAnswer } from '../services/answer-generation.service';
+import { generateAnswer, setAnswerRetrySleeperForTests } from '../services/answer-generation.service';
 import { STAGE_SPAN_KIND, OpenInferenceSpanKind } from '../observability/otel-semconv';
 import { OUTPUT_GUARDRAIL_REASONS } from '../rag/guardrails/output/answer-verification.types';
 
@@ -475,10 +475,18 @@ const run = async () => {
     const walkDir = (d: string): string[] => readdirSync(d).flatMap(f => { const p = join(d, f); return statSync(p).isDirectory() ? walkDir(p) : /\.(ts|tsx)$/.test(f) ? [p] : []; });
     const problems: string[] = []; let ops = 0;
     for (const file of walkDir(join(__dirname, '../../../frontend/src'))) {
-      for (const m of readFileSync(file, 'utf8').matchAll(/gql`([\s\S]*?)`/g)) {
-        if (m[1].includes('${')) continue;
+      const source = readFileSync(file, 'utf8');
+      const templates = [...source.matchAll(/gql`([\s\S]*?)`/g)];
+      const namedTemplates = new Map<string, string>();
+      for (const m of source.matchAll(/(?:const|let|var)\s+(\w+)\s*=\s*gql`([\s\S]*?)`/g)) namedTemplates.set(m[1], m[2]);
+      for (const m of templates) {
+        const document = m[1].replace(/\$\{\s*(\w+)\s*\}/g, (_placeholder, name: string) => namedTemplates.get(name) ?? '');
+        // A fragment declaration is a reusable building block, not an
+        // independently sent operation. It is validated with each operation
+        // after the gql interpolation above has included it.
+        if (!/\b(query|mutation|subscription)\b/.test(document)) continue;
         ops++;
-        for (const e of validate(schema, parse(m[1]), [...specifiedRules, rule])) problems.push(`${file.split('/frontend/')[1]}: ${e.message}`);
+        for (const e of validate(schema, parse(document), [...specifiedRules, rule])) problems.push(`${file.split('/frontend/')[1]}: ${e.message}`);
       }
     }
     check('A12-1. Query limits: too deep (also through a fragment) and too many fields are rejected; all frontend operations pass schema validation and the limits',
@@ -1479,7 +1487,7 @@ const run = async () => {
     const realGenerate = provider.generate;
     const realProbe = provider.probe;
     delete provider.probe;
-    const realSetTimeout = globalThis.setTimeout;
+    let restoreRetrySleeper = () => {};
     resetProviderSignals();
     resetHealthCache();
     try {
@@ -1498,7 +1506,7 @@ const run = async () => {
       resetProviderSignals();
       let attempts = 0;
       provider.generate = async () => { attempts++; throw new LlmProviderError('OpenAI service unavailable (503) after 2 retries: simulated', true); };
-      (globalThis as { setTimeout: unknown }).setTimeout = ((fn: () => void) => realSetTimeout(fn, 0)) as unknown;
+      restoreRetrySleeper = setAnswerRetrySleeperForTests(async () => undefined);
       await generateAnswer('What is a prompt?', [], 'Lecture', []).catch(() => undefined);
       const oneQuestion = (await checkReadiness()).components.answerLlm;
       await generateAnswer('What is a prompt?', [], 'Lecture', []).catch(() => undefined);
@@ -1507,7 +1515,7 @@ const run = async () => {
         attempts === 8 && oneQuestion.status === 'degraded' && twoQuestions.status === 'unhealthy' && twoQuestions.errorCode === 'SERVICE_UNAVAILABLE',
         `attempts=${attempts} one=${JSON.stringify(oneQuestion)} two=${JSON.stringify(twoQuestions)}`);
     } finally {
-      (globalThis as { setTimeout: unknown }).setTimeout = realSetTimeout;
+      restoreRetrySleeper();
       provider.generate = realGenerate;
       provider.probe = realProbe;
       rag.PROVIDER = saved.provider;
