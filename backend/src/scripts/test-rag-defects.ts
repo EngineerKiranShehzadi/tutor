@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 18482)
-Total output lines: 1180
-
 /**
  * Regression tests for the student RAG defect list (D1–D9) and the
  * integration audit (S-series). No database, no network: every LLM /
@@ -400,7 +397,417 @@ async function withFakeDb<T>(fn: (db: FakeDb) => Promise<T>): Promise<{ value: T
       return ok([{ id: 900 + db.history.length }]);
     }
     if (/^UPDATE chat_sessions/.test(t)) return ok([], 1);
-    // A dataset published while the request runs: the lect…6482 tokens truncated…ry: true },
+    // A dataset published while the request runs: the lecture's active version is now 8.
+    if (/^SELECT active_version_id FROM lectures WHERE id = \$1$/.test(t)) return ok([{ active_version_id: 8 }]);
+    if (/^SELECT v\.lecture_summary AS summary FROM dataset_versions v/.test(t)) return ok([]);
+    if (/^UPDATE dataset_versions/.test(t)) return ok([], 1);
+    db.unexpected.push(t.slice(0, 100));
+    throw new Error(`unexpected SQL: ${t.slice(0, 100)}`);
+  };
+  try {
+    const value = await fn(db).catch(e => e as Error);
+    return { value, db };
+  } finally {
+    (pool as unknown as { query: unknown }).query = original;
+    (pool as unknown as { connect: unknown }).connect = originalConnect;
+  }
+}
+
+const verifiedOutcome = (finalAnswer: string): OutputGuardrailResult => ({
+  finalAnswer, verified: true, decision: 'VERIFIED', reason: 'VERIFIED', revisionAttempted: false, revisionSucceeded: false,
+  verificationUnavailable: false, unsupportedClaimCount: 0, missingAspectCount: 0, expectedFormat: 'NATURAL_TEXT',
+  formatValidationRequired: false, formatValid: true, formatRepairAttempted: false, formatRepairSucceeded: false, formatRepairRejected: null,
+  piiDetected: false, piiCategories: [],
+});
+
+interface OrchestratorSpies { traces: FinishedTrace[]; memoryWrites: { datasetVersionId: number }[]; generateCalls: number }
+
+function orchestratorDeps(over: Partial<AskLectureAgentDeps> = {}): { deps: AskLectureAgentDeps; spies: OrchestratorSpies } {
+  const spies: OrchestratorSpies = { traces: [], memoryWrites: [], generateCalls: 0 };
+  const deps: AskLectureAgentDeps = {
+    getLectureReadiness: async () => ({ ready: true, reason: 'READY' }),
+    getAgentProfile: async lectureId => ({ status: 'FOUND', profile: {
+      lecture_id: lectureId, agent_name: 'Nova', instructions: 'Teach clearly.', is_active: true,
+      created_at: new Date('2026-10-01T00:00:00Z'), updated_at: new Date('2026-10-01T00:00:00Z'),
+    } }),
+    datasetVersionId: 7,
+    runInputGuardrails: async q => ({ action: 'ALLOW', sanitizedInput: q }),
+    classifyRoute: async () => ({ route: 'FACT_QUESTION', source: 'rule' }),
+    lookupAnswerMemory: async () => ({ hit: null, embedding: [0.1, 0.2], datasetVersionId: 7, lookupFailed: false }),
+    writeAnswerMemory: async p => { spies.memoryWrites.push({ datasetVersionId: p.datasetVersionId }); },
+    generateEmbedding: async () => [0.1, 0.2],
+    searchChunks: async () => [chunk(1, 'Q: What is a prompt?\nA: An instruction.'), chunk(2, 'Q: What is a model?\nA: A function.')],
+    rerankChunks: async (_q, c) => c.map(x => ({ ...x, rerankScore: 0.9 })),
+    decomposeQuery: async q => ({ mode: 'DIRECT', effectiveQuery: q, subqueries: [], reason: 'NOT_COMPOUND', llmUsed: false }),
+    generateAnswer: async () => { spies.generateCalls++; return 'GROUNDED DRAFT'; },
+    runOutputGuardrail: async p => verifiedOutcome(p.draftAnswer),
+    onTraceComplete: t => { spies.traces.push(t); },
+    ...over,
+  };
+  return { deps, spies };
+}
+
+const askOrchestrator = (deps: AskLectureAgentDeps, question = 'What is a prompt?', lectureId = LECTURE_ID) =>
+  askLectureAgent({ studentId: '1e8039ae-e9b0-448f-b563-10351fab051c', lectureId, question, sessionId: 77 }, deps);
+
+// Runs the REAL output guardrail with the verifier/revision LLM scripted.
+async function guardrailWith(script: Step[]): Promise<OutputGuardrailResult> {
+  const av = env.ANSWER_VERIFICATION as { ENABLED: boolean; FAIL_OPEN_ON_VERIFIER_ERROR: boolean; MAX_REVISIONS: number };
+  const saved = { enabled: av.ENABLED, failOpen: av.FAIL_OPEN_ON_VERIFIER_ERROR, max: av.MAX_REVISIONS };
+  av.ENABLED = true; av.FAIL_OPEN_ON_VERIFIER_ERROR = false; av.MAX_REVISIONS = 1;
+  try {
+    const { value } = await withFakeLlm(env.LLM.ANSWER_VERIFICATION.PROVIDER, script, () =>
+      runOutputGuardrail({
+        question: 'What is a prompt?', effectiveQuery: 'What is a prompt?', uncoveredAspects: [],
+        evidenceTexts: CHUNKS.map(c => c.chunk_text), draftAnswer: 'GROUNDED DRAFT', notFoundMessage: LECTURE_NOT_FOUND_MESSAGE,
+      }));
+    return value;
+  } finally {
+    av.ENABLED = saved.enabled; av.FAIL_OPEN_ON_VERIFIER_ERROR = saved.failOpen; av.MAX_REVISIONS = saved.max;
+  }
+}
+
+// ── S1: a verifier outage is an error, never "not in this lecture" ──────
+const INFRA_SCRIPTS: { reason: string; script: Step[] }[] = [
+  { reason: 'VERIFIER_TIMEOUT', script: [new Error('Request timeout after 8000ms')] },
+  { reason: 'VERIFIER_PROVIDER_ERROR', script: [new Error('provider down')] },
+  { reason: 'VERIFIER_INVALID_OUTPUT', script: ['this is not json'] },
+  { reason: 'REVISION_FAILED', script: [REVISE_JSON, new Error('revision provider down')] },
+  { reason: 'FINAL_VERIFICATION_FAILED', script: [REVISE_JSON, 'A revised answer.', new Error('provider down')] },
+];
+
+for (const { reason, script } of INFRA_SCRIPTS) {
+  cases.push({
+    label: `S1-${reason}. Verifier ${reason} → 503 "couldn't check this answer", trace ERROR at output-guardrail, no chat_history row, no memory write`,
+    run: async () => {
+      const outcome = await guardrailWith(script);
+      const { deps, spies } = orchestratorDeps({ runOutputGuardrail: async () => outcome });
+      const { value: err, db } = await withFakeDb(() => askOrchestrator(deps));
+      const t = spies.traces[0];
+      const pass = outcome.reason === reason && outcome.verificationUnavailable === true
+        && err instanceof AppError && err.statusCode === 503 && err.message === VERIFICATION_UNAVAILABLE_MESSAGE
+        && spies.traces.length === 1 && t.status === 'ERROR' && t.attributes.responseStatus === 'ERROR'
+        && t.attributes.failedStage === 'output-guardrail' && t.attributes.answerVerificationReason === reason
+        && db.history.length === 0 && spies.memoryWrites.length === 0 && db.unexpected.length === 0;
+      return { pass, detail: `reason=${outcome.reason}, unavailable=${outcome.verificationUnavailable}, status=${(err as AppError)?.statusCode}, `
+        + `trace=${t?.status}/${t?.attributes.responseStatus}/${t?.attributes.failedStage}, history=${db.history.length}, memory=${spies.memoryWrites.length}` };
+    },
+  });
+}
+
+cases.push({
+  label: 'S1-content. INSUFFICIENT_EVIDENCE still answers the not-found message, is saved to history, traced SUCCESS/ANSWERED, never cached',
+  run: async () => {
+    const outcome = await guardrailWith([INSUFFICIENT_JSON]);
+    const { deps, spies } = orchestratorDeps({ runOutputGuardrail: async () => outcome });
+    const { value: res, db } = await withFakeDb(() => askOrchestrator(deps));
+    const t = spies.traces[0];
+    const pass = outcome.reason === 'INSUFFICIENT_EVIDENCE' && outcome.verificationUnavailable === false
+      && !(res instanceof Error) && res.answer === LECTURE_NOT_FOUND_MESSAGE
+      && db.history.length === 1 && db.history[0].answer === LECTURE_NOT_FOUND_MESSAGE
+      && t?.status === 'SUCCESS' && t.attributes.responseStatus === 'ANSWERED' && spies.memoryWrites.length === 0;
+    return { pass, detail: `reason=${outcome.reason}, answer="${(res as { answer?: string }).answer?.slice(0, 40)}", history=${db.history.length}` };
+  },
+});
+
+cases.push({
+  label: 'S1-failopen. With ANSWER_VERIFICATION_FAIL_OPEN=true a verifier error still serves the unverified draft (unchanged)',
+  run: async () => {
+    const av = env.ANSWER_VERIFICATION as { ENABLED: boolean; FAIL_OPEN_ON_VERIFIER_ERROR: boolean };
+    const saved = { enabled: av.ENABLED, failOpen: av.FAIL_OPEN_ON_VERIFIER_ERROR };
+    av.ENABLED = true; av.FAIL_OPEN_ON_VERIFIER_ERROR = true;
+    try {
+      const { value: r } = await withFakeLlm(env.LLM.ANSWER_VERIFICATION.PROVIDER, [new Error('provider down')], () =>
+        runOutputGuardrail({
+          question: 'Q?', effectiveQuery: 'Q?', uncoveredAspects: [], evidenceTexts: ['e'],
+          draftAnswer: 'DRAFT', notFoundMessage: LECTURE_NOT_FOUND_MESSAGE,
+        }));
+      return { pass: r.finalAnswer === 'DRAFT' && r.verified === false && r.verificationUnavailable === false, detail: `reason=${r.reason}` };
+    } finally {
+      av.ENABLED = saved.enabled; av.FAIL_OPEN_ON_VERIFIER_ERROR = saved.failOpen;
+    }
+  },
+});
+
+// ── S2: every failure that escapes the orchestrator is traced exactly once ──
+cases.push({
+  label: 'S2a. generateAnswer throws AppError(500) → the same error reaches the caller, exactly one trace: ERROR at generate-grounded-answer',
+  run: async () => {
+    const boom = new AppError('AI model failed after 3 attempts', 500);
+    const { deps, spies } = orchestratorDeps({ generateAnswer: async () => { throw boom; } });
+    const { value: err, db } = await withFakeDb(() => askOrchestrator(deps));
+    const t = spies.traces[0];
+    const pass = err === boom && spies.traces.length === 1 && t.status === 'ERROR'
+      && t.attributes.responseStatus === 'ERROR' && t.attributes.failedStage === 'generate-grounded-answer' && db.history.length === 0;
+    return { pass, detail: `traces=${spies.traces.length}, status=${t?.status}, stage=${t?.attributes.failedStage}` };
+  },
+});
+
+cases.push({
+  label: 'S2b. Unknown lecture (getLectureById 404) → one ERROR trace at load-lecture; a guardrail REJECT is still traced once (no second ERROR trace)',
+  run: async () => {
+    const a = orchestratorDeps();
+    const { value: e404 } = await withFakeDb(() => askOrchestrator(a.deps, 'What is a prompt?', 999));
+    const b = orchestratorDeps({ runInputGuardrails: async () => ({ action: 'REJECT', reason: 'PROMPT_INJECTION' }) });
+    const { value: eReject } = await withFakeDb(() => askOrchestrator(b.deps));
+    const t = a.spies.traces[0];
+    const pass = e404 instanceof AppError && e404.statusCode === 404 && a.spies.traces.length === 1
+      && t.status === 'ERROR' && t.attributes.failedStage === 'load-lecture'
+      && eReject instanceof AppError && b.spies.traces.length === 1 && b.spies.traces[0].attributes.responseStatus === 'GUARDRAIL_REJECTED';
+    return { pass, detail: `404 traces=${a.spies.traces.length}/${t?.attributes.failedStage}, reject traces=${b.spies.traces.length}/${b.spies.traces[0]?.attributes.responseStatus}` };
+  },
+});
+
+cases.push({
+  label: 'S2c. No orchestrator stage is left unnamed: currentStage never stays "unknown"',
+  run: async () => {
+    const src = readSrc('services/chat.service.ts');
+    const saves = (src.match(/await trace\.span\('save-chat-entry'/g) ?? []).length;
+    const named = (src.match(/currentStage = 'save-chat-entry';\n\s*(?:const savedEntryId = )?await trace\.span\('save-chat-entry'/g) ?? []).length;
+    const pass = !/currentStage = 'unknown'/.test(src) && /currentStage = 'load-lecture';\n\s*const lecture = await getLectureById/.test(src) && saves === named && saves > 0;
+    return { pass, detail: `save spans=${saves}, named=${named}` };
+  },
+});
+
+// ── S4: a summary outage is an error; a partial summary says so ─────────
+// Three chunks that land in three batches (maxCharsPerBatch is tiny), with
+// summarizeBatch scripted per batch.
+async function summaryThroughOrchestrator(batchOk: boolean[]) {
+  const lectureChunks = [1, 2, 3].map(i => chunk(i, `Q: q${i}\nA: ${'x'.repeat(50)}`));
+  let n = 0;
+  const realSummary = (cs: QnaChunk[], title: string) => generateLectureSummary(cs, title, {
+    summarizeBatch: async () => (batchOk[n++] ? `partial-${n}` : null),
+    combineSummaries: async parts => `combined(${parts.join('+')})`,
+  }, { maxCharsPerBatch: 10 });
+  const { deps, spies } = orchestratorDeps({
+    classifyRoute: async () => ({ route: 'LECTURE_SUMMARY', source: 'rule' }),
+    getAllLectureChunks: async () => lectureChunks,
+    generateLectureSummary: realSummary,
+  });
+  const { value, db } = await withFakeDb(() => askOrchestrator(deps, 'Summarize this lecture'));
+  return { value, db, spies };
+}
+
+cases.push({
+  label: 'S4a. Chunks exist but every summary batch fails → 503 "couldn\'t generate a summary", trace ERROR, nothing saved to chat_history',
+  run: async () => {
+    const { value: err, db, spies } = await summaryThroughOrchestrator([false, false, false]);
+    const t = spies.traces[0];
+    const pass = err instanceof AppError && err.statusCode === 503 && err.message === LECTURE_SUMMARY_FAILED_MESSAGE
+      && db.history.length === 0 && spies.traces.length === 1 && t.status === 'ERROR'
+      && t.attributes.failedStage === 'summarize-lecture-content' && t.attributes.summaryBatchesSucceeded === 0;
+    return { pass, detail: `status=${(err as AppError).statusCode}, history=${db.history.length}, trace=${t?.status}/${t?.attributes.failedStage}` };
+  },
+});
+
+cases.push({
+  label: 'S4b. One of three batches fails → the summary carries the "part of this lecture couldn\'t be summarised" note; batches traced',
+  run: async () => {
+    const { value: res, db, spies } = await summaryThroughOrchestrator([true, false, true]);
+    const answer = (res as { answer?: string }).answer ?? '';
+    const t = spies.traces[0];
+    const pass = !(res instanceof Error) && answer === `combined(partial-1+partial-3)${PARTIAL_SUMMARY_NOTE}`
+      && db.history[0]?.answer === answer && t.attributes.summaryBatchesAttempted === 3 && t.attributes.summaryBatchesSucceeded === 2
+      && t.attributes.responseStatus === 'SUMMARY_ANSWERED' && spies.memoryWrites.length === 0;
+    return { pass, detail: `answer="${answer.slice(0, 70)}…", batches=${t?.attributes.summaryBatchesSucceeded}/${t?.attributes.summaryBatchesAttempted}` };
+  },
+});
+
+cases.push({
+  label: 'S4c. All batches succeed → no note; an empty lecture still answers the "could not generate" message (EMPTY_LECTURE, saved)',
+  run: async () => {
+    const { value: res } = await summaryThroughOrchestrator([true, true, true]);
+    const answer = (res as { answer?: string }).answer ?? '';
+    const { deps, spies } = orchestratorDeps({
+      classifyRoute: async () => ({ route: 'LECTURE_SUMMARY', source: 'rule' }),
+      getAllLectureChunks: async () => [],
+    });
+    const { value: empty, db } = await withFakeDb(() => askOrchestrator(deps, 'Summarize this lecture'));
+    const pass = answer === 'combined(partial-1+partial-2+partial-3)' && !answer.includes(PARTIAL_SUMMARY_NOTE.trim())
+      && !(empty instanceof Error) && db.history.length === 1 && spies.traces[0]?.attributes.notFoundReason === 'EMPTY_LECTURE';
+    return { pass, detail: `answer="${answer}", empty=${(empty as { answer?: string }).answer}` };
+  },
+});
+
+// ── S5: summary batches are sized on the text actually sent ─────────────
+cases.push({
+  label: 'S5a. Three chunks with short chunk_text but 10,000-char answers land in three batches; no batch exceeds the budget',
+  run: async () => {
+    const cs = [1, 2, 3].map(i => ({ ...chunk(i, 'Q: short'), answer: 'a'.repeat(10_000) }));
+    const batches = buildSummaryBatches(cs);
+    const size = (b: QnaChunk[]) => b.reduce((n, c) => n + summaryEntryText(c).length + 2, 0);
+    const pass = batches.length === 3 && batches.every(b => size(b) <= MAX_CHARS_PER_BATCH);
+    return { pass, detail: `batches=${batches.length}, sizes=${batches.map(size).join(',')}` };
+  },
+});
+
+cases.push({
+  label: 'S5b. An entry over budget on its own gets its own batch with the answer cut (ellipsis); the prompt sent is exactly those entries',
+  run: async () => {
+    const cs = [{ ...chunk(1, 'x'), answer: 'b'.repeat(30_000) }, { ...chunk(2, 'x'), answer: 'short answer' }];
+    const batches = buildSummaryBatches(cs);
+    const first = batches[0]?.[0];
+    const { requests } = await withFakeLlm(env.LLM.LECTURE_SUMMARY.PROVIDER, ['partial'], () => generateLectureSummary(cs, 'Lecture'));
+    const prompt0 = requests[0]?.userPrompt ?? '';
+    const pass = batches.length === 2 && batches[0].length === 1 && first.answer.endsWith('…')
+      && summaryEntryText(first).length + 2 <= MAX_CHARS_PER_BATCH && cs[0].answer.length === 30_000
+      && prompt0.endsWith(summaryEntryText(first)) && prompt0.length < MAX_CHARS_PER_BATCH + 100;
+    return { pass, detail: `batches=${batches.map(b => b.length).join(',')}, firstEntry=${summaryEntryText(first).length}, prompt0=${prompt0.length}` };
+  },
+});
+
+// ── S7 / ST4 / R3 / R4: a format repair is served only if it says the same ──
+// Verification is off here, so the provider sees only the repair call and, for
+// an LLM repair, the check that compares it with the original answer. Both use
+// the same (fake) provider, so `replies` is [repair reply, check reply]. These
+// cases test what is sent and what each verdict does; how well the real model
+// judges a repair is measured by `npm run check:format-repair-live`.
+const SAME = JSON.stringify({ decision: 'SAME', added: [], dropped: [], changed: [] });
+const changedVerdict = (list: 'added' | 'dropped' | 'changed', what: string) =>
+  JSON.stringify({ decision: 'CHANGED', added: [], dropped: [], changed: [], [list]: [what] });
+async function formatGuardWith(draftAnswer: string, question: string, ...replies: Step[]) {
+  if (env.LLM.OUTPUT_FORMAT_REPAIR.PROVIDER !== env.LLM.ANSWER_VERIFICATION.PROVIDER) {
+    throw new Error('format repair and its check must share a provider for this fake');
+  }
+  const av = env.ANSWER_VERIFICATION as { ENABLED: boolean };
+  const fv = env.OUTPUT_FORMAT_VALIDATION as { ENABLED: boolean; REPAIR_ENABLED: boolean };
+  const saved = { av: av.ENABLED, fv: fv.ENABLED, rep: fv.REPAIR_ENABLED };
+  av.ENABLED = false; fv.ENABLED = true; fv.REPAIR_ENABLED = true;
+  try {
+    return await withFakeLlm(env.LLM.OUTPUT_FORMAT_REPAIR.PROVIDER, replies, () =>
+      runOutputGuardrail({
+        question, effectiveQuery: question, uncoveredAspects: [], evidenceTexts: ['e'],
+        draftAnswer, notFoundMessage: LECTURE_NOT_FOUND_MESSAGE,
+      }));
+  } finally {
+    av.ENABLED = saved.av; fv.ENABLED = saved.fv; fv.REPAIR_ENABLED = saved.rep;
+  }
+}
+const PROSE = 'Zero-shot prompting gives the model no examples. Few-shot prompting gives the model a few worked examples. '
+  + 'Chain-of-thought prompting asks the model to reason step by step before answering.';
+const REFLOW = '- Zero-shot prompting gives the model no examples.\n- Few-shot prompting gives the model a few worked examples.\n'
+  + '- Chain-of-thought prompting asks the model to reason step by step before answering.';
+const LIST_Q = 'List the three types of prompting';
+const TABLE_Q = 'Show the types of prompting in a table';
+
+cases.push({
+  label: 'S7a. A refusal draft for a LIST question is never sent to format repair (no repair call)',
+  run: async () => {
+    const { value: r, requests } = await formatGuardWith(LECTURE_NOT_FOUND_MESSAGE, LIST_Q, '- invented\n- bullets');
+    const pass = requests.length === 0 && r.finalAnswer === LECTURE_NOT_FOUND_MESSAGE && r.formatRepairAttempted === false;
+    return { pass, detail: `repairCalls=${requests.length}, final="${r.finalAnswer.slice(0, 40)}"` };
+  },
+});
+
+cases.push({
+  label: 'S7b. An LLM repair is checked before it is served: one call on the verification model, with the check prompt and schema, given the original and the repair',
+  run: async () => {
+    const { value: r, requests } = await formatGuardWith(PROSE, LIST_Q, REFLOW, SAME);
+    const check = requests[1];
+    const pass = requests.length === 2 && r.finalAnswer === REFLOW && r.formatRepairSucceeded === true && r.formatRepairRejected === null
+      && check?.model === env.LLM.ANSWER_VERIFICATION.MODEL && check.systemPrompt === FORMAT_REPAIR_CHECK_SYSTEM_PROMPT
+      && check.responseSchema === FORMAT_REPAIR_CHECK_SCHEMA && check.userPrompt.includes(PROSE) && check.userPrompt.includes(REFLOW);
+    return { pass, detail: `calls=${requests.length}, served=${r.formatRepairSucceeded}, checkModel=${check?.model}` };
+  },
+});
+
+cases.push({
+  label: 'S7c. A repair the check finds an added bullet in is refused (NEW_CONTENT, original kept)',
+  run: async () => {
+    const added = `${REFLOW}\n- Self-consistency prompting samples several reasoning paths and takes a majority vote.`;
+    const { value: r } = await formatGuardWith(PROSE, LIST_Q, added, changedVerdict('added', 'Self-consistency prompting'));
+    const pass = r.finalAnswer === PROSE && r.formatRepairRejected === 'NEW_CONTENT' && r.formatRepairSucceeded === false;
+    return { pass, detail: `rejected=${r.formatRepairRejected}` };
+  },
+});
+
+cases.push({
+  label: 'ST4. A repair the check finds a cut item in is refused (LOST_CONTENT, original kept)',
+  run: async () => {
+    const cut = '- Zero-shot prompting gives the model no examples.\n- Few-shot prompting gives the model a few worked examples.';
+    const { value: r } = await formatGuardWith(PROSE, LIST_Q, cut, changedVerdict('dropped', 'Chain-of-thought prompting'));
+    return { pass: r.finalAnswer === PROSE && r.formatRepairRejected === 'LOST_CONTENT', detail: `rejected=${r.formatRepairRejected}` };
+  },
+});
+
+cases.push({
+  label: 'R3. Table headers are judged by the check, not by length: a long plain header is served; a header carrying a claim ("Accuracy (%)") is refused',
+  run: async () => {
+    const body = '| Zero-shot | Gives the model no examples |\n| Few-shot | Gives the model a few worked examples |\n'
+      + '| Chain-of-thought | Asks the model to reason step by step before answering |';
+    const plain = `| Prompting technique | What the model is given before it answers |\n|---|---|\n${body}`;
+    const smuggled = '| Technique | Accuracy (%) |\n|---|---|\n| Zero-shot | 61 |\n| Few-shot | 78 |\n| Chain-of-thought | 92 |';
+    const { value: ok } = await formatGuardWith(PROSE, TABLE_Q, plain, SAME);
+    const { value: bad } = await formatGuardWith(PROSE, TABLE_Q, smuggled, changedVerdict('added', 'Accuracy (%) 61/78/92'));
+    const pass = ok.finalAnswer === plain && ok.formatRepairSucceeded === true
+      && bad.finalAnswer === PROSE && bad.formatRepairRejected === 'NEW_CONTENT';
+    return { pass, detail: `plain served=${ok.formatRepairSucceeded}, smuggled → ${bad.formatRepairRejected}` };
+  },
+});
+
+cases.push({
+  label: 'R4. A repair the check finds a flipped statement in (curly "isn’t" → "is") is refused (CHANGED_MEANING, original kept)',
+  run: async () => {
+    const original = 'Zero-shot prompting isn’t given any examples. Few-shot prompting is given a few worked examples. Chain-of-thought prompting asks for step-by-step reasoning.';
+    const flipped = '- Zero-shot prompting is given examples.\n- Few-shot prompting is given a few worked examples.\n- Chain-of-thought prompting asks for step-by-step reasoning.';
+    const { value: r } = await formatGuardWith(original, LIST_Q, flipped, changedVerdict('changed', 'isn’t given → is given'));
+    return { pass: r.finalAnswer === original && r.formatRepairRejected === 'CHANGED_MEANING', detail: `rejected=${r.formatRepairRejected}` };
+  },
+});
+
+cases.push({
+  label: 'R4b. The check cannot run (error, or an unusable reply) → CHECK_FAILED, original kept, no retry',
+  run: async () => {
+    const results = [];
+    for (const reply of [new Error('timeout'), 'not json', JSON.stringify({ decision: 'MAYBE', added: [], dropped: [], changed: [] }), JSON.stringify({ decision: 'SAME' })]) {
+      const { value: r, requests } = await formatGuardWith(PROSE, LIST_Q, REFLOW, reply);
+      results.push({ ok: r.finalAnswer === PROSE && r.formatRepairRejected === 'CHECK_FAILED' && requests.length === 2, rejected: r.formatRepairRejected });
+    }
+    return { pass: results.every(x => x.ok), detail: results.map(x => x.rejected).join(',') };
+  },
+});
+
+cases.push({
+  label: 'R4c. A listed problem rejects even under decision SAME, and CHANGED with nothing listed rejects too',
+  run: async () => {
+    const sameButAdded = parseFormatRepairCheck(JSON.stringify({ decision: 'SAME', added: ['x'], dropped: [], changed: [] }));
+    const changedBare = parseFormatRepairCheck(JSON.stringify({ decision: 'CHANGED', added: [], dropped: [], changed: [] }));
+    const same = parseFormatRepairCheck(SAME);
+    const pass = sameButAdded?.rejected === 'NEW_CONTENT' && changedBare?.rejected === 'CHANGED_MEANING' && same?.rejected === null;
+    return { pass, detail: `${sameButAdded?.rejected}, ${changedBare?.rejected}, ${same?.rejected}` };
+  },
+});
+
+cases.push({
+  label: 'R4d. A deterministic list repair (the answer\'s own "a, b, and c" re-punctuated) is served without a check call',
+  run: async () => {
+    const enumeration = 'The three types of prompting are: zero-shot, few-shot, and chain-of-thought.';
+    const { value: r, requests } = await formatGuardWith(enumeration, LIST_Q, 'unused');
+    const pass = requests.length === 0 && r.formatRepairSucceeded === true && r.finalAnswer.includes('- chain-of-thought');
+    return { pass, detail: `calls=${requests.length}, served=${r.formatRepairSucceeded}` };
+  },
+});
+
+// ── S8: only a whole-lecture ask goes to the summary path ───────────────
+const SUMMARY_TABLE: { q: string; summary: boolean }[] = [
+  { q: 'Summarize this lecture', summary: true },
+  { q: 'Give me a summary', summary: true },
+  { q: 'summarize it', summary: true },
+  { q: 'What are the key points of this lecture?', summary: true },
+  { q: 'Give me an overview of the whole lecture', summary: true },
+  { q: 'Give me the key points', summary: true },
+  { q: 'tl;dr please', summary: true },
+  { q: "Can you give me a quick recap of today's class?", summary: true },
+  { q: 'What are the key points of few-shot prompting?', summary: false },
+  { q: 'What are the main topics in chain-of-thought prompting?', summary: false },
+  { q: 'Can you summarize what the lecture said about tokenization?', summary: false },
+  { q: 'Give an overview of zero-shot prompting', summary: false },
+  // Whole-lecture asks whose extra words only shape the answer ("for me",
+  // "in 5 bullet points", …) and bare "key points?" stay summaries.
+  { q: 'Summarize the lecture for me', summary: true },
+  { q: 'Can you summarize this video for me?', summary: true },
+  { q: 'Summarize this lecture in 5 bullet points', summary: true },
+  { q: 'Summarize the whole lecture in simple words', summary: true },
   { q: 'Summary of this lecture in detail', summary: true },
   { q: 'What are the key points?', summary: true },
   { q: 'What are the main topics?', summary: true },
