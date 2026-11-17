@@ -37,17 +37,11 @@ export const ERROR_CODE_LABELS: Record<string, string> = {
   UNVERIFIED_PROVIDER: 'Could not be confirmed without a paid call',
 };
 
-// Keys of rag_request_log.stage_ms: the chat pipeline's span names, mirroring
-// backend observability/otel-semconv.ts STAGE_SPAN_KIND. LLM-call spans
-// (*_call) are never keys — request-log.service.ts leaves them out of stage_ms.
+// Names of actual pipeline spans, mirroring backend observability/otel-semconv.ts
+// STAGE_SPAN_KIND. LLM-call spans (*_call) are never keys — request-log.service.ts
+// leaves them out of stage_ms.
 export const STAGE_LABELS: Record<string, string> = {
   'validate-chat-session': 'Session check',
-  // These two were missing, so both were drawn as "Other step" — a bar with
-  // no name on a chart whose whole job is naming where the time goes.
-  'load-lecture': 'Loading the lecture',
-  'record-student-question': 'Saving the question',
-  'check-dataset-readiness': 'Checking the material is ready',
-  'resolve-dataset-version': 'Finding the current material',
   'load-agent-profile': 'Loading lecture settings',
   'load-session-history': 'Loading earlier conversation',
   'input-guardrail': 'Checking the question',
