@@ -16,7 +16,7 @@ import {
 type Course = {id:string;title:string};
 type Lecture = {id:string;courseId:string;title:string};
 type Outcome = {id:number;code:string;description:string;lectureIds:number[]};
-type Question = {questionId:number;lectureId:number;lectureTitle:string;question:string;outcomeId:number|null};
+type Question = {questionId:number;lectureId:number;lectureTitle:string;question:string;category:string;evidenceQuote:string|null;outcomeId:number|null};
 type Summary = {outcomeId:number;code:string;attempted:number;correct:number;students:number;percent:number|null};
 const input = 'w-full rounded-control border border-[var(--border)] bg-[var(--card)] px-3.5 py-2.5 text-label text-[var(--text)] focus:border-[var(--accent)] outline-none';
 const button = 'rounded-control bg-[var(--accent)] px-4 py-2 text-label font-semibold text-white hover:bg-[var(--accent-deep)] disabled:opacity-50';
@@ -135,8 +135,12 @@ export default function LearningOutcomesAdmin() {
         {questionsQuery.loading&&!questions.length&&<p role="status" className="text-label text-[var(--muted)]">Loading questions…</p>}
         {questionsQuery.error&&<p role="alert" className="text-label text-[var(--text)]">Could not load quiz questions.</p>}
         {questions.map(q=><div key={q.questionId} className="border-t border-[var(--border)] py-3">
-          <p className="text-caption text-[var(--muted)]">{q.lectureTitle} · Question #{q.questionId}</p>
+          <p className="text-caption text-[var(--muted)]">{q.lectureTitle} · {q.category.replace(/_/g,' ')} · Question #{q.questionId}</p>
           <p className="text-label text-[var(--text)] mt-1 mb-2">{q.question}</p>
+          {/* The source evidence the question was generated from. Shown so the
+              CLO can be verified against what the question actually tests,
+              rather than from the question stem alone. */}
+          {q.evidenceQuote&&<p className="text-caption text-[var(--muted)] border-l-2 border-[var(--border)] pl-3 mb-2">“{q.evidenceQuote}”</p>}
           <label className="text-caption text-[var(--muted)]">Approved outcome
             <select className={input+' mt-1'} disabled={pending} value={q.outcomeId??''} onChange={e=>{
               if(courseId===null)return;
