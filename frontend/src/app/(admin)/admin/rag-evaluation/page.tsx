@@ -55,6 +55,7 @@ export default function RagEvaluationPage(){
      </div>
      <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3">
       {[{name:'Hybrid Recall@5',value:pct(m.retrieval?.hybrid?.recallAt5)},
+        {name:'Dedup Recall@5',value:pct(m.retrieval?.dedupSelection?.recallAt5)},
         {name:'Rerank nDCG@5',value:pct(m.retrieval?.reranked?.ndcgAt5)},
         {name:'Citation precision',value:pct(m.citations?.precision)},
         {name:'Answer correctness',value:pct(m.human?.answerCorrect?.passRate)},

@@ -185,6 +185,25 @@ export async function reviewGoldenCase(
 }
 
 /**
+ * Bulk-approve the DRAFT cases of a dataset version that already satisfy the
+ * approval gate (answerable with at least one expected chunk). Convenience for
+ * terminal/CI runs; per-case review via reviewGoldenCase stays the norm.
+ * reviewerId may be null (recorded as an anonymous faculty approval).
+ */
+export async function approveAllDrafts(reviewerId: string | null, datasetVersionId: number) {
+  posInt(datasetVersionId, 'datasetVersionId');
+  const { rows } = await query<{ id: number }>(
+    `UPDATE golden_benchmark_cases
+        SET review_status = 'APPROVED', reviewed_by = $2, reviewed_at = NOW(), updated_at = NOW()
+      WHERE dataset_version_id = $1 AND review_status = 'DRAFT'
+        AND answerable = TRUE AND cardinality(expected_chunk_ids) > 0
+      RETURNING id`,
+    [datasetVersionId, reviewerId]
+  );
+  return { datasetVersionId, approved: rows.length };
+}
+
+/**
  * Build a gold.json object (exact evaluator shape) from the APPROVED cases of a
  * dataset version. This is the committed bridge from the reviewed case bank to
  * the capture adapter / deterministic evaluator — no manual JSON authoring.
@@ -209,6 +228,9 @@ export async function exportApprovedGold(datasetVersionId: number) {
       category: c.category,
       answerable: c.answerable,
       expectedChunkIds: c.expectedChunkIds,
+      // Reference answer, used only by the optional LLM judge; ignored by the
+      // deterministic evaluator's retrieval metrics.
+      ...(c.expectedAnswer ? { expectedAnswer: c.expectedAnswer } : {}),
       reviewed: true,
       reviewedBy: String(r.reviewer_label).slice(0, 80),
     };

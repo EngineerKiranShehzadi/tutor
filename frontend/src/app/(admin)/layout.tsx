@@ -17,6 +17,7 @@ const COURSE_NAV = [
   { href: '/admin/learning-outcomes', icon: 'fas fa-bullseye',             label: 'Learning Outcomes' },
   { href: '/admin/faculty-gaps',   icon: 'fas fa-chart-column',            label: 'Learning Gaps' },
   { href: '/admin/rag-evaluation', icon: 'fas fa-flask',                   label: 'RAG Evaluation' },
+  { href: '/admin/golden-cases',   icon: 'fas fa-clipboard-check',         label: 'Golden Cases' },
 ];
 
 const ADMIN_NAV = [

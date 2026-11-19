@@ -93,6 +93,30 @@ test('rejects a malformed dedupSelectionIds when present', () => {
   assert.throws(() => evaluate(gold, pred), /dedupSelectionIds: duplicates/);
 });
 
+test('omits the judge section when no prediction carries a judge verdict', () => {
+  const r = evaluate(...Object.values(dataset()));
+  assert.equal('judge' in r, false, 'absent judge must not add a section (back-compat)');
+});
+
+test('aggregates LLM-judge verdicts separately from human, excluding UNKNOWN', () => {
+  const { gold, pred } = dataset();
+  pred.cases[0].judge = { answerCorrect: 'PASS', grounded: 'PASS', model: 'm', promptVersion: 'v1' };
+  pred.cases[1].judge = { answerCorrect: 'UNKNOWN', grounded: 'FAIL', model: 'm', promptVersion: 'v1' };
+  const r = evaluate(gold, pred);
+  assert.equal(r.judge.cases, 2);
+  assert.equal(r.judge.answerCorrect.judged, 1);   // one UNKNOWN excluded
+  assert.equal(r.judge.answerCorrect.passRate, 1);
+  assert.equal(r.judge.grounded.passRate, 0.5);     // one PASS, one FAIL
+  // Human verdicts are untouched by the judge.
+  assert.equal(r.human.answerCorrect.passRate, 1);
+});
+
+test('rejects a malformed judge verdict when present', () => {
+  const { gold, pred } = dataset();
+  pred.cases[0].judge = { answerCorrect: 'MAYBE', grounded: 'PASS' };
+  assert.throws(() => evaluate(gold, pred), /invalid judge verdict/);
+});
+
 test('computes citation precision and recall', () => {
   const r = evaluate(...Object.values(dataset()));
   // citations [10,30] vs expected {10,20}: 1 correct of 2 predicted, of 2 expected.

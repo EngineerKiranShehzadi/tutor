@@ -42,15 +42,60 @@ import { readFileSync, writeFileSync } from 'fs';
 import pool from '../config/database';
 import { generateEmbedding, EMBEDDING_MODEL_VERSION } from '../services/embedding.service';
 import { searchChunkCandidates, searchChunksHybrid } from '../services/vector-search.service';
-import { rerankChunks, dedupeAndSelect, DEFAULT_MIN_RERANK_SCORE, RERANKER_MODEL_VERSION } from '../services/rerank.service';
+import { rerankChunks, dedupeAndSelect, reorderForContext, DEFAULT_MIN_RERANK_SCORE, RERANKER_MODEL_VERSION } from '../services/rerank.service';
+import { generateAnswer } from '../services/answer-generation.service';
+import { getLectureById } from '../services/lecture.service';
+import { judgeLlm, JUDGE_MODEL } from './live-llm';
 import { env } from '../config/env';
 import { logger } from '../utils/logger';
 import type { QnaChunk } from '../types';
+
+// The tutor does not emit per-sentence citation markers (its system prompt
+// forbids "Source N" labels), so the chunks an answer is grounded in ARE its
+// final-context chunks. When --answer is set we therefore record
+// citationChunkIds = finalContextIds: citation precision/recall then measures
+// whether the context the answer actually used carried the expected evidence.
 
 // Mirrors chat.service.ts's direct-path constants so the capture matches the
 // deployed pipeline. Overridable from the CLI for controlled experiments.
 const DEFAULT_CANDIDATE_LIMIT = 15;
 const DEFAULT_FINAL_CONTEXT = 5;
+// Bump when the judge prompts below change, so stored judge results stay
+// comparable only within the same prompt version.
+const JUDGE_PROMPT_VERSION = 'v1';
+
+type JudgeVerdict = 'PASS' | 'FAIL' | 'UNKNOWN';
+interface JudgeResult {
+  answerCorrect: JudgeVerdict;
+  grounded: JudgeVerdict;
+  model: string;
+  promptVersion: string;
+}
+
+// Optional LLM-as-judge. Output is an AID stored SEPARATELY from human
+// verdicts — it never becomes a gold label and never gates approval/release.
+async function judgeOne(prompt: string): Promise<JudgeVerdict> {
+  try {
+    return (await judgeLlm(prompt)).trim().toUpperCase().startsWith('PASS') ? 'PASS' : 'FAIL';
+  } catch {
+    return 'UNKNOWN';
+  }
+}
+
+async function judgeAnswer(question: string, answer: string, context: string, reference?: string): Promise<JudgeResult> {
+  const grounded = await judgeOne(
+    `You check whether an AI tutor's ANSWER is fully supported by the provided CONTEXT.\n` +
+    `Reply with exactly PASS if every claim in the answer is supported by the context, or FAIL otherwise.\n\n` +
+    `CONTEXT:\n${context.slice(0, 6000)}\n\nANSWER:\n${answer.slice(0, 3000)}\n\nVerdict (PASS or FAIL):`
+  );
+  const answerCorrect = reference && reference.trim()
+    ? await judgeOne(
+        `Compare an AI tutor's ANSWER to the REFERENCE answer for the same QUESTION.\n` +
+        `Reply with exactly PASS if the answer is factually consistent with the reference, or FAIL otherwise.\n\n` +
+        `QUESTION:\n${question.slice(0, 1000)}\n\nREFERENCE:\n${reference.slice(0, 3000)}\n\nANSWER:\n${answer.slice(0, 3000)}\n\nVerdict (PASS or FAIL):`)
+    : 'UNKNOWN';
+  return { answerCorrect, grounded, model: JUDGE_MODEL, promptVersion: JUDGE_PROMPT_VERSION };
+}
 
 interface GoldCase {
   id: string;
@@ -60,6 +105,7 @@ interface GoldCase {
   category: string;
   answerable: boolean;
   expectedChunkIds: number[];
+  expectedAnswer?: string; // reference answer, used by the optional judge only
   reviewed: boolean;
   reviewedBy: string;
 }
@@ -77,8 +123,14 @@ interface PredictionCase {
   refused: boolean;
   latencyMs: number;
   human: { answerCorrect: 'UNREVIEWED'; grounded: 'UNREVIEWED'; citationValid: 'UNREVIEWED' };
+  // Populated only with --answer; a human reviews these for correctness/grounding.
+  answer?: string;
+  // Populated only with --judge; an LLM aid kept SEPARATE from `human`.
+  judge?: JudgeResult;
   captureError?: string;
 }
+
+const flag = (name: string): boolean => process.argv.includes(`--${name}`);
 
 const map = (chunks: QnaChunk[]): number[] => chunks.map(c => c.id);
 
@@ -110,7 +162,17 @@ function loadGold(path: string): GoldCase[] {
   return d.cases as GoldCase[];
 }
 
-async function captureCase(c: GoldCase, candidateLimit: number, finalBudget: number): Promise<PredictionCase> {
+const lectureTitleCache = new Map<number, string>();
+async function lectureTitle(lectureId: number): Promise<string> {
+  const hit = lectureTitleCache.get(lectureId);
+  if (hit !== undefined) return hit;
+  const lec = await getLectureById(lectureId);
+  const title = (lec as { title?: string })?.title ?? `Lecture ${lectureId}`;
+  lectureTitleCache.set(lectureId, title);
+  return title;
+}
+
+async function captureCase(c: GoldCase, candidateLimit: number, finalBudget: number, withAnswer: boolean, withJudge: boolean): Promise<PredictionCase> {
   const base: PredictionCase = {
     id: c.id, lectureId: c.lectureId, datasetVersionId: c.datasetVersionId,
     vectorIds: [], hybridIds: [], dedupSelectionIds: [], rerankedIds: [], finalContextIds: [],
@@ -145,8 +207,23 @@ async function captureCase(c: GoldCase, candidateLimit: number, finalBudget: num
     // Both reuse the production dedupeAndSelect so the floor/dedup rules match.
     const { selected: survivors } = dedupeAndSelect(rankedAll, rankedAll.length, DEFAULT_MIN_RERANK_SCORE);
     base.dedupSelectionIds = map(survivors);
-    base.finalContextIds = map(survivors.slice(0, finalBudget));
+    const finalChunks = survivors.slice(0, finalBudget);
+    base.finalContextIds = map(finalChunks);
     base.refused = base.finalContextIds.length === 0; // all below floor → not-found
+
+    // --answer: generate the grounded answer exactly as production does
+    // (reordered context) and record the final-context chunks as citations.
+    if (withAnswer && finalChunks.length > 0) {
+      const title = await lectureTitle(c.lectureId);
+      base.answer = await generateAnswer(c.question, reorderForContext(finalChunks), title);
+      base.citationChunkIds = [...base.finalContextIds];
+
+      // Optional judge — an aid, recorded separately from `human` verdicts.
+      if (withJudge) {
+        const context = finalChunks.map(ch => ch.chunk_text).join('\n\n');
+        base.judge = await judgeAnswer(c.question, base.answer, context, c.expectedAnswer);
+      }
+    }
   } catch (err) {
     base.captureError = String((err as Error)?.message ?? 'capture failed').slice(0, 300);
     logger.warn(`[CAPTURE] case=${c.id} reason=CAPTURE_ERROR msg=${base.captureError}`);
@@ -162,15 +239,17 @@ async function main(): Promise<void> {
   }
   const candidateLimit = parseArg('candidate-limit', DEFAULT_CANDIDATE_LIMIT);
   const finalBudget = parseArg('final-context', DEFAULT_FINAL_CONTEXT);
+  const withJudge = flag('judge');
+  const withAnswer = flag('answer') || withJudge; // the judge needs an answer to judge
   const gold = loadGold(goldPath);
 
-  logger.info(`[CAPTURE] ${gold.length} case(s) · candidateLimit=${candidateLimit} finalContext=${finalBudget} ` +
+  logger.info(`[CAPTURE] ${gold.length} case(s) · candidateLimit=${candidateLimit} finalContext=${finalBudget} answer=${withAnswer} judge=${withJudge} ` +
     `embedder=${EMBEDDING_MODEL_VERSION} reranker=${RERANKER_MODEL_VERSION} hybrid=${env.RETRIEVAL.HYBRID_SEARCH_ENABLED}`);
 
   const cases: PredictionCase[] = [];
   let errors = 0;
   for (const c of gold) {
-    const pred = await captureCase(c, candidateLimit, finalBudget);
+    const pred = await captureCase(c, candidateLimit, finalBudget, withAnswer, withJudge);
     if (pred.captureError) errors++;
     cases.push(pred);
     logger.info(`[CAPTURE] ${c.id}: vector=${pred.vectorIds.length} hybrid=${pred.hybridIds.length} ` +
@@ -186,6 +265,9 @@ async function main(): Promise<void> {
     meta: {
       capturedAt: new Date().toISOString(),
       candidateLimit, finalContextBudget: finalBudget,
+      answerCaptured: withAnswer,
+      judgeApplied: withJudge,
+      ...(withJudge ? { judgeModel: JUDGE_MODEL, judgePromptVersion: JUDGE_PROMPT_VERSION } : {}),
       embeddingModelVersion: EMBEDDING_MODEL_VERSION,
       rerankerModelVersion: RERANKER_MODEL_VERSION,
       rerankMinScore: DEFAULT_MIN_RERANK_SCORE,
@@ -202,6 +284,8 @@ async function main(): Promise<void> {
   logger.info('[CAPTURE] Next: human-review citations/correctness, then score with evaluation/golden-evaluator.cjs');
 }
 
+// Providers keep HTTP keep-alive sockets open, which can hold the event loop
+// after the work is done; exit explicitly once the pool is closed.
 main()
-  .then(() => pool.end())
-  .catch(async err => { logger.error(`[CAPTURE] ${(err as Error).message}`); await pool.end().catch(() => {}); process.exitCode = 1; });
+  .then(async () => { await pool.end().catch(() => {}); process.exit(0); })
+  .catch(async err => { logger.error(`[CAPTURE] ${(err as Error).message}`); await pool.end().catch(() => {}); process.exit(1); });

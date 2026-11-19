@@ -33,7 +33,23 @@ cd backend
 npm run capture:rag -- /private/gold.json /private/predictions.json      # [--candidate-limit=15] [--final-context=5]
 ```
 
-It captures all five ranked stages (`vectorIds`, `hybridIds`, `dedupSelectionIds`, `rerankedIds`, `finalContextIds`), plus `refused`, `latencyMs`, and a top-level `meta` pinning the embedder/reranker model versions and retrieval config for reproducibility. It leaves `citationChunkIds` empty and all `human` verdicts `UNREVIEWED` — citations, answer correctness and grounding still come from human review (and, later, optional answer generation), so nothing is silently scored as a pass. Needs Postgres + the configured embedding/reranker providers; a per-case failure is recorded on that case and the run continues.
+It captures all five ranked stages (`vectorIds`, `hybridIds`, `dedupSelectionIds`, `rerankedIds`, `finalContextIds`), plus `refused`, `latencyMs`, and a top-level `meta` pinning the embedder/reranker model versions and retrieval config for reproducibility. By default it leaves `citationChunkIds` empty and all `human` verdicts `UNREVIEWED`, so nothing is silently scored as a pass. Needs Postgres + the configured embedding/reranker providers; a per-case failure is recorded on that case and the run continues.
+
+Add `--answer` to also generate the grounded answer for each case (same context + ordering as production) and store it on the case for human review:
+
+```bash
+npm run capture:rag -- /private/gold.json /private/predictions.json --answer
+```
+
+With `--answer`, `citationChunkIds` is set to the final-context chunk IDs. The tutor does not emit per-sentence citation markers — the chunks an answer is grounded in *are* its final context — so citation precision/recall here measures whether the context the answer used carried the expected evidence; it is not a finer-grained per-claim citation check. Answer correctness and grounding remain **human** verdicts (`answerCorrect`, `grounded`), still `UNREVIEWED` until a reviewer sets them; `--answer` only produces the text to review. Requires the configured answer LLM provider in addition to embeddings/reranker.
+
+Add `--judge` (which implies `--answer`) to also run an optional LLM-as-judge:
+
+```bash
+npm run capture:rag -- /private/gold.json /private/predictions.json --judge
+```
+
+The judge scores grounding (answer vs the final-context chunks) and, when the gold case carries an `expectedAnswer`, correctness (answer vs reference). Its verdicts are stored on each case under a separate `judge` field — never in `human` — and the evaluator aggregates them in a separate `judge` section, computed only over cases that carry a judge verdict and excluding `UNKNOWN`. **The judge is an aid only: it is never a gold label and never gates approval or release** (`exportApprovedGold` and "Approve & Go Live" stay human-driven). The judge model and prompt version are recorded in the predictions `meta`. Requires the configured judge LLM (`LLM.ANSWER_VERIFICATION.MODEL`).
 
 ## Run
 
