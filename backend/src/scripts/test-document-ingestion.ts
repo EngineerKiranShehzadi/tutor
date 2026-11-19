@@ -7,7 +7,8 @@ import {
   supportedDatasetExtension,
   runDocumentExtractor,
 } from '../services/document-ingestion.service';
-import { buildChunkPieces, buildChunkPiecesReport, MAX_PIECES_PER_ROW } from '../services/chunk.service';
+import { buildChunkPieces, buildChunkPiecesReport, MAX_PIECES_PER_ROW, SPLIT_THRESHOLD_CHARS, toFileRowsReport } from '../services/chunk.service';
+import { matchRows } from '../services/dataset-plan';
 
 async function run() {
   const sourceSchedule = 'Spend Time in Park (with Kids) | 16:30 to 17:315';
@@ -43,18 +44,26 @@ async function run() {
     units: [{ locator: 'Page 3', text: 'Python variables store values. '.repeat(95) }],
     warnings: ['Page 2 has no selectable text'],
   });
-  assert.ok(rows.rows.length > 1, 'long pages must be chunked into sections');
+  assert.equal(rows.rows.length, 1, 'one PDF page remains one logical planner row');
   assert.equal(rows.units, 1);
   assert.equal(rows.warnings.length, 1);
   assert.ok(rows.rows[0].question?.includes('chapter-one.pdf | Page 3 | Part 1'));
   assert.equal(rows.rows[0].start_time, 'chapter-one.pdf | Page 3');
-  for (const row of rows.rows) {
-    assert.ok(row.answer?.length);
-    const { pieces, splitInto } = await buildChunkPiecesReport(row);
-    assert.equal(splitInto, 1, 'document segments should fit inside the existing chunk limit');
-    assert.equal(pieces.length, 1);
-    assert.ok(pieces[0].chunkText.includes(row.answer!));
-  }
+  const { pieces: pagePieces, splitInto: pageSplitCount } = await buildChunkPiecesReport(rows.rows[0]);
+  assert.ok(pageSplitCount > 1, 'oversized page content splits once at the chunking boundary');
+  assert.equal(new Set(pagePieces.map(p => p.chunkIndex)).size, pagePieces.length);
+  assert.ok(pagePieces.every(p => p.chunkText.includes('Source excerpt: chapter-one.pdf | Page 3 | Part ')), 'source context is repeated for child chunks');
+
+  // Excel remains a separate path: curated Q&A pairs up to 3,200 characters
+  // stay atomic and preserve chunk_index 0.
+  assert.equal(SPLIT_THRESHOLD_CHARS, 3200);
+  const excelQuestion = 'What does the lecture say?';
+  const excelPrefix = `Question: ${excelQuestion}\nAnswer: `;
+  const excelAtomic = { question: excelQuestion, answer: 'x'.repeat(3199 - excelPrefix.length) };
+  const excelPieces = await buildChunkPiecesReport(excelAtomic);
+  assert.equal(excelPieces.splitInto, 1, 'Excel Q&A up to threshold stays whole');
+  assert.deepEqual(excelPieces.pieces.map(p => p.chunkIndex), [0]);
+  assert.equal(excelPieces.pieces[0].chunkText.length, 3199);
 
   const visual = await documentToRows('programming.pptx', {
     units: [{
@@ -74,11 +83,10 @@ async function run() {
     }],
     warnings: [],
   });
-  assert.equal(structured.rows.length, 2);
+  assert.equal(structured.rows.length, 1, 'a short PPTX slide, including visual notes, stays a single source unit');
   assert.equal(structured.rows[0].topic, 'Slide 4');
-  assert.equal(structured.rows[1].topic, 'Conditional statements');
-  assert.match(structured.rows[1].answer!, /No to Fail/);
-  assert.match(structured.rows[1].question!, /Visual 1/);
+  assert.match(structured.rows[0].answer!, /No to Fail/);
+  assert.match(structured.rows[0].question!, /Slide 4 \| Part 1/);
   assert.match(structured.rows[0].answer!, /If statements/);
 
   const questionAnswer = await documentToRows('slide-lecture.docx', {
@@ -129,7 +137,7 @@ async function run() {
   const standaloneAnswer = standalone.rows.find(x=>x.question?.includes('Best Learning'));
   assert.ok(standaloneAnswer,'standalone Q&A is present');
   assert.doesNotMatch(standaloneAnswer!.answer??'',/^nswer\b/i,'Answer label must not leak into answer');
-  assert.match(standaloneAnswer!.answer??'',/Topic: Achieve Excellence in Technical Skills/,'topic must accompany QA evidence');
+  assert.match((await buildChunkPiecesReport(standaloneAnswer!)).pieces[0].chunkText,/Topic: Achieve Excellence in Technical Skills/,'topic must accompany QA evidence');
   assert.equal(standaloneAnswer!.topic,'Achieve Excellence in Technical Skills');
 
   const typoLabel = await documentToRows('intro.docx',{
@@ -148,18 +156,23 @@ async function run() {
         'It focuses on explicit task wording and the expected output. '.repeat(55)
     ].join('\n\n')}],warnings:[],
   });
-  assert.ok(longQA.rows.length>1,'long Q&A must split safely');
-  for(const child of longQA.rows){
-    assert.match(child.question!,/zero-shot prompt/i,'every child retains the parent question');
-    assert.ok(child.answer?.trim(),'every child preserves nonempty answer evidence');
-    const built=await buildChunkPiecesReport(child);
-    assert.equal(built.splitInto,1,'no second Q/A split is allowed');
-  }
+  assert.equal(longQA.rows.length,1,'documentToRows emits one logical Q&A row before chunking');
+  const longQAPieces=await buildChunkPiecesReport(longQA.rows[0]);
+  assert.ok(longQAPieces.splitInto>1,'oversized Q&A answer splits in the chunk service exactly once');
+  assert.ok(longQAPieces.pieces.every(p=>p.chunkText.includes('zero-shot prompt')),'each child repeats its question');
+  assert.equal(new Set(longQAPieces.pieces.map(p=>p.chunkIndex)).size,longQAPieces.pieces.length);
+  const plannerRow=toFileRowsReport(longQA.rows).rows[0];
+  const plannedPieces=await buildChunkPiecesReport({
+    topic:plannerRow.topic??undefined,question:plannerRow.question,answer:plannerRow.answer,
+    is_document_chunk:plannerRow.isDocumentChunk,is_document_atomic:plannerRow.isDocumentAtomic,
+  });
+  assert.equal(plannedPieces.splitInto,longQAPieces.splitInto,
+    'document marker survives planner mapping, preventing a second, different split');
 
   assert.equal(questionAnswer.quality.qaRecords,2);
   assert.equal(questionAnswer.quality.qaChildRecords,2);
   assert.equal(longQA.quality.qaRecords,1);
-  assert.equal(longQA.quality.qaChildRecords,longQA.rows.length);
+  assert.equal(longQA.quality.qaChildRecords,1);
   assert.equal(longQA.quality.outputRecords,longQA.rows.length);
   await assert.rejects(
     documentToRows('broken.docx',{units:[{locator:'Slide 8',text:'Question: What is AI?'}],warnings:[]}),
@@ -184,8 +197,8 @@ async function run() {
     units:[{locator:'Slide 12',text:'Slide 12: Semantic Context\n'+
       'Definition: a logical group of related material. '.repeat(90)}],warnings:[]
   });
-  assert.ok(titleScoped.rows.length>1);
-  for(const item of titleScoped.rows)assert.match(item.answer!,/^Slide 12: Semantic Context/);
+  assert.equal(titleScoped.rows.length,1);
+  assert.match(titleScoped.rows[0].answer!,/^Slide 12: Semantic Context/);
   assert.equal(new Set(titleScoped.rows.map(r=>r.start_time)).size,1);
   
   const repeatedLong = await documentToRows('long-explanation.docx',{
@@ -195,8 +208,39 @@ async function run() {
       'It focuses on explicit tasks. '.repeat(80)
     ].join('\n\n')}],warnings:[]
   });
-  assert.equal(new Set(repeatedLong.rows.map(r=>r.question)).size,repeatedLong.rows.length,
-    'long Q/A children require stable unique question identities on repeat uploads');
+  assert.equal(repeatedLong.rows.length,1);
+  assert.equal(repeatedLong.rows[0].qa_id,longQA.rows[0].qa_id,
+    'logical document QA IDs must remain stable when answer text changes');
+
+  // Duplicate headings/questions on separate slides receive deterministic
+  // source identities, so both MERGE and REPLACE can safely plan the file.
+  const duplicateSlides=await documentToRows('duplicates.pptx',{units:[
+    {locator:'Slide 24',text:'Question: What is an ethical prompt?\nAnswer: It follows ethical principles.'},
+    {locator:'Slide 25',text:'Question: What is an ethical prompt?\nAnswer: It avoids harm and bias.'},
+  ],warnings:[]});
+  const duplicateFileRows=toFileRowsReport(duplicateSlides.rows).rows;
+  assert.notEqual(duplicateFileRows[0].qaId,duplicateFileRows[1].qaId);
+  for(const mode of ['MERGE','REPLACE']){
+    const fresh=matchRows(duplicateFileRows,[],()=>`new-test-row`);
+    assert.deepEqual(fresh.errors,[],`${mode}: duplicate slide questions must not be ambiguous`);
+    const active=duplicateFileRows.map((r,i)=>({qaId:r.qaId!,fields:{
+      topic:r.topic,question:r.question,answer:r.answer,start_time:r.start_time,end_time:r.end_time,keywords:r.keywords,llm_name:r.llm_name,
+    }}));
+    const update=matchRows(duplicateFileRows,active,()=>`new-test-row`);
+    assert.deepEqual(update.errors,[],`${mode}: repeated upload must match its deterministic source IDs`);
+  }
+
+  const mediumSlide=await documentToRows('deck.pptx',{units:[{
+    locator:'Slide 7',text:'A slide-level statement. '+ 'Keep this slide content together. '.repeat(45),
+  }],warnings:[]});
+  const mediumSlidePieces=await buildChunkPiecesReport(mediumSlide.rows[0]);
+  assert.equal(mediumSlidePieces.splitInto,1,'PPTX slides below 2,200 chars stay atomic');
+
+  const pptxQASlide=await documentToRows('qa-slide.pptx',{units:[{
+    locator:'Slide 8',text:'Question: What is integrity?\nAnswer: Acting by consistent principles. '.repeat(10),
+  }],warnings:[]});
+  assert.equal(pptxQASlide.rows.length,1,'short slide Q&A stays within its slide-level chunk');
+  assert.match((await buildChunkPiecesReport(pptxQASlide.rows[0])).pieces[0].chunkText,/Question: What is integrity/);
 
   const same = await documentToRows('chapter-one.pdf', {
     units: [{ locator: 'Page 3', text: 'Python variables store values. '.repeat(95) }],
@@ -207,7 +251,7 @@ async function run() {
   const extracted = await runDocumentExtractor(
     Buffer.from('Loops repeat work.\\nA for loop iterates over items.', 'utf8'), '.txt'
   );
-  assert.equal(extracted.units[0].locator, 'Document');
+  assert.equal(extracted.units[0].locator, 'Section 1');
   assert.ok(extracted.units[0].text.includes('for loop'));
 
   await assert.rejects(

@@ -112,6 +112,15 @@ export const buildAgentInstructionBlock = (profile?: LectureAgentProfile | null)
 export const ANSWER_PROMPT_VERSION = 'v4';
 
 const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
+let retrySleeper = sleep;
+
+// Tests can skip backoff waits without replacing global timers, which would
+// also affect HTTP client timers (notably Undici's parser timeout).
+export const setAnswerRetrySleeperForTests = (sleeper?: (ms: number) => Promise<void>) => {
+  const previous = retrySleeper;
+  retrySleeper = sleeper ?? sleep;
+  return () => { retrySleeper = previous; };
+};
 
 // Optional live-streaming hooks for generateAnswer. onDelta receives each
 // piece of the draft as it's produced; onReset fires when a transient failure
@@ -236,7 +245,7 @@ ${question}${uncoveredBlock}${unavailableBlock}`;
       const fallbackNote = attempt >= 2 ? ` (switching to ${env.LLM.RAG_ANSWER.FALLBACK_MODEL})` : '';
       logger.warn(`[LLM] Transient error on attempt ${attempt}/3${fallbackNote} — retrying in ${wait / 1000}s...`);
       if (streamedAny) stream?.onReset?.();
-      await sleep(wait);
+      await retrySleeper(wait);
       return generateAnswer(question, chunks, lectureTitle, history, uncoveredAspects, attempt + 1, stream, agentProfile, unavailableAspects, tutoringMode, socraticTurn);
     }
 

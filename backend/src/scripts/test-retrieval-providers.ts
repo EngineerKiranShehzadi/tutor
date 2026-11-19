@@ -39,6 +39,12 @@ type Read = { ep: string; rp: string; ev: string; rv: string; sim: number; min: 
 const readEnv = (o: Record<string, string>) => JSON.parse(childJson(READ, o).out) as Read;
 
 async function main() {
+  // The adapter contract checks below stub the local HTTP endpoints. Pin the
+  // services to those adapters before importing them so a developer's hosted
+  // provider settings in .env cannot redirect these requests to OpenAI/Voyage.
+  process.env.EMBEDDING_PROVIDER = 'local-http';
+  process.env.RERANK_PROVIDER = 'local-http';
+
   const { resolveEmbeddingProvider } = await import('../embedding/embedding-provider.resolver');
   const { resolveRerankProvider } = await import('../rerank/rerank-provider.resolver');
   const { EmbeddingUnavailableError } = await import('../embedding/embedding-errors');

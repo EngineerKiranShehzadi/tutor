@@ -523,7 +523,7 @@ export const getContentGaps = async (opts: { days?: number; courseId?: number } 
           LIMIT $4
        ) r
        JOIN chat_history ch ON ch.trace_id = r.trace_id
-      GROUP BY r.lecture_id, lower(regexp_replace(ch.question, '[^a-zA-Z0-9]+', ' ', 'g'))
+      GROUP BY r.lecture_id, lower(trim(regexp_replace(ch.question, '[^a-zA-Z0-9]+', ' ', 'g')))
       ORDER BY r.lecture_id, COUNT(*) DESC, MAX(r.created_at) DESC`,
     [windowDays, REASON_MISSING_MATERIAL, lectureIds, CONTENT_GAPS_MAX_QUESTIONS]
   );

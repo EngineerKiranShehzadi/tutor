@@ -1,4 +1,6 @@
 import { spawn } from 'child_process';
+import { mkdtemp, rm } from 'fs/promises';
+import { tmpdir } from 'os';
 import path from 'path';
 import { AppError } from '../middleware/errorHandler';
 import { env } from '../config/env';
@@ -12,11 +14,11 @@ const IMAGE_CONCURRENCY = 3;
 const MODEL = process.env.DOCUMENT_VISION_MODEL || 'gpt-4.1-mini';
 const ENABLED = process.env.DOCUMENT_VISION_ENABLED !== 'false';
 
-async function renderVisualPages(buffer: Buffer, extension: string): Promise<VisualPage[]> {
+async function renderVisualPages(buffer: Buffer, extension: string, canonicalPdfPath: string): Promise<VisualPage[]> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.env.DOCUMENT_EXTRACT_PYTHON || 'python3',
       [SCRIPT, '--extension', extension, '--max-bytes', String(Math.min(env.DATASET.MAX_UPLOAD_BYTES, 25 * 1024 * 1024)),
-        '--max-visual-pages', String(PAGE_LIMIT)],
+        '--max-visual-pages', String(PAGE_LIMIT), '--canonical-pdf', canonicalPdfPath],
       { shell: false, stdio: ['pipe', 'pipe', 'ignore'], env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } });
     let output = '';
     let bytes = 0;
@@ -126,7 +128,7 @@ export function mergeVisionIntoUnits(units: VisionUnit[], descriptions: Map<stri
     };
   });
   for (const [locator, visual] of descriptions) {
-    if (!matched.has(locator)) merged.push({ locator, text: '[Diagram and figure interpretation]\n' + visual });
+    if (!matched.has(locator)) merged.push({ locator, text: '[Diagram and figure interpretation from ' + locator + ']\n' + visual });
   }
   return merged;
 }
@@ -215,7 +217,19 @@ export async function enrichDocumentWithVision(
 ): Promise<{ units: VisionUnit[]; warnings: string[]; visualReviewPages: VisualReviewPage[] }> {
   if (!['.pdf', '.ppt', '.pptx', '.docx'].includes(extension)) return { units, warnings: [], visualReviewPages: [] };
   if (!ENABLED) return { units, warnings: ['Visual review required: visual analysis is explicitly disabled, so inspect the original document pages before applying.'], visualReviewPages: [] };
-  const pages = await renderVisualPages(buffer, extension);
+  const jobDir = await mkdtemp(path.join(tmpdir(), 'askaitutor-visual-'));
+  const canonicalPdfPath = path.join(jobDir, 'canonical.pdf');
+  try {
+    return await enrichDocumentWithVisionInJob(buffer, extension, units, canonicalPdfPath);
+  } finally {
+    await rm(jobDir, { recursive: true, force: true });
+  }
+}
+
+async function enrichDocumentWithVisionInJob(
+  buffer: Buffer, extension: string, units: VisionUnit[], canonicalPdfPath: string
+): Promise<{ units: VisionUnit[]; warnings: string[]; visualReviewPages: VisualReviewPage[] }> {
+  const pages = await renderVisualPages(buffer, extension, canonicalPdfPath);
   if (!pages.length) return { units, warnings: [], visualReviewPages: [] };
   const all = new Map(units.map(u => [u.locator, u.text]));
   const sourceText = units.map(u => u.text).join('\n');

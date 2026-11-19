@@ -377,14 +377,20 @@ interface FakeDb { history: { question: string; answer: string; sourceChunkIds: 
 async function withFakeDb<T>(fn: (db: FakeDb) => Promise<T>): Promise<{ value: T | Error; db: FakeDb }> {
   const db: FakeDb = { history: [], studentQuestions: 0, unexpected: [] };
   const original = pool.query;
+  const originalConnect = pool.connect;
+  (pool as unknown as { connect: unknown }).connect = async () => ({
+    query: async () => ({ rows: [], rowCount: null }),
+    release: () => undefined,
+  });
   (pool as unknown as { query: unknown }).query = async (text: string, params: unknown[] = []) => {
     const t = text.replace(/\s+/g, ' ').trim();
     const ok = (rows: unknown[] = [], rowCount = rows.length) => ({ rows, rowCount });
-    if (/^SELECT \* FROM lectures WHERE id = \$1/.test(t)) {
-      return ok(params[0] === LECTURE_ID ? [{ id: LECTURE_ID, title: 'Lecture', status: 'READY', youtube_video_id: null }] : []);
+    if (/^SELECT l\.\*, ap\.agent_name FROM lectures l LEFT JOIN lecture_agent_profiles ap ON ap\.lecture_id = l\.id WHERE l\.id = \$1$/.test(t)) {
+      return ok(params[0] === LECTURE_ID ? [{ id: LECTURE_ID, title: 'Lecture', status: 'READY', youtube_video_id: null, agent_name: 'Nova' }] : []);
     }
     if (/^SELECT 1 AS ok FROM chat_sessions/.test(t)) return ok([{ ok: 1 }]);
     if (/^INSERT INTO student_questions/.test(t)) { db.studentQuestions++; return ok([], 1); }
+    if (/^SELECT question, answer FROM chat_history WHERE session_id = \$1 AND student_id = \$2 AND cleared_by_student = FALSE ORDER BY created_at DESC, id DESC LIMIT \$3$/.test(t)) return ok([]);
     if (/FROM chat_history ch WHERE ch\.session_id = \$1/.test(t)) return ok([]);
     if (/^INSERT INTO chat_history/.test(t)) {
       db.history.push({ question: params[2] as string, answer: params[3] as string, sourceChunkIds: params[4] as number[] });
@@ -393,6 +399,8 @@ async function withFakeDb<T>(fn: (db: FakeDb) => Promise<T>): Promise<{ value: T
     if (/^UPDATE chat_sessions/.test(t)) return ok([], 1);
     // A dataset published while the request runs: the lecture's active version is now 8.
     if (/^SELECT active_version_id FROM lectures WHERE id = \$1$/.test(t)) return ok([{ active_version_id: 8 }]);
+    if (/^SELECT v\.lecture_summary AS summary FROM dataset_versions v/.test(t)) return ok([]);
+    if (/^UPDATE dataset_versions/.test(t)) return ok([], 1);
     db.unexpected.push(t.slice(0, 100));
     throw new Error(`unexpected SQL: ${t.slice(0, 100)}`);
   };
@@ -401,6 +409,7 @@ async function withFakeDb<T>(fn: (db: FakeDb) => Promise<T>): Promise<{ value: T
     return { value, db };
   } finally {
     (pool as unknown as { query: unknown }).query = original;
+    (pool as unknown as { connect: unknown }).connect = originalConnect;
   }
 }
 

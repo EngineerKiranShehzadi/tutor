@@ -238,6 +238,8 @@ const planUpdates = async (
     const old = oldByQa.get(m.qaId) ?? [];
     const { pieces, splitInto } = await buildChunkPiecesReport({
       topic: row.topic ?? undefined, question: row.question, answer: row.answer, keywords: row.keywords ?? undefined,
+      is_document_chunk: row.isDocumentChunk,
+      is_document_atomic: row.isDocumentAtomic,
     });
     if (splitInto > MAX_PIECES_PER_ROW) {
       truncated.push({ sheetRow: row.sheetRow, question: row.question.slice(0, 200), pieces: splitInto, kept: MAX_PIECES_PER_ROW });

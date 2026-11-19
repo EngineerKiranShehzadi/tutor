@@ -3,11 +3,10 @@ import { createHash } from 'crypto';
 import path from 'path';
 import { AppError } from '../middleware/errorHandler';
 import type { RawRow } from './chunk.service';
-import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 import { env } from '../config/env';
 import { enrichDocumentWithVision } from './document-vision.service';
 import type { VisualReviewPage } from './document-vision.service';
-import { splitPreservingQuestions } from './document-semantic-chunk.service';
+import { parseLogicalSections } from './document-semantic-chunk.service';
 
 // The document boundary is isolated from the existing Excel parser and version
 // planner. No remote conversion services are used; the child process reads only
@@ -29,16 +28,6 @@ const EXTRACT_SCRIPT = path.resolve(__dirname, '../../scripts/extract_document.p
 const MAX_RESULT_BYTES = 4_000_000;
 const MAX_DOCUMENT_BYTES = Math.min(env.DATASET.MAX_UPLOAD_BYTES, 25 * 1024 * 1024); // 900k Unicode characters can occupy >1 MB in JSON
 const EXTRACT_TIMEOUT_MS = 30_000;
-
-// Separate limits for different risks: compressed upload, extracted text,
-// number of document pages/slides and the count of final database records.
-const SECTION_SIZE = 1050;
-const SECTION_OVERLAP = 130;
-const splitter = new RecursiveCharacterTextSplitter({
-  chunkSize: SECTION_SIZE,
-  chunkOverlap: SECTION_OVERLAP,
-  separators: ['\n\n', '\n', '. ', ' ', ''],
-});
 
 const extractTextOnly = (buffer: Buffer, extension: string): Promise<ExtractionResult> => {
   if (!DOCUMENT_EXTENSIONS.has(extension) || extension === '.srt' || extension === '.vtt') {
@@ -115,10 +104,10 @@ export async function runDocumentExtractor(buffer: Buffer, extension: string): P
   return result;
 }
 
-// Each document section is stored as one content-bearing row in the existing
-// dataset versioning tables. "Question" is a synthetic, deterministic source
-// label, not an AI-generated question. "Answer" is the original document text.
-// This preserves citations, stable IDs, deduplication and grounded generation.
+// Each source section or explicit Q&A is stored as one logical planner row in
+// the existing dataset versioning tables. Prose rows use a synthetic source
+// label; Q&A rows keep the source question. Oversized answers split later into
+// family-linked chunks, preserving citations and deterministic source IDs.
 export const documentToRows = async (
   filename: string, extracted: ExtractionResult
 ): Promise<DocumentRowsResult> => {
@@ -129,6 +118,10 @@ export const documentToRows = async (
   }
   const rows: RawRow[] = [];
   let unitNumber = 0, qaRecords=0, proseRecords=0, qaChildRecords=0;
+  const extension = path.extname(filename).toLowerCase();
+  const qaOccurrences = new Map<string, number>();
+  const sourceId = (locator: string, kind: string, identity: string, occurrence: number) =>
+    'doc_' + createHash('sha256').update([safeName, locator, kind, identity, String(occurrence)].join('\0')).digest('hex').slice(0, 24);
   for (const unit of extracted.units) {
     if (typeof unit?.text !== 'string' || typeof unit.locator !== 'string') {
       throw new AppError('Invalid document extraction result', 422);
@@ -138,8 +131,9 @@ export const documentToRows = async (
     if (!text) continue;
     const locator = unit.locator.replace(/[\r\n\x00-\x1f]/g, ' ').trim().slice(0, 90) || `Section ${unitNumber}`;
     const visualMarker = '[Diagram and figure interpretation from ' + unit.locator + ']';
+    const atomicPptxSlide = ['.ppt', '.pptx'].includes(extension) && /^slide\s+\d+/i.test(locator) && text.length <= 2200;
     const visualAt = text.indexOf(visualMarker);
-    const sections = visualAt >= 0
+    const sections = visualAt >= 0 && !atomicPptxSlide
       ? [{ body: text.slice(0, visualAt).trim(), isVisual: false },
          { body: text.slice(visualAt + visualMarker.length).trim(), isVisual: true }]
       : [{ body: text, isVisual: false }];
@@ -148,31 +142,46 @@ export const documentToRows = async (
       const visualTopic = section.isVisual
         ? /^Visual topic:\s*(.+)$/m.exec(section.body)?.[1]?.trim().slice(0, 200)
         : undefined;
-      // Keep explicit Question/Answer lines together in each retrieval record.
-      // For a long answer, every child repeats the ORIGINAL question. No
-      // model-based inference or rewriting of lecture material is involved.
-      const parts = section.isVisual
-        ? (await splitter.splitText(section.body)).map((text, index) => ({
-            kind: 'TEXT' as const, text, part: index + 1
-          }))
-        : await splitPreservingQuestions(section.body);
-      for (let part = 0; part < parts.length; part++) {
-        const piece = parts[part];
-        if(piece.kind==='QA'){
+      // Keep one planner row per logical source unit/Q&A. Oversized answers
+      // split later in chunk.service.ts, where child chunks retain one qa_id
+      // and get version-scoped family links for retrieval-time expansion.
+      const logicalSections = atomicPptxSlide
+        ? [{ kind: 'TEXT' as const, text: section.body }]
+        : parseLogicalSections(section.body);
+      let excerptOrdinal = 0;
+      for (const logical of logicalSections) {
+        let question: string, answer: string, topic: string, identity: string, kind: string;
+        if (logical.kind === 'QA') {
+          qaRecords++;
           qaChildRecords++;
-          if(piece.part===1)qaRecords++;
-        }else proseRecords++;
-        const kind = section.isVisual ? 'Visual' : piece.kind === 'QA' ? 'QA' : 'Part';
-        const question = piece.kind === 'QA'
-          // Distinct stable question identities prevent ambiguous repeat uploads;
-          // each child still embeds the full original question.
-          ? (parts.some(p=>p.kind==='QA' && p.question===piece.question && p.part>1)
-              ? `${piece.question} [Answer part ${piece.part}]` : piece.question!)
-          : `Source excerpt: ${safeName} | ${locator} | ${kind} ${part + 1}`;
+          question = logical.question;
+          answer = logical.answer;
+          topic = logical.heading ?? locator;
+          kind = 'QA';
+          identity = question.trim().replace(/\s+/g, ' ').toLowerCase();
+        } else {
+          proseRecords++;
+          excerptOrdinal++;
+          question = section.isVisual
+            ? `Source excerpt: ${safeName} | ${locator} | Visual ${excerptOrdinal}`
+            : `Source excerpt: ${safeName} | ${locator} | Part ${excerptOrdinal}`;
+          answer = logical.text;
+          topic = visualTopic ?? locator;
+          kind = section.isVisual ? 'Visual' : 'TEXT';
+          identity = String(excerptOrdinal);
+        }
+        const occurrenceKey = `${locator}\0${kind}\0${identity}`;
+        const occurrence = (qaOccurrences.get(occurrenceKey) ?? 0) + 1;
+        qaOccurrences.set(occurrenceKey, occurrence);
         rows.push({
+          qa_id: sourceId(locator, kind, identity, occurrence),
+          is_document_chunk: true,
+          // Short slides remain a slide-level citation unit; oversized slides
+          // still split internally at paragraph/sentence boundaries.
+          is_document_atomic: atomicPptxSlide,
           question,
-          answer: piece.text,
-          topic: piece.kind === 'QA' ? (piece.heading ?? locator) : (visualTopic ?? locator),
+          answer,
+          topic,
           start_time: `${safeName} | ${locator}`,
         });
         if (rows.length > env.DATASET.MAX_ROWS) {

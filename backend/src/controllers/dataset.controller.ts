@@ -1,4 +1,5 @@
 import { Response, NextFunction } from 'express';
+import { createHash } from 'crypto';
 import { AuthenticatedRequest } from '../types';
 import { getLectureById, updateLectureDatasetLocation } from '../services/lecture.service';
 import { AppError } from '../middleware/errorHandler';
@@ -10,9 +11,21 @@ import { uploadRawDataset, isS3Configured } from '../services/s3-storage.service
 import { sendSuccess, sendError } from '../utils/response';
 import { logger } from '../utils/logger';
 import { supportedDatasetExtension, runDocumentExtractor, documentToRows } from '../services/document-ingestion.service';
+import type { DocumentRowsResult } from '../services/document-ingestion.service';
 import { isSubtitleExtension, subtitleToRows } from '../services/subtitle-ingestion.service';
 
 const parseLectureId = (req: AuthenticatedRequest): number => parseInt(req.params['lectureId'] ?? '', 10);
+
+const isDocumentRowsResult = (value: unknown): value is DocumentRowsResult => {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Record<string, unknown>;
+  const quality = candidate.quality;
+  if (!quality || typeof quality !== 'object') return false;
+  const report = quality as Record<string, unknown>;
+  return Array.isArray(candidate.rows) && Array.isArray(candidate.warnings) &&
+    typeof candidate.units === 'number' && Array.isArray(candidate.visualReviewPages) &&
+    typeof report.outputRecords === 'number' && typeof report.proseRecords === 'number';
+};
 
 // POST /datasets/upload/:lectureId   multipart: xlsx/pdf/docx/pptx/txt/html, [mode=MERGE|REPLACE], [confirmRemovals=<n>], [dryRun=true]
 //
@@ -72,7 +85,9 @@ export const uploadDataset = async (
       : isSubtitleExtension(extension)
         ? subtitleToRows(file.originalname, file.buffer, extension)
         : await documentToRows(file.originalname, await runDocumentExtractor(file.buffer, extension));
-    const visualReviewPages = document && 'visualReviewPages' in document ? document.visualReviewPages : [];
+    // Subtitle rows do not carry visual review metadata; document rows do.
+    const documentRows = isDocumentRowsResult(document) ? document : null;
+    const visualReviewPages = documentRows?.visualReviewPages ?? [];
     let visualReviewDecisions: Record<string, { include: boolean; reviewed: boolean }> = {};
     if (body['visualReviewDecisions']) {
       try {
@@ -104,11 +119,13 @@ export const uploadDataset = async (
         const decision = visualReviewDecisions[page.locator];
         const include = decision ? decision.include : page.candidateIncluded;
         const visualMarker = ' | ' + page.locator + ' | Visual ';
-        const hasVisualRow = rows.some(row => row.question.includes(visualMarker));
-        rows = rows.filter(row => !row.question.includes(visualMarker) || include);
+        const hasVisualRow = rows.some(row => typeof row.question === 'string' && row.question.includes(visualMarker));
+        rows = rows.filter(row => typeof row.question !== 'string' || !row.question.includes(visualMarker) || include);
         if (include && !hasVisualRow && page.candidateDescription.trim().length >= 15) {
           rows.push({
-            question: 'Source excerpt: ' + safeName + ' | ' + page.locator + ' | Visual reviewed',
+            qa_id: 'doc_' + createHash('sha256').update([safeName, page.locator, 'Visual reviewed'].join('\0')).digest('hex').slice(0, 24),
+            is_document_chunk: true,
+            question: 'Source excerpt: ' + safeName + ' | ' + page.locator + ' | Visual 1',
             answer: '[Diagram and figure interpretation]\n' + page.candidateDescription,
             topic: page.locator,
             start_time: safeName + ' | ' + page.locator,
@@ -117,10 +134,10 @@ export const uploadDataset = async (
       }
       effectiveRows = rows;
     }
-    const effectiveDocumentQuality = document && 'quality' in document
-      ? { ...document.quality,
-          outputRecords: effectiveRows?.length ?? document.quality.outputRecords,
-          proseRecords: effectiveRows?.filter(row => row.question.startsWith('Source excerpt:')).length ?? document.quality.proseRecords }
+    const effectiveDocumentQuality = documentRows
+      ? { ...documentRows.quality,
+          outputRecords: effectiveRows?.length ?? documentRows.quality.outputRecords,
+          proseRecords: effectiveRows?.filter(row => typeof row.question === 'string' && row.question.startsWith('Source excerpt:')).length ?? documentRows.quality.proseRecords }
       : null;
     const result = await prepareDatasetVersion(lectureId, file.buffer, {
       mode, dryRun, confirmRemovals, filename: file.originalname,
