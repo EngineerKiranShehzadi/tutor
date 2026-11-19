@@ -11,6 +11,7 @@ import { learningOutcomeTypeDefs } from './learning-outcome.schema';
 import { facultyLearningGapTypeDefs } from './faculty-learning-gap.schema';
 import { revisionPlanTypeDefs } from './revision-plan.schema';
 import { ragBenchmarkTypeDefs } from './rag-benchmark.schema';
+import { goldenCaseTypeDefs } from './golden-case.schema';
 import { learningEffectivenessTypeDefs } from './learning-effectiveness.schema';
 import { misconceptionTypeDefs } from './misconception.schema';
 import { resolvers as authResolvers } from './resolvers/auth.resolver';
@@ -25,6 +26,7 @@ import { learningOutcomeResolvers } from './resolvers/learning-outcome.resolver'
 import { facultyLearningGapResolvers } from './resolvers/faculty-learning-gap.resolver';
 import { revisionPlanResolvers } from './resolvers/revision-plan.resolver';
 import { ragBenchmarkResolvers } from './resolvers/rag-benchmark.resolver';
+import { goldenCaseResolvers } from './resolvers/golden-case.resolver';
 import { learningEffectivenessResolvers } from './resolvers/learning-effectiveness.resolver';
 import { misconceptionResolvers } from './resolvers/misconception.resolver';
 import { GraphQLContext } from './context';
@@ -49,6 +51,7 @@ const mergedResolvers = {
     ...facultyLearningGapResolvers.Query,
     ...revisionPlanResolvers.Query,
     ...ragBenchmarkResolvers.Query,
+    ...goldenCaseResolvers.Query,
     ...learningEffectivenessResolvers.Query,
     ...misconceptionResolvers.Query,
   },
@@ -63,6 +66,7 @@ const mergedResolvers = {
     ...learningOutcomeResolvers.Mutation,
     ...revisionPlanResolvers.Mutation,
     ...ragBenchmarkResolvers.Mutation,
+    ...goldenCaseResolvers.Mutation,
     ...misconceptionResolvers.Mutation,
   },
 };
@@ -86,7 +90,7 @@ export function formatGraphQLError(err: GraphQLFormattedError, originalError: un
 
 export const setupApollo = async (app: Express): Promise<void> => {
   const server = new ApolloServer<GraphQLContext>({
-    typeDefs: [typeDefs, practiceQuizRetakeTypeDefs, learningOutcomeTypeDefs, misconceptionTypeDefs, facultyLearningGapTypeDefs, revisionPlanTypeDefs, ragBenchmarkTypeDefs, learningEffectivenessTypeDefs],
+    typeDefs: [typeDefs, practiceQuizRetakeTypeDefs, learningOutcomeTypeDefs, misconceptionTypeDefs, facultyLearningGapTypeDefs, revisionPlanTypeDefs, ragBenchmarkTypeDefs, goldenCaseTypeDefs, learningEffectivenessTypeDefs],
     resolvers: mergedResolvers,
     // Apollo Server 4 leaves introspection on regardless of NODE_ENV; the
     // schema is not published in production (GRAPHQL_INTROSPECTION overrides).
