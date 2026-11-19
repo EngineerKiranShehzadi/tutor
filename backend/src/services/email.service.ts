@@ -101,7 +101,7 @@ export const sendAdminInviteEmail = async (
     subject: 'You have been invited to administer AskAITutor',
     text:    `${invitedByName} invited you to administer AskAITutor. Create an account with this email address `
            + `(${to}) and you will have the admin role when you sign in. The invitation expires in ${validDays} days.`
-           + (appUrl ? ` Sign up: ${appUrl}/register` : ''),
+           + (appUrl ? ` Sign up: ${appUrl}/signup` : ''),
     html: noticeHtml(
       // An invited person has no account yet, so there is no name to greet
       // them by. Their own address back at them reads like a mail merge that
@@ -112,7 +112,7 @@ export const sendAdminInviteEmail = async (
         `<strong>${invitedByName}</strong> has invited you to administer AskAITutor.`,
         `Create an account using this email address and you will have the admin role the first time you sign in. `
         + `You will still set your own password and verify your email as normal.`,
-        appUrl ? `<a href="${appUrl}/register" style="color:#065fd4;font-weight:600">Create your account</a>` : '',
+        appUrl ? `<a href="${appUrl}/signup" style="color:#065fd4;font-weight:600">Create your account</a>` : '',
       ].filter(Boolean),
       `This invitation expires in ${validDays} days. If you were not expecting it, you can ignore this email — `
       + `nothing has been created in your name.`,
