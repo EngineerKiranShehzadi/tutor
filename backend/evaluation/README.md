@@ -20,7 +20,20 @@ Save a matching `predictions.json` containing `schemaVersion:1` and `cases` with
 
 Each `*Ids` is a **ranked list of actual retrieved chunk IDs**, captured from a measured execution, not a simulated ranking. `human` is `{"answerCorrect":"UNREVIEWED","grounded":"UNREVIEWED","citationValid":"UNREVIEWED"}` until independent review. Never label these PASS from the system verifier without an actual human check.
 
+Each case may also carry an **optional** `dedupSelectionIds` — the reranked pool after answer-dedup and the relevance floor, *before* the context budget. It sits between `hybridIds` and `rerankedIds`. It is validated only when present and is scored (as the `dedupSelection` stage) **only when every case carries it**, so older prediction files score byte-for-byte the same. Keep the distinction: `rerankedIds` is the full reranker ranking; `dedupSelectionIds` is what survives dedup + floor; `finalContextIds` is the ≤5 actually eligible for context.
+
 Important: The `hybridIds` ranking is meaningful only when hybrid search is enabled. For vector-only runs, annotate experiment settings separately; **do not** pretend a missing hybrid stage produced results. Output `null` means not measured when the scoring population is absent, not zero quality.
+
+## Capturing predictions from a live run (no manual ranking entry)
+
+`src/scripts/capture-rag-predictions.ts` runs the real retrieval pipeline against each case's **pinned** `datasetVersionId` and writes a `predictions.json` the evaluator can score. It reuses the production retrieval/rerank functions (never a re-implementation) and runs raw-vector and hybrid as **separate explicit executions**, so the deployed hybrid path is never mislabelled as raw-vector. Run it only after that corpus version has finished embedding + indexing.
+
+```bash
+cd backend
+npm run capture:rag -- /private/gold.json /private/predictions.json      # [--candidate-limit=15] [--final-context=5]
+```
+
+It captures all five ranked stages (`vectorIds`, `hybridIds`, `dedupSelectionIds`, `rerankedIds`, `finalContextIds`), plus `refused`, `latencyMs`, and a top-level `meta` pinning the embedder/reranker model versions and retrieval config for reproducibility. It leaves `citationChunkIds` empty and all `human` verdicts `UNREVIEWED` — citations, answer correctness and grounding still come from human review (and, later, optional answer generation), so nothing is silently scored as a pass. Needs Postgres + the configured embedding/reranker providers; a per-case failure is recorded on that case and the run continues.
 
 ## Run
 

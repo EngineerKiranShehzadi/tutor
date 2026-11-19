@@ -69,6 +69,30 @@ test('computes recall@5 and MRR from the predicted ranking', () => {
   assert.equal(r.retrieval.hybrid.mrr, 1);
 });
 
+test('omits the optional dedupSelection stage when predictions do not carry it', () => {
+  const r = evaluate(...Object.values(dataset()));
+  assert.equal('dedupSelection' in r.retrieval, false, 'absent dedupSelectionIds must not add a stage (back-compat)');
+});
+
+test('scores the optional dedupSelection stage when every prediction carries it', () => {
+  const { gold, pred } = dataset();
+  // Add the post-dedup stage to BOTH predictions (answerable + unsupported).
+  pred.cases[0].dedupSelectionIds = [10, 20]; // perfect post-dedup ordering
+  pred.cases[1].dedupSelectionIds = [];        // unsupported: no evidence
+  const r = evaluate(gold, pred);
+  assert.ok(r.retrieval.dedupSelection, 'dedupSelection stage should be scored');
+  assert.equal(r.retrieval.dedupSelection.recallAt5, 1);
+  assert.equal(r.retrieval.dedupSelection.mrr, 1);
+  // Existing stages are unaffected.
+  assert.equal(r.retrieval.vector.mrr, 0.5);
+});
+
+test('rejects a malformed dedupSelectionIds when present', () => {
+  const { gold, pred } = dataset();
+  pred.cases[0].dedupSelectionIds = [10, 10]; // duplicate ids
+  assert.throws(() => evaluate(gold, pred), /dedupSelectionIds: duplicates/);
+});
+
 test('computes citation precision and recall', () => {
   const r = evaluate(...Object.values(dataset()));
   // citations [10,30] vs expected {10,20}: 1 correct of 2 predicted, of 2 expected.
