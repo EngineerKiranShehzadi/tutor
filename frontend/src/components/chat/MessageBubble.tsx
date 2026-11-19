@@ -81,6 +81,9 @@ export const MessageBubble = ({ message, onSpeak, isSpeaking, onAskAgain }: Prop
     ).values()
   );
 
+  // Temporarily hide answer reference chips. Set to true to restore.
+  const SHOW_SOURCES = false;
+
   return (
     <div className={`flex gap-3 items-end ${isUser ? 'flex-row-reverse' : ''}`}>
       {/* Only the tutor gets a face. A student's own messages are already
@@ -120,7 +123,7 @@ export const MessageBubble = ({ message, onSpeak, isSpeaking, onAskAgain }: Prop
         </div>
 
         {/* Lecture timestamps or document page/slide references — visual only, never spoken. */}
-        {!isUser && !message.isStreaming && timestampedSources.length > 0 && (
+        {SHOW_SOURCES && !isUser && !message.isStreaming && timestampedSources.length > 0 && (
           <div className="flex flex-wrap gap-1.5 mt-0.5">
             {timestampedSources.map((src, i) => (
               <span
