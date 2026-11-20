@@ -6,6 +6,7 @@ import {
   documentToRows,
   supportedDatasetExtension,
   runDocumentExtractor,
+  applyVisualReviewDecisions,
 } from '../services/document-ingestion.service';
 import { buildChunkPieces, buildChunkPiecesReport, MAX_PIECES_PER_ROW, SPLIT_THRESHOLD_CHARS, toFileRowsReport } from '../services/chunk.service';
 import { matchRows } from '../services/dataset-plan';
@@ -262,6 +263,39 @@ async function run() {
     documentToRows('empty.txt', { units: [], warnings: [] }),
     /No selectable text/
   );
+  // --- applyVisualReviewDecisions: a visual must appear exactly once ---
+  const inlineRow = () => ({
+    qa_id: 'x1', is_document_chunk: true,
+    question: 'Source excerpt: deck.pptx | Slide 16 | Part 1',
+    answer: 'Native slide text.\n\n[Diagram and figure interpretation from Slide 16]\n\nVisual topic: Ethics\nThe table shows A, B, C.',
+    topic: 'Slide 16', start_time: 'deck.pptx | Slide 16',
+  });
+  const page16 = { locator: 'Slide 16', confidence: 1, reason: '', image: '', candidateDescription: 'The table shows A, B, C in detail.', candidateIncluded: true };
+
+  const inlineIncluded = applyVisualReviewDecisions([inlineRow()], [page16], { 'Slide 16': { include: true, reviewed: true } }, 'deck.pptx');
+  assert.equal(inlineIncluded.length, 1, 'inline visual + include must not add a duplicate record');
+  assert.ok(inlineIncluded[0].answer!.includes('[Diagram and figure interpretation from Slide 16]'), 'inline visual preserved when included');
+  assert.ok(!inlineIncluded.some(r => typeof r.question === 'string' && r.question.includes('| Slide 16 | Visual')), 'no separate Visual row added for an inline visual');
+
+  const inlineExcluded = applyVisualReviewDecisions([inlineRow()], [page16], { 'Slide 16': { include: false, reviewed: true } }, 'deck.pptx');
+  assert.equal(inlineExcluded.length, 1, 'excluding an inline visual keeps the native row');
+  assert.ok(!inlineExcluded[0].answer!.includes('[Diagram and figure interpretation'), 'excluded inline visual is stripped out');
+  assert.equal(inlineExcluded[0].answer!.trim(), 'Native slide text.', 'native slide text is retained after stripping the visual');
+
+  const nativeOnly = () => ({
+    qa_id: 'y1', is_document_chunk: true,
+    question: 'Source excerpt: deck.pptx | Slide 27 | Part 1',
+    answer: 'Common Approaches heading only.', topic: 'Slide 27', start_time: 'deck.pptx | Slide 27',
+  });
+  const page27 = { locator: 'Slide 27', confidence: 1, reason: '', image: '', candidateDescription: 'A four-row approaches table with principles.', candidateIncluded: false };
+
+  const separateAdded = applyVisualReviewDecisions([nativeOnly()], [page27], { 'Slide 27': { include: true, reviewed: true } }, 'deck.pptx');
+  assert.equal(separateAdded.length, 2, 'a non-inline visual that is included becomes one separate record');
+  assert.ok(separateAdded.some(r => typeof r.question === 'string' && r.question.includes('| Slide 27 | Visual 1')), 'separate Visual 1 row is added');
+
+  const separateExcluded = applyVisualReviewDecisions([nativeOnly()], [page27], { 'Slide 27': { include: false, reviewed: true } }, 'deck.pptx');
+  assert.equal(separateExcluded.length, 1, 'excluding a non-inline visual adds nothing');
+
   console.log('Document ingestion checks passed');
 }
 

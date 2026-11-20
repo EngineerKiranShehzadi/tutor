@@ -1,5 +1,4 @@
 import { Response, NextFunction } from 'express';
-import { createHash } from 'crypto';
 import { AuthenticatedRequest } from '../types';
 import { getLectureById, updateLectureDatasetLocation } from '../services/lecture.service';
 import { AppError } from '../middleware/errorHandler';
@@ -10,7 +9,7 @@ import {
 import { uploadRawDataset, isS3Configured } from '../services/s3-storage.service';
 import { sendSuccess, sendError } from '../utils/response';
 import { logger } from '../utils/logger';
-import { supportedDatasetExtension, runDocumentExtractor, documentToRows } from '../services/document-ingestion.service';
+import { supportedDatasetExtension, runDocumentExtractor, documentToRows, applyVisualReviewDecisions } from '../services/document-ingestion.service';
 import type { DocumentRowsResult } from '../services/document-ingestion.service';
 import { isSubtitleExtension, subtitleToRows } from '../services/subtitle-ingestion.service';
 
@@ -114,25 +113,7 @@ export const uploadDataset = async (
     let effectiveRows = document?.rows;
     if (document && visualReviewPages.length) {
       const safeName = file.originalname.replace(/[\r\n\x00-\x1f]/g, ' ').trim().slice(0, 180);
-      let rows = [...document.rows];
-      for (const page of visualReviewPages) {
-        const decision = visualReviewDecisions[page.locator];
-        const include = decision ? decision.include : page.candidateIncluded;
-        const visualMarker = ' | ' + page.locator + ' | Visual ';
-        const hasVisualRow = rows.some(row => typeof row.question === 'string' && row.question.includes(visualMarker));
-        rows = rows.filter(row => typeof row.question !== 'string' || !row.question.includes(visualMarker) || include);
-        if (include && !hasVisualRow && page.candidateDescription.trim().length >= 15) {
-          rows.push({
-            qa_id: 'doc_' + createHash('sha256').update([safeName, page.locator, 'Visual reviewed'].join('\0')).digest('hex').slice(0, 24),
-            is_document_chunk: true,
-            question: 'Source excerpt: ' + safeName + ' | ' + page.locator + ' | Visual 1',
-            answer: '[Diagram and figure interpretation]\n' + page.candidateDescription,
-            topic: page.locator,
-            start_time: safeName + ' | ' + page.locator,
-          });
-        }
-      }
-      effectiveRows = rows;
+      effectiveRows = applyVisualReviewDecisions(document.rows, visualReviewPages, visualReviewDecisions, safeName);
     }
     const effectiveDocumentQuality = documentRows
       ? { ...documentRows.quality,

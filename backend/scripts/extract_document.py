@@ -58,19 +58,28 @@ def zip_guard(data, max_bytes=MAX_BYTES):
 
 
 def pdf_units(data, warnings, include_empty=False):
-    from pypdf import PdfReader
-    reader = PdfReader(io.BytesIO(data), strict=False)
-    if reader.is_encrypted:
+    # PyMuPDF reads PDF text in natural reading order without the intra-word
+    # spacing artifacts pypdf's layout mode introduces on justified or kerned
+    # text (e.g. "British" -> "Br itish", "1857" -> "1 857", "based" -> "base d"),
+    # which otherwise break keyword/full-text search and pollute embeddings.
+    # A page with no selectable text yields an empty string and is routed to
+    # visual analysis, exactly as before. PyMuPDF is already a dependency.
+    import pymupdf
+    try:
+        doc = pymupdf.open(stream=data, filetype="pdf")
+    except Exception as exc:
+        raise ValueError("This is not a valid PDF file") from exc
+    if doc.needs_pass:
         raise ValueError("Password-protected PDFs are not supported")
-    if len(reader.pages) > MAX_UNITS:
+    if doc.page_count > MAX_UNITS:
         raise ValueError("PDF has too many pages; split it into smaller files")
     pages = []
-    for number, page in enumerate(reader.pages, 1):
-        # pypdf warns that huge expanded page streams can exhaust memory.
-        contents = page.get_contents()
-        if contents is not None and len(contents.get_data()) > 3 * 1024 * 1024:
-            raise ValueError(f"PDF page {number} is too complex to extract safely")
-        text = clean(page.extract_text(extraction_mode="layout") or "")
+    for number in range(1, doc.page_count + 1):
+        # sort=True orders text blocks by their position on the page (top-to-
+        # bottom, left-to-right) rather than PDF content-stream order, which can
+        # differ from the visual reading order and otherwise scramble paragraph
+        # sequence (and break sentences that run across a page boundary).
+        text = clean(doc[number - 1].get_text("text", sort=True) or "")
         pages.append((number, text))
 
     # Strip exact lines repeated at the top or bottom of multiple pages. This
@@ -104,6 +113,33 @@ def pdf_units(data, warnings, include_empty=False):
     return out
 
 
+_W_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+
+
+def _textbox_lines(paragraph_element):
+    # python-docx's paragraph/table iteration does not surface text inside
+    # DrawingML (w:txbxContent) or legacy VML (v:textbox, which wraps its own
+    # w:txbxContent) text boxes. Slide decks exported to Word place titles and
+    # whole slides in text boxes, so this content is otherwise silently dropped.
+    # Recover it, anchored to the paragraph it attaches to, deduped — title
+    # boxes are frequently duplicated across a handout/overlay layout.
+    lines = []
+    seen = set()
+    for box in paragraph_element.findall(".//" + _W_NS + "txbxContent"):
+        paragraphs = []
+        for p in box.findall(".//" + _W_NS + "p"):
+            runs = [t.text for t in p.findall(".//" + _W_NS + "t") if t.text]
+            text = "".join(runs).strip()
+            if text:
+                paragraphs.append(text)
+        block = "\n".join(paragraphs).strip()
+        key = re.sub(r"\s+", " ", block).casefold()
+        if block and key not in seen:
+            seen.add(key)
+            lines.append(block)
+    return lines
+
+
 def docx_units(data, warnings):
     from docx import Document
     from docx.table import Table
@@ -131,6 +167,18 @@ def docx_units(data, warnings):
     for element_index, element in enumerate(elements):
         if isinstance(element, Paragraph):
             value = clean(element.text)
+            box_lines = _textbox_lines(element._p)
+            if box_lines:
+                extra = clean("\n".join(box_lines))
+                # A tiny stray artifact (e.g. the observed "tea" export glitch)
+                # that merely anchors real text-box content must not ride in
+                # front of it; otherwise keep both in reading order.
+                if value and len(value) < 25 and len(value.split()) < 5:
+                    value = extra
+                elif value:
+                    value = (value + "\n" + extra).strip()
+                else:
+                    value = extra
             if not value:
                 continue
             slide = slide_heading.match(value)
@@ -240,6 +288,29 @@ def pptx_units(data, warnings, include_empty=False, max_bytes=MAX_BYTES):
             warnings.append(f"Slide {number} has no selectable text (visual analysis needed)")
             if include_empty:
                 output.append({"locator": f"Slide {number}", "text": ""})
+    # Strip a running header/footer repeated across most slides (e.g. a textbook
+    # footer), without touching meaningful titles that repeat on only a few
+    # slides. A line counts as chrome only when it appears on at least half the
+    # slides (and at least 3), so a "(cont'd.)" heading on a handful of slides is
+    # preserved.
+    slide_count = sum(1 for unit in output if unit["text"])
+    if slide_count >= 4:
+        line_slides = {}
+        for unit in output:
+            for line in {re.sub(r"\s+", " ", ln).strip().casefold() for ln in unit["text"].splitlines()}:
+                if len(line) > 3:
+                    line_slides[line] = line_slides.get(line, 0) + 1
+        threshold = max(3, (slide_count + 1) // 2)
+        chrome = {line for line, count in line_slides.items() if count >= threshold}
+        if chrome:
+            for unit in output:
+                if not unit["text"]:
+                    continue
+                kept = [ln for ln in unit["text"].splitlines()
+                        if re.sub(r"\s+", " ", ln).strip().casefold() not in chrome]
+                stripped = clean("\n".join(kept))
+                if stripped:
+                    unit["text"] = stripped
     return output
 
 

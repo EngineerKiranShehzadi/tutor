@@ -196,3 +196,52 @@ export const documentToRows = async (
     quality:{sourceUnits:extracted.units.length,sourceCharacters:extracted.units.reduce((n,u)=>n+u.text.length,0),
       qaRecords,proseRecords,qaChildRecords,outputRecords:rows.length,warnings:warnings.length} };
 };
+
+export type VisualReviewDecision = { include: boolean; reviewed: boolean };
+
+// Reconcile admin visual-review choices with the planner rows. A visual can be
+// present in one of two shapes: merged INLINE into a short slide's own text
+// ("[Diagram and figure interpretation from <locator>]" inside a Part row), or
+// as a SEPARATE "| <locator> | Visual N" row (longer pages split it out). The
+// decision must be honored in whichever shape it exists, and a second copy must
+// never be added — adding a separate record for a slide whose vision is already
+// inline is what duplicated the description.
+export function applyVisualReviewDecisions(
+  baseRows: RawRow[],
+  visualReviewPages: VisualReviewPage[],
+  decisions: Record<string, VisualReviewDecision>,
+  safeName: string,
+): RawRow[] {
+  let rows = [...baseRows];
+  for (const page of visualReviewPages) {
+    const decision = decisions[page.locator];
+    const include = decision ? decision.include : page.candidateIncluded;
+    const inlineMarker = '[Diagram and figure interpretation from ' + page.locator + ']';
+    const separateMarker = ' | ' + page.locator + ' | Visual ';
+
+    // Already merged inline into the slide's own text unit.
+    const inlineRow = rows.find(row => typeof row.answer === 'string' && row.answer.includes(inlineMarker));
+    if (inlineRow && typeof inlineRow.answer === 'string') {
+      if (!include) {
+        // Excluded: cut the inline vision block, keep the native slide text.
+        inlineRow.answer = inlineRow.answer.slice(0, inlineRow.answer.indexOf(inlineMarker)).trimEnd();
+      }
+      continue; // included: leave inline as-is; never add a duplicate record
+    }
+
+    // Otherwise it is (or would be) a separate visual row.
+    const hasSeparateRow = rows.some(row => typeof row.question === 'string' && row.question.includes(separateMarker));
+    rows = rows.filter(row => typeof row.question !== 'string' || !row.question.includes(separateMarker) || include);
+    if (include && !hasSeparateRow && page.candidateDescription.trim().length >= 15) {
+      rows.push({
+        qa_id: 'doc_' + createHash('sha256').update([safeName, page.locator, 'Visual reviewed'].join('\0')).digest('hex').slice(0, 24),
+        is_document_chunk: true,
+        question: 'Source excerpt: ' + safeName + ' | ' + page.locator + ' | Visual 1',
+        answer: '[Diagram and figure interpretation]\n' + page.candidateDescription,
+        topic: page.locator,
+        start_time: safeName + ' | ' + page.locator,
+      });
+    }
+  }
+  return rows;
+}

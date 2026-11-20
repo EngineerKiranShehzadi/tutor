@@ -95,14 +95,15 @@ export async function outcomeQuestions(courseId:number,limit=50) {
   positive(courseId,'course');
   if(!Number.isSafeInteger(limit)||limit<1||limit>100)throw new AppError('Limit must be 1–100',400);
   const {rows}=await query<any>(
-    `SELECT q.id,q.lecture_id,l.title AS lecture_title,q.question,m.outcome_id
+    `SELECT q.id,q.lecture_id,l.title AS lecture_title,q.question,q.category,q.evidence_quote,m.outcome_id
       FROM practice_questions q JOIN practice_quizzes z ON z.id=q.quiz_id
       JOIN lectures l ON l.id=q.lecture_id
       LEFT JOIN practice_question_outcomes m ON m.question_id=q.id
       WHERE z.course_id=$1 ORDER BY q.id DESC LIMIT $2`,[courseId,limit]);
   return rows.map(r=>({
     questionId:Number(r.id),lectureId:Number(r.lecture_id),lectureTitle:r.lecture_title,
-    question:r.question,outcomeId:r.outcome_id===null?null:Number(r.outcome_id)
+    question:r.question,category:r.category,evidenceQuote:r.evidence_quote??null,
+    outcomeId:r.outcome_id===null?null:Number(r.outcome_id)
   }));
 }
 export async function studentOutcomeProgress(studentId:string,courseId:number){

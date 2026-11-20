@@ -14,7 +14,7 @@ const IMAGE_CONCURRENCY = 3;
 const MODEL = process.env.DOCUMENT_VISION_MODEL || 'gpt-4.1-mini';
 const ENABLED = process.env.DOCUMENT_VISION_ENABLED !== 'false';
 
-async function renderVisualPages(buffer: Buffer, extension: string, canonicalPdfPath: string): Promise<VisualPage[]> {
+async function renderVisualPages(buffer: Buffer, extension: string, canonicalPdfPath: string): Promise<{ pages: VisualPage[]; skipped: string[] }> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.env.DOCUMENT_EXTRACT_PYTHON || 'python3',
       [SCRIPT, '--extension', extension, '--max-bytes', String(Math.min(env.DATASET.MAX_UPLOAD_BYTES, 25 * 1024 * 1024)),
@@ -23,12 +23,12 @@ async function renderVisualPages(buffer: Buffer, extension: string, canonicalPdf
     let output = '';
     let bytes = 0;
     let settled = false;
-    const settle = (err?: Error, pages?: VisualPage[]) => {
+    const settle = (err?: Error, result?: { pages: VisualPage[]; skipped: string[] }) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       if (err) reject(err);
-      else resolve(pages || []);
+      else resolve(result || { pages: [], skipped: [] });
     };
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
@@ -44,19 +44,22 @@ async function renderVisualPages(buffer: Buffer, extension: string, canonicalPdf
     child.on('error', () => settle(new AppError('Visual extraction environment is unavailable. Install Python vision requirements and LibreOffice for presentations.', 503)));
     child.on('close', code => {
       if (settled) return;
-      let parsed: { pages?: VisualPage[]; error?: string };
+      let parsed: { pages?: VisualPage[]; skipped?: string[]; error?: string };
       try { parsed = JSON.parse(output); }
       catch { settle(new AppError('Could not render visual content.', 422)); return; }
       if (code !== 0 || parsed.error) {
         settle(new AppError(String(parsed.error ?? 'Visual rendering failed').slice(0, 250), 422));
         return;
       }
+      const skipped = parsed.skipped ?? [];
       if (!Array.isArray(parsed.pages) || parsed.pages.length > PAGE_LIMIT ||
-          parsed.pages.some(p => !/^((Page|Slide) \d+)$/.test(p.locator) || typeof p.image !== 'string' || p.image.length > 600000)) {
+          parsed.pages.some(p => !/^((Page|Slide) \d+)$/.test(p.locator) || typeof p.image !== 'string' || p.image.length > 600000) ||
+          !Array.isArray(skipped) || skipped.length > PAGE_LIMIT ||
+          skipped.some(s => typeof s !== 'string' || !/^((Page|Slide) \d+)$/.test(s))) {
         settle(new AppError('Invalid visual rendering output.', 422));
         return;
       }
-      settle(undefined, parsed.pages);
+      settle(undefined, { pages: parsed.pages, skipped });
     });
     child.stdin.on('error', () => undefined);
     child.stdin.end(buffer);
@@ -113,6 +116,29 @@ export function formatVisualDescription(result: VisionDescription): string {
     ...(result.connections?.length ? ['Diagram edges and directions: ' + result.connections.join(' | ')] : []),
     ...(result.uncertainty?.length ? ['Uncertain visual details: ' + result.uncertainty.join(' | ')] : []),
   ].filter(Boolean).join('\n');
+}
+
+// Backstop against duplicating content that was already extracted as native
+// text (e.g. a Word table also re-described by the vision model). Returns the
+// fraction of the description's distinctive content words that already appear
+// in the document's native text; a high fraction means the description adds
+// nothing new and should default to excluded.
+const NATIVE_DUPLICATE_THRESHOLD = 0.75;
+const _COVERAGE_STOP = new Set(('the a an and or of to in on for with is are was were be been it its as at by from into this that these those page pages contains contain table tables titled listing list include includes including column columns task tasks time slot slots paired specific range ranges also textual instruction instructions heading headings visual visuals element elements than not no more each their some two other corresponding daily').split(' '));
+function nativeTextCoverage(description: string, sourceText: string): number {
+  const tokens = (value: string): Set<string> => {
+    const out = new Set<string>();
+    for (const word of value.toLowerCase().match(/[a-z0-9]+/g) ?? []) {
+      if (word.length > 2 && !_COVERAGE_STOP.has(word)) out.add(word);
+    }
+    return out;
+  };
+  const described = tokens(description);
+  if (described.size < 8) return 0; // too little distinctive content to judge
+  const native = tokens(sourceText);
+  let common = 0;
+  for (const word of described) if (native.has(word)) common++;
+  return common / described.size;
 }
 
 export function mergeVisionIntoUnits(units: VisionUnit[], descriptions: Map<string, string>): VisionUnit[] {
@@ -229,8 +255,8 @@ export async function enrichDocumentWithVision(
 async function enrichDocumentWithVisionInJob(
   buffer: Buffer, extension: string, units: VisionUnit[], canonicalPdfPath: string
 ): Promise<{ units: VisionUnit[]; warnings: string[]; visualReviewPages: VisualReviewPage[] }> {
-  const pages = await renderVisualPages(buffer, extension, canonicalPdfPath);
-  if (!pages.length) return { units, warnings: [], visualReviewPages: [] };
+  const { pages, skipped } = await renderVisualPages(buffer, extension, canonicalPdfPath);
+  if (!pages.length && !skipped.length) return { units, warnings: [], visualReviewPages: [] };
   const all = new Map(units.map(u => [u.locator, u.text]));
   const sourceText = units.map(u => u.text).join('\n');
   const explanations = new Map<string, string>();
@@ -309,6 +335,13 @@ async function enrichDocumentWithVisionInJob(
         if (visualTimeConflict(visual, sourceText)) {
           pageStatuses.set(locator, 'omitted: conflicts with selectable source text');
           warnings.push('Visual interpretation for ' + locator + ' conflicts with selectable source time ranges; visual description omitted. Original source text is preserved.');
+        } else if (nativeTextCoverage(visual, sourceText) >= NATIVE_DUPLICATE_THRESHOLD) {
+          // The description restates text already extracted natively (e.g. a Word
+          // table read as text and then re-described). Leave it out by default so
+          // the dataset is not duplicated; the page still appears in review with
+          // Include off, so a genuine missed diagram can be added back by hand.
+          pageStatuses.set(locator, 'omitted: already captured as native text');
+          warnings.push('Visual interpretation for ' + locator + ' duplicates text already extracted from the document, so it was left out by default. Include it only if this page holds a real diagram the text misses.');
         } else {
           explanations.set(locator, visual);
           pageStatuses.set(locator, confident && response[j].relevant ? 'included with visual evidence' : 'kept for review');
@@ -326,11 +359,12 @@ async function enrichDocumentWithVisionInJob(
     list.push(page.locator);
     groupedStatuses.set(status, list);
   }
-  const scope = extension === '.docx' ? 'all rendered DOCX pages' : 'rendered visual candidate pages';
+  const scope = extension === '.docx' ? 'rendered DOCX image/scanned pages' : 'rendered visual candidate pages';
   const statusText = [...groupedStatuses.entries()]
     .map(([status, locators]) => status + ': ' + locators.join(', '))
     .join(' | ');
   warnings.push('Per-page visual scan: checked ' + pages.length + '/' + pages.length + ' ' + scope + '. ' + statusText);
+  if (skipped.length) warnings.push('Skipped visual analysis on ' + skipped.length + ' text-only page(s) with no embedded image (their content is already captured as text): ' + skipped.join(', ') + '. Open the original only if one of these holds a hand-drawn diagram the text misses.');
   if (explanations.size) warnings.push('Vision-grounded descriptions from ' + explanations.size + ' diagram-bearing page(s)/slide(s) were joined with their source text. Inspect important diagrams for model interpretation errors.');
   return { units: mergeVisionIntoUnits(units, explanations), warnings, visualReviewPages };
 }
