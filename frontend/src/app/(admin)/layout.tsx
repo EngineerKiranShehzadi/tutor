@@ -22,7 +22,6 @@ const COURSE_NAV = [
 
 const ADMIN_NAV = [
   { href: '/admin/users',    icon: 'fas fa-users-gear',  label: 'Team' },
-  { href: '/admin/agents',   icon: 'fas fa-robot',       label: 'AI Agents' },
   { href: '/admin/monitor',  icon: 'fas fa-heart-pulse', label: 'Tutor Health' },
   { href: '/admin/settings', icon: 'fas fa-circle-user', label: 'My Account' },
 ];

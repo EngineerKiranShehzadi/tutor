@@ -30,8 +30,9 @@ export const Logo = ({ variant = 'dark', size = 'full', className = '' }: Props)
   const onDark     = variant === 'dark';
   const textMain   = variant === 'dark' ? '#ffffff' : '#1c1f24';
   // On the dark band the accent is lightened so it stays legible; on white
-  // it is the brand colour itself.
-  const textAccent = variant === 'dark' ? '#8fb0d0' : '#1f3a5f';
+  // it is lifted off the brand navy, otherwise TUTOR reads as the same
+  // colour as AskAI.
+  const textAccent = variant === 'dark' ? '#8fb0d0' : '#2d5c8f';
   const wordmarkFont = "var(--font-sans), 'Segoe UI', system-ui, sans-serif";
 
   // ViewBox width tightens for compact and icon variants
@@ -47,10 +48,13 @@ export const Logo = ({ variant = 'dark', size = 'full', className = '' }: Props)
     >
       <defs>
         {/* Brand gradient - one hue in two stops, so the tile has depth
-            without bringing a second colour into the theme. */}
+            without bringing a second colour into the theme. Both stops sit
+            above --accent (#1f3a5f), because the navbar, the admin sidebar
+            and the sign-in panel are all that colour; a darker tile on them
+            lost its edge and only the white nodes stayed visible. */}
         <linearGradient id="lg-askai" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%"   stopColor="#2a4a76" />
-          <stop offset="100%" stopColor="#142b45" />
+          <stop offset="0%"   stopColor="#4a74a8" />
+          <stop offset="100%" stopColor="#2e537f" />
         </linearGradient>
 
         {/* Inner depth — top-left radial glow for glass/depth feel */}

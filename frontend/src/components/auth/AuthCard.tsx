@@ -3,7 +3,7 @@ import { Logo } from '@/components/ui/Logo';
 
 const POINTS = [
   'Answers drawn only from your lecture',
-  'Every answer shows its slide and timestamp',
+  'If your lecture does not cover it, the tutor says so',
   'Ask by typing or by speaking',
 ];
 
