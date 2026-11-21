@@ -451,6 +451,41 @@ export const env = {
       TIMEOUT_MS:  positiveInt('OUTPUT_FORMAT_REPAIR_LLM_TIMEOUT_MS', 4000),
       TEMPERATURE: finiteFloat('OUTPUT_FORMAT_REPAIR_LLM_TEMPERATURE', 0),
     },
+    // ── Agentic RAG graph agents (rag/agentic-graph) ──────────────────
+    // Each has its own task config so provider/model can be tuned per agent.
+    // TEMPERATURE defaults to 0 for every one of them: these are judgment /
+    // expansion steps whose output must be stable run-to-run, which is what
+    // keeps the graph reproducible for evaluation.
+    RELEVANCE_GRADER: {
+      PROVIDER:    optional('RELEVANCE_GRADER_LLM_PROVIDER', DEFAULT_LLM_PROVIDER),
+      MODEL:       optional('RELEVANCE_GRADER_LLM_MODEL', DEFAULT_LLM_MODEL),
+      TIMEOUT_MS:  positiveInt('RELEVANCE_GRADER_LLM_TIMEOUT_MS', 6000),
+      TEMPERATURE: finiteFloat('RELEVANCE_GRADER_LLM_TEMPERATURE', 0),
+    },
+    ANSWER_USEFULNESS: {
+      PROVIDER:    optional('ANSWER_USEFULNESS_LLM_PROVIDER', DEFAULT_LLM_PROVIDER),
+      MODEL:       optional('ANSWER_USEFULNESS_LLM_MODEL', DEFAULT_LLM_MODEL),
+      TIMEOUT_MS:  positiveInt('ANSWER_USEFULNESS_LLM_TIMEOUT_MS', 6000),
+      TEMPERATURE: finiteFloat('ANSWER_USEFULNESS_LLM_TEMPERATURE', 0),
+    },
+    CLARITY_ASSESSOR: {
+      PROVIDER:    optional('CLARITY_ASSESSOR_LLM_PROVIDER', DEFAULT_LLM_PROVIDER),
+      MODEL:       optional('CLARITY_ASSESSOR_LLM_MODEL', DEFAULT_LLM_MODEL),
+      TIMEOUT_MS:  positiveInt('CLARITY_ASSESSOR_LLM_TIMEOUT_MS', 5000),
+      TEMPERATURE: finiteFloat('CLARITY_ASSESSOR_LLM_TEMPERATURE', 0),
+    },
+    HYDE: {
+      PROVIDER:    optional('HYDE_LLM_PROVIDER', DEFAULT_LLM_PROVIDER),
+      MODEL:       optional('HYDE_LLM_MODEL', DEFAULT_LLM_MODEL),
+      TIMEOUT_MS:  positiveInt('HYDE_LLM_TIMEOUT_MS', 6000),
+      TEMPERATURE: finiteFloat('HYDE_LLM_TEMPERATURE', 0),
+    },
+    MULTI_QUERY: {
+      PROVIDER:    optional('MULTI_QUERY_LLM_PROVIDER', DEFAULT_LLM_PROVIDER),
+      MODEL:       optional('MULTI_QUERY_LLM_MODEL', DEFAULT_LLM_MODEL),
+      TIMEOUT_MS:  positiveInt('MULTI_QUERY_LLM_TIMEOUT_MS', 6000),
+      TEMPERATURE: finiteFloat('MULTI_QUERY_LLM_TEMPERATURE', 0),
+    },
   },
 
   // ── Input Guardrail (pre-query) ─────────────────────────────────

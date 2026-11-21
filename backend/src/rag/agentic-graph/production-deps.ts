@@ -44,9 +44,6 @@ export interface ProductionDepsContext {
 export function buildProductionDeps(ctx: ProductionDepsContext): GraphDeps {
   const topK = ctx.topK ?? 5;
   const topN = ctx.topN ?? 5;
-  // Reuse the judge-like verification task config for the two new agents so
-  // no new env is required. Split into dedicated tasks later if desired.
-  const judgeCfg = env.LLM.ANSWER_VERIFICATION;
 
   return {
     classifyRoute: async (question) => (await classifyRoute(question)).route,
@@ -54,7 +51,7 @@ export function buildProductionDeps(ctx: ProductionDepsContext): GraphDeps {
     greet: (question, lectureTitle, history) =>
       generateGreetingResponse(question, lectureTitle, history),
 
-    assessClarity: (question, history) => assessClarity(question, history, judgeCfg),
+    assessClarity: (question, history) => assessClarity(question, history, env.LLM.CLARITY_ASSESSOR),
 
     transformQuery: async (question, history) =>
       (await resolveRetrievalQuery(question, history)).query,
@@ -65,8 +62,8 @@ export function buildProductionDeps(ctx: ProductionDepsContext): GraphDeps {
       // nothing) so expansion can only help, never break retrieval.
       const variants = [query];
       const [hyde, paraphrases] = await Promise.all([
-        generateHyde(query, judgeCfg),
-        expandMultiQuery(query, judgeCfg),
+        generateHyde(query, env.LLM.HYDE),
+        expandMultiQuery(query, env.LLM.MULTI_QUERY),
       ]);
       if (hyde) variants.push(hyde);
       variants.push(...paraphrases);
@@ -90,7 +87,7 @@ export function buildProductionDeps(ctx: ProductionDepsContext): GraphDeps {
       return reorderForContext(reranked);
     },
 
-    gradeDocuments: (question, documents) => gradeRelevance(question, documents, judgeCfg),
+    gradeDocuments: (question, documents) => gradeRelevance(question, documents, env.LLM.RELEVANCE_GRADER),
 
     generate: (args) =>
       generateAnswer(
@@ -122,7 +119,7 @@ export function buildProductionDeps(ctx: ProductionDepsContext): GraphDeps {
       };
     },
 
-    verifyUseful: (question, draft) => judgeUsefulness(question, draft, judgeCfg),
+    verifyUseful: (question, draft) => judgeUsefulness(question, draft, env.LLM.ANSWER_USEFULNESS),
 
     revise: async (args) => {
       const outcome = await reviseAnswer({

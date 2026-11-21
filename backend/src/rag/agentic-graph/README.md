@@ -102,9 +102,11 @@ if (env.AGENTIC_GRAPH_ENABLED) {
   (pass a stream handler through `production-deps.generate`).
 - Optionally add `dedupeAndSelect` between rerank and reorder in
   `production-deps.retrieve` (left out pending its `DedupeResult` shape).
-- Optionally split the grader/usefulness LLM config into dedicated
-  `env.LLM.RELEVANCE_GRADER` / `ANSWER_USEFULNESS` tasks (they currently reuse
-  `ANSWER_VERIFICATION`). Keep their `TEMPERATURE` at 0 for reproducibility.
+- Each agent has its own `env.LLM.*` task config — `RELEVANCE_GRADER`,
+  `ANSWER_USEFULNESS`, `CLARITY_ASSESSOR`, `HYDE`, `MULTI_QUERY` — all defaulting
+  to `DEFAULT_LLM_PROVIDER/MODEL` at `TEMPERATURE=0`. Override per agent via the
+  matching env vars (e.g. `RELEVANCE_GRADER_LLM_MODEL`); keep temperature at 0
+  for reproducibility.
 
 ## Dependency note
 
