@@ -102,7 +102,13 @@ export function buildProductionDeps(ctx: ProductionDepsContext): GraphDeps {
       // (dedupeAndSelect, default DEFAULT_MIN_RERANK_SCORE) so the two modes
       // are compared on equal footing — agentic doesn't get a richer or
       // lower-quality context than legacy for the same lecture.
-      const reranked = await rerankChunks(primary, Array.from(byId.values()), topN);
+      // Rerank the FULL fused pool (not just topN) so dedupeAndSelect can
+      // backfill a de-duplicated slot from the next-best candidate — exactly
+      // like legacy, which reranks all candidates then selects. Capping at
+      // topN before dedupe would leave agentic short a chunk whenever a
+      // duplicate is removed.
+      const pool = Array.from(byId.values());
+      const reranked = await rerankChunks(primary, pool, pool.length);
       const { selected } = dedupeAndSelect(reranked, topN);
       return reorderForContext(selected);
     },
