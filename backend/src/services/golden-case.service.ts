@@ -59,6 +59,34 @@ const map = (r: any): GoldenCase => ({
 const caseKey = (lectureId: number, datasetVersionId: number, qaId: string): string =>
   `L${lectureId}-V${datasetVersionId}-${createHash('sha256').update(qaId).digest('hex').slice(0, 8)}`;
 
+// Manual cases key on the normalised question (own 'manual:' namespace, so it
+// never collides with a draft's qa_id hash): re-adding the same question to the
+// same version is reported as a duplicate instead of creating a second case.
+const manualCaseKey = (lectureId: number, datasetVersionId: number, question: string): string =>
+  `L${lectureId}-V${datasetVersionId}-m${createHash('sha256')
+    .update('manual:' + question.trim().toLowerCase().replace(/\s+/g, ' '))
+    .digest('hex').slice(0, 8)}`;
+
+const validEvidence = (ids: unknown): ids is number[] =>
+  Array.isArray(ids) && ids.every(x => Number.isSafeInteger(x) && (x as number) >= 1) && new Set(ids).size === ids.length;
+
+// Expected evidence must be chunks of the case's PINNED dataset version.
+// Otherwise retrieval on that version can never return them and the case
+// silently scores 0 recall instead of being caught at review time.
+async function assertEvidenceInVersion(datasetVersionId: number, ids: number[]): Promise<void> {
+  if (!ids.length) return;
+  const { rows } = await query<{ chunk_id: number }>(
+    `SELECT d.chunk_id FROM dataset_version_chunks d
+      WHERE d.version_id = $1 AND d.chunk_id = ANY($2::int[])`,
+    [datasetVersionId, ids]
+  );
+  const found = new Set(rows.map(r => Number(r.chunk_id)));
+  const missing = ids.filter(id => !found.has(id));
+  if (missing.length) {
+    throw new AppError(`Chunk ID(s) ${missing.slice(0, 10).join(', ')} are not in dataset version ${datasetVersionId}`, 400);
+  }
+}
+
 /**
  * Draft benchmark cases from a dataset version's OWN Q&A chunks. Grounded only
  * in that version; evidence is the source chunk IDs (not retrieval). Existing
@@ -161,8 +189,8 @@ export async function reviewGoldenCase(
   if (question.length < 5) throw new AppError('Question must be at least 5 characters', 400);
   const category = input.category ?? existing.category;
   const answerable = input.answerable ?? existing.answerable;
-  let expected = input.expectedChunkIds !== undefined ? input.expectedChunkIds : existing.expectedChunkIds;
-  if (!Array.isArray(expected) || expected.some(x => !Number.isSafeInteger(x) || x < 1) || new Set(expected).size !== expected.length) {
+  const expected = input.expectedChunkIds !== undefined ? input.expectedChunkIds : existing.expectedChunkIds;
+  if (!validEvidence(expected)) {
     throw new AppError('expectedChunkIds must be unique positive integers', 400);
   }
 
@@ -171,6 +199,7 @@ export async function reviewGoldenCase(
   if (input.status === 'APPROVED' && answerable && expected.length === 0) {
     throw new AppError('Cannot approve an answerable case with no expected chunk IDs — add evidence or mark NEEDS_EVIDENCE', 400);
   }
+  if (input.expectedChunkIds !== undefined) await assertEvidenceInVersion(existing.datasetVersionId, expected);
 
   const { rows } = await query<any>(
     `UPDATE golden_benchmark_cases
@@ -181,6 +210,60 @@ export async function reviewGoldenCase(
       RETURNING *`,
     [id, input.status, question, category, answerable, expected, reviewerId]
   );
+  return map(rows[0]);
+}
+
+/**
+ * Add a case by hand. This is the only way to put an UNSUPPORTED case (a
+ * question the lecture cannot answer) or a paraphrased/compound question into
+ * the bank — drafts are always answerable. The dashboard import requires both
+ * answerable and unsupported cases, so without this an exported gold set could
+ * never be saved as an official run. The case starts as DRAFT and still needs
+ * an explicit review decision before it exports.
+ */
+export async function createGoldenCase(
+  creatorId: string,
+  input: {
+    lectureId: number;
+    datasetVersionId: number;
+    question: string;
+    category: string;
+    answerable: boolean;
+    expectedChunkIds?: number[];
+    expectedAnswer?: string | null;
+  }
+): Promise<GoldenCase> {
+  const lectureId = posInt(input.lectureId, 'lectureId');
+  const datasetVersionId = posInt(input.datasetVersionId, 'datasetVersionId');
+  const question = String(input.question ?? '').trim();
+  if (question.length < 5 || question.length > 2000) throw new AppError('Question must be 5–2000 characters', 400);
+  if (!VALID_CATEGORIES.has(input.category)) throw new AppError('Invalid category', 400);
+  if (typeof input.answerable !== 'boolean') throw new AppError('answerable must be true or false', 400);
+  const expected = input.expectedChunkIds ?? [];
+  if (!validEvidence(expected)) throw new AppError('expectedChunkIds must be unique positive integers', 400);
+  if (!input.answerable && expected.length > 0) throw new AppError('An unsupported case must have no expected chunk IDs', 400);
+  const expectedAnswer = input.expectedAnswer ? String(input.expectedAnswer).trim().slice(0, 20000) || null : null;
+
+  const owns = await query<{ ok: number }>(
+    `SELECT 1 AS ok FROM dataset_versions WHERE id = $1 AND lecture_id = $2`,
+    [datasetVersionId, lectureId]
+  );
+  if (!owns.rows.length) throw new AppError('Dataset version does not belong to this lecture', 404);
+  await assertEvidenceInVersion(datasetVersionId, expected);
+
+  const { rows } = await query<any>(
+    `INSERT INTO golden_benchmark_cases
+       (case_key, lecture_id, dataset_version_id, question, expected_answer,
+        expected_chunk_ids, source_chunk_ids, category, answerable,
+        review_status, generation_method, generation_metadata)
+     VALUES ($1,$2,$3,$4,$5,$6::int[],'{}'::int[],$7,$8,'DRAFT',$9,
+             jsonb_build_object('createdBy',$10::text))
+     ON CONFLICT (dataset_version_id, case_key) DO NOTHING
+     RETURNING *`,
+    [manualCaseKey(lectureId, datasetVersionId, question), lectureId, datasetVersionId, question,
+     expectedAnswer, expected, input.category, input.answerable, 'MANUAL', creatorId]
+  );
+  if (!rows.length) throw new AppError('This question already exists as a case for this dataset version', 409);
   return map(rows[0]);
 }
 

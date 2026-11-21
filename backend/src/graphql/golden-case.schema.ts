@@ -21,5 +21,7 @@ export const goldenCaseTypeDefs = `#graphql
  extend type Mutation {
   generateGoldenDraftCases(lectureId:Int!,datasetVersionId:Int!):GoldenDraftSummary!
   reviewGoldenCase(id:Int!,status:String!,question:String,category:String,answerable:Boolean,expectedChunkIds:[Int!]):GoldenCase!
+  # Hand-written case (e.g. UNSUPPORTED / paraphrase); starts as DRAFT.
+  createGoldenCase(lectureId:Int!,datasetVersionId:Int!,question:String!,category:String!,answerable:Boolean!,expectedChunkIds:[Int!],expectedAnswer:String):GoldenCase!
  }
 `;

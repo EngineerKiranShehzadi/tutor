@@ -22,6 +22,7 @@
     "capture:rag": "ts-node --transpile-only src/scripts/capture-rag-predictions.ts",
     "export:gold": "ts-node --transpile-only src/scripts/export-golden-cases.ts",
     "gold:cli": "ts-node --transpile-only src/scripts/golden-cli.ts",
+    "test:golden-cases": "ts-node --transpile-only src/scripts/test-golden-cases.ts",
     "diagnose:duplicates": "ts-node --transpile-only src/scripts/diagnose-duplicate-answers.ts",
     "validate:reorder": "ts-node --transpile-only src/scripts/validate-reorder.ts",
     "eval:reorder-comparison": "ts-node --transpile-only src/scripts/eval-reorder-comparison.ts",

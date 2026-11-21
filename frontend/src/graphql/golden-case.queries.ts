@@ -4,7 +4,7 @@ export const GET_GOLDEN_CASES=gql`
  query GoldenBenchmarkCases($datasetVersionId:Int!,$status:String){
   goldenBenchmarkCases(datasetVersionId:$datasetVersionId,status:$status){
    id caseKey lectureId datasetVersionId question category answerable
-   reviewStatus expectedChunkIds reviewedBy createdAt
+   reviewStatus generationMethod expectedChunkIds reviewedBy createdAt
   }
  }
 `;
@@ -18,8 +18,18 @@ export const GENERATE_GOLDEN_DRAFTS=gql`
 `;
 
 export const REVIEW_GOLDEN_CASE=gql`
- mutation ReviewGoldenCase($id:Int!,$status:String!){
-  reviewGoldenCase(id:$id,status:$status){ id reviewStatus reviewedBy }
+ mutation ReviewGoldenCase($id:Int!,$status:String!,$question:String,$category:String,$answerable:Boolean,$expectedChunkIds:[Int!]){
+  reviewGoldenCase(id:$id,status:$status,question:$question,category:$category,answerable:$answerable,expectedChunkIds:$expectedChunkIds){
+   id reviewStatus question category answerable expectedChunkIds reviewedBy
+  }
+ }
+`;
+
+export const CREATE_GOLDEN_CASE=gql`
+ mutation CreateGoldenCase($lectureId:Int!,$datasetVersionId:Int!,$question:String!,$category:String!,$answerable:Boolean!,$expectedChunkIds:[Int!]){
+  createGoldenCase(lectureId:$lectureId,datasetVersionId:$datasetVersionId,question:$question,category:$category,answerable:$answerable,expectedChunkIds:$expectedChunkIds){
+   id caseKey reviewStatus
+  }
  }
 `;
 

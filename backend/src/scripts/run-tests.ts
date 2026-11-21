@@ -79,6 +79,7 @@ const SUITES: Suite[] = [
   { name: 'practice-quiz', script: 'src/scripts/test-practice-quiz.ts' },
   { name: 'clo-alignment', script: 'src/scripts/test-clo-alignment.ts' },
   { name: 'dataset-pipeline', script: 'src/scripts/test-dataset-pipeline.ts' },
+  { name: 'golden-cases', script: 'src/scripts/test-golden-cases.ts' },
 ];
 
 function main(): void {
