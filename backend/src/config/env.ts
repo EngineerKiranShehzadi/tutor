@@ -156,6 +156,13 @@ export const env = {
   // not done by then, the process exits with code 1. See server.ts.
   SHUTDOWN_TIMEOUT_MS: positiveInt('SHUTDOWN_TIMEOUT_MS', 10000),
 
+  // Experimental: route askLectureAgent through the agentic RAG graph
+  // (rag/agentic-graph) instead of the legacy straight-line pipeline. Off by
+  // default — when off, behaviour is exactly as before. See the graph's
+  // README for what the graph mode currently does and does not re-apply
+  // (output guardrail, answer-memory, streaming).
+  AGENTIC_GRAPH_ENABLED: optional('AGENTIC_GRAPH_ENABLED', 'false') === 'true',
+
   // Production only: also write logs/error.log and logs/combined.log (10 MB
   // size rotation, 5 files). Off by default — production logs go to the
   // console as JSON. See utils/logger.ts.

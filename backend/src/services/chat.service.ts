@@ -555,6 +555,54 @@ export const askLectureAgent = async (
       logger.info(`[CHAT] 📚 Passing ${historyTurns.length} prior turn(s) as context`);
     }
 
+    // ── Agentic RAG graph (experimental, flag-gated) ──────────────────────
+    // When AGENTIC_GRAPH_ENABLED, the LangGraph orchestrator (rag/agentic-
+    // graph) owns routing AND the retrieve→grade→generate→verify reasoning
+    // loop, including its own groundedness + usefulness verification. The
+    // legacy straight-line path below runs unchanged when the flag is off.
+    //
+    // This branch keeps the cross-cutting concerns the orchestrator owns that
+    // the graph does not: it persists via saveChatEntry + touchSession and
+    // closes the trace exactly like every other terminal branch. KNOWN gaps
+    // vs the legacy path (tracked for follow-up, see agentic-graph/README):
+    //   - the legacy output-guardrail is NOT re-run (the graph self-verifies);
+    //   - answer-memory is NOT written (the graph does not surface the
+    //     retrievalQuery/questionEmbedding the memory writer needs);
+    //   - output PII guard and token streaming are not applied in graph mode.
+    if (env.AGENTIC_GRAPH_ENABLED) {
+      currentStage = 'agentic-graph';
+      const { askLectureAgentViaGraph } = await import('../rag/agentic-graph/entry');
+      const graphResult = await trace.span(
+        'agentic-graph',
+        () => askLectureAgentViaGraph({
+          question,
+          lectureId,
+          lectureTitle: lecture.title,
+          history: historyTurns,
+          context: { agentProfile, datasetVersionId: pinnedVersionId ?? undefined },
+        }),
+        r => ({
+          answerLength: r.answer.length,
+          agenticGraphTrace: r.trace.join(' | '),
+          ...(isContentCaptureEnabled() ? { [ATTR.OUTPUT_VALUE]: truncateContent(r.answer, 2000).value } : {}),
+        })
+      );
+      const answer = graphResult.answer;
+      const sources = graphResult.state.documents ?? [];
+      currentStage = 'save-chat-entry';
+      await trace.span('save-chat-entry', async () => {
+        await saveChatEntry({ studentId, lectureId, question, answer, sourceChunkIds: sources.map(c => c.id), sessionId, traceId: trace.traceId });
+        await touchSession(studentId, sessionId, question);
+      }, () => ({ sourceChunkCount: sources.length }));
+      logger.info(`[CHAT] ✅ Agentic-graph answer saved for session #${sessionId}`);
+      finishTrace('SUCCESS', {
+        responseStatus: 'ANSWERED',
+        memoryResult: 'NOT_ATTEMPTED',
+        ...(isContentCaptureEnabled() ? { [ATTR.OUTPUT_VALUE]: truncateContent(answer, 2000).value } : {}),
+      });
+      return { answer, sources };
+    }
+
     // 4b. Route the message before doing any retrieval work — different
     // request shapes use different processing paths instead of every
     // message going through the same vector-search pipeline.

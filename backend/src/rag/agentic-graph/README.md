@@ -75,33 +75,29 @@ Q&A dataset (`npm run eval:rag`).
 
 ## Wiring it into the orchestrator (the rewrite)
 
-The graph owns the reasoning loop; `chat.service.ts` still owns safety and
-persistence. Delegate behind a flag:
+**Done, behind a flag.** `services/chat.service.ts` has an early branch (after
+input-guardrail + agent-profile + dataset-version + history) gated on
+`env.AGENTIC_GRAPH_ENABLED` (added in `config/env.ts`, default `false`). When
+off, the legacy straight-line path runs exactly as before. When on, the graph
+owns routing + the reasoning loop; the branch still persists via
+`saveChatEntry` + `touchSession` and closes the trace like every other terminal
+branch.
 
-```ts
-// in askLectureAgent(), AFTER input-guardrail + agent-profile + dataset-version
-if (env.AGENTIC_GRAPH_ENABLED) {
-  const { answer, trace } = await askLectureAgentViaGraph({
-    question: guardedQuestion,
-    lectureId,
-    lectureTitle: lecture.title,
-    history: historyTurns,
-    context: { agentProfile, datasetVersionId },
-  });
-  // then: run output-guardrail on `answer`, write answer-memory, save chat entry
-}
-```
-
-### Before flipping the flag
-- Add `AGENTIC_GRAPH_ENABLED` (default `false`) to `config/env.ts`.
-- Run `npm run typecheck` — `production-deps.ts`, the two agents and `entry.ts`
-  were authored against the service signatures but need a compile in the full
-  backend (the sandbox they were built in can't install the repo's full deps).
-- Re-attach the cross-cutting concerns in `chat.service.ts` around the call:
-  output-guardrail, answer-memory write, OTel spans, and token **streaming**
-  (pass a stream handler through `production-deps.generate`).
-- Optionally add `dedupeAndSelect` between rerank and reorder in
-  `production-deps.retrieve` (left out pending its `DedupeResult` shape).
+### Before flipping the flag ON
+- Run `npm run typecheck` — the production files (`production-deps.ts`, `entry.ts`,
+  the five agents) and the orchestrator/env edits were authored against the real
+  service signatures but need a compile in the full backend (the sandbox they
+  were built in can't install the repo's full deps).
+- Run a live smoke test on one lecture with `AGENTIC_GRAPH_ENABLED=true`.
+- Known gaps in graph mode vs the legacy path (deliberate, for follow-up):
+  - the legacy **output-guardrail is not re-run** (the graph self-verifies via
+    its groundedness + usefulness nodes);
+  - **answer-memory is not written** (the graph doesn't surface the
+    `retrievalQuery`/`questionEmbedding` the memory writer needs);
+  - **output PII guard and token streaming** are not applied in graph mode
+    (pass a stream handler through `production-deps.generate` to restore it).
+  - Optionally add `dedupeAndSelect` between rerank and reorder in
+    `production-deps.retrieve` (left out pending its `DedupeResult` shape).
 - Each agent has its own `env.LLM.*` task config — `RELEVANCE_GRADER`,
   `ANSWER_USEFULNESS`, `CLARITY_ASSESSOR`, `HYDE`, `MULTI_QUERY` — all defaulting
   to `DEFAULT_LLM_PROVIDER/MODEL` at `TEMPERATURE=0`. Override per agent via the
