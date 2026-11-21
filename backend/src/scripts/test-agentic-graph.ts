@@ -103,6 +103,7 @@ async function run(): Promise<void> {
     eq('greet called once', calls.greet, 1);
     eq('retrieve never called', calls.retrieve, 0);
     eq('generate never called', calls.generate, 0);
+    eq('status GREETING_ANSWERED', s.graphStatus, 'GREETING_ANSWERED');
   }
 
   // ── Scenario 2: happy path (1 retrieve, relevant, verified) ─────────────
@@ -135,16 +136,18 @@ async function run(): Promise<void> {
     eq('graded twice', calls.gradeDocuments, 2);
   }
 
-  // ── Scenario 4: retrieval exhausted → honest no-answer ──────────────────
-  console.log('\n[4] Retrieve exhausted: always INSUFFICIENT, bounded by cap');
+  // ── Scenario 4: grader exhausted but docs present → best-effort generate ─
+  // The grader must NOT veto an answer the retrieved chunks could support:
+  // after the retry budget, if any docs were retrieved, generate anyway.
+  console.log('\n[4] Grader exhausted + docs present -> best-effort generate (no hard refusal)');
   {
     const { deps, calls } = makeMockDeps({ gradeDocuments: async () => 'INSUFFICIENT' });
     const g = buildAgenticGraph({ deps, config: { maxRetrieveAttempts: 2 } });
     const s = await runAgenticGraph(g, INPUT);
     eq('retrieveAttempts capped at 2', s.retrieveAttempts, 2);
-    eq('generate never called', calls.generate, 0);
-    check('answer is the honest fallback', s.answer.startsWith("I couldn't find enough"), s.answer);
-    eq('grade = INSUFFICIENT', s.grade, 'INSUFFICIENT');
+    eq('generated best-effort', calls.generate, 1);
+    eq('answer is the draft (not a hard refusal)', s.answer, 'DRAFT_V1');
+    eq('status ANSWERED', s.graphStatus, 'ANSWERED');
   }
 
   // ── Scenario 5: verify→revise loop (fails once, then passes) ────────────
@@ -188,6 +191,7 @@ async function run(): Promise<void> {
     eq('grader LLM never called on empty docs', calls.gradeDocuments, 0);
     eq('retrieveAttempts capped at 1', s.retrieveAttempts, 1);
     check('fell back to honest no-answer', s.answer.startsWith("I couldn't find enough"), s.answer);
+    eq('status NOT_FOUND', s.graphStatus, 'NOT_FOUND');
   }
 
   // ── Scenario 8: reproducibility — same input, identical path twice ──────
@@ -214,6 +218,7 @@ async function run(): Promise<void> {
     eq('transform never called', calls.transformQuery, 0);
     eq('retrieve never called', calls.retrieve, 0);
     eq('generate never called', calls.generate, 0);
+    eq('status CLARIFICATION', s.graphStatus, 'CLARIFICATION');
   }
 
   // ── Scenario 10: HyDE + multi-query expansion fans out retrieval ────────
@@ -250,6 +255,7 @@ async function run(): Promise<void> {
     eq('clarity assessed once', calls.assessClarity, 1);
     check('fell back to honest no-answer', s.answer.startsWith("I couldn't find enough"), s.answer);
     eq('generate never called', calls.generate, 0);
+    eq('status NOT_FOUND', s.graphStatus, 'NOT_FOUND');
   }
 
   // ── summary ─────────────────────────────────────────────────────────────

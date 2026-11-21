@@ -35,7 +35,7 @@ export function makeNodes(deps: GraphDeps, config: GraphConfig): AgenticNodes {
     // ── Greeting branch (no retrieval) ────────────────────────────────────
     async greet(s) {
       const answer = await deps.greet(s.question, s.lectureTitle, s.history);
-      return { answer, trace: ['greet: returned greeting (no retrieval)'] };
+      return { answer, graphStatus: 'GREETING_ANSWERED', trace: ['greet: returned greeting (no retrieval)'] };
     },
 
     // ── 1b. Clarity assessor (Clarification agent) ────────────────────────
@@ -52,6 +52,7 @@ export function makeNodes(deps: GraphDeps, config: GraphConfig): AgenticNodes {
     async clarify(s) {
       return {
         answer: s.clarification,
+        graphStatus: 'CLARIFICATION',
         trace: ['clarify: returned clarifying question (no retrieval)'],
       };
     },
@@ -163,6 +164,7 @@ export function makeNodes(deps: GraphDeps, config: GraphConfig): AgenticNodes {
     async insufficient() {
       return {
         answer: config.insufficientAnswer,
+        graphStatus: 'NOT_FOUND',
         trace: ['insufficient: retrieval exhausted -> honest no-answer'],
       };
     },

@@ -27,9 +27,17 @@ export interface BuildOptions {
 function afterGrade(config: GraphConfig) {
   return (s: AgenticStateType): 'generate' | 'transform' | 'insufficient' => {
     if (s.grade === 'RELEVANT') return 'generate';
-    // INSUFFICIENT: loop back to rewrite+retrieve while attempts remain.
+    // INSUFFICIENT: try one rewrite+retrieve to find better evidence.
     if (s.retrieveAttempts < config.maxRetrieveAttempts) return 'transform';
-    return 'insufficient';
+    // Exhausted. If retrieval DID return chunks, generate from them anyway and
+    // let the generator decide (its system prompt refuses on truly-uncovered
+    // context) — this matches legacy, which always generates from the
+    // floor-passing chunks. A hard "not found" only when retrieval returned
+    // nothing at all. Rationale: the grader must never veto an answer the
+    // retrieved evidence can actually support (full-run eval 2026-11-22:
+    // a strict grader caused 22.9% false refusals on answerable cases where
+    // the correct chunk was present and legacy answered them).
+    return s.documents.length > 0 ? 'generate' : 'insufficient';
   };
 }
 

@@ -101,6 +101,26 @@ branch.
     `dedupeAndSelect` relevance floor as the legacy path, so the two modes are
     compared on equal footing.
 
+### Relevance Grader tuning (important)
+The first full eval (2026-11-22, 90 golden cases) found the CRAG grader was the
+single biggest regression: it refused 22.9% of answerable cases (vs legacy 1.2%)
+even though the correct chunk was retrieved (retrieval hit was 98.8% in BOTH
+modes) — mostly where the relevance floor left only 1–2 chunks. Two changes
+address this:
+- The grader is now **lenient** (sufficient=true if the chunks contain *any*
+  relevant info; false only when clearly off-topic).
+- When the grader stays INSUFFICIENT after the retry budget **but chunks were
+  retrieved, the graph generates from them anyway** (the generator refuses
+  truly-uncovered context on its own) instead of returning the canned "not
+  found". A hard refusal only when retrieval returned nothing.
+- `GRADER_ENABLED=false` disables the grader entirely (every retrieval treated
+  as RELEVANT) — useful to A/B whether the grader adds value on a corpus whose
+  retrieval is already strong.
+
+Graph refusals/clarifications now report their own `responseStatus`
+(NOT_FOUND / CLARIFICATION / GREETING_ANSWERED), so monitoring no longer records
+them as ANSWERED.
+
 ### Clarification tuning
 The clarity assessor only asks when a message has a **dangling reference** it
 can't resolve ("explain that", "the other one") — it deliberately does NOT ask

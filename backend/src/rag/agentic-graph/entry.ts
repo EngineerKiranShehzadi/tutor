@@ -28,6 +28,9 @@ export interface AskViaGraphInput {
 
 export interface AskViaGraphResult {
   answer: string;
+  // Terminal status for observability — ANSWERED, NOT_FOUND, GREETING_ANSWERED
+  // or CLARIFICATION. A refusal/clarification is NEVER reported as ANSWERED.
+  responseStatus: string;
   // Full decision log for observability / evaluation (which path, how many loops).
   trace: string[];
   // Final state, in case the caller wants documents, grade, counters, etc.
@@ -44,5 +47,5 @@ export async function askLectureAgentViaGraph(input: AskViaGraphInput): Promise<
     history: input.history ?? [],
     agentProfileName: input.context.agentProfile?.agent_name ?? null,
   });
-  return { answer: state.answer, trace: state.trace, state };
+  return { answer: state.answer, responseStatus: state.graphStatus || 'ANSWERED', trace: state.trace, state };
 }

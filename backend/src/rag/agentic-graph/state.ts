@@ -63,6 +63,11 @@ export const AgenticState = Annotation.Root({
 
   // ── Output ─────────────────────────────────────────────────────────────
   answer: Annotation<string>({ reducer: replace, default: () => '' }),
+  // Terminal status, set by the node that ends the run, so the caller can map
+  // it to the right observability responseStatus (a refusal/clarification must
+  // NOT be recorded as 'ANSWERED'). One of: ANSWERED, NOT_FOUND,
+  // GREETING_ANSWERED, CLARIFICATION.
+  graphStatus: Annotation<string>({ reducer: replace, default: () => 'ANSWERED' }),
 
   // ── Observability ──────────────────────────────────────────────────────
   // Ordered log of every decision the graph made. Append reducer, so each

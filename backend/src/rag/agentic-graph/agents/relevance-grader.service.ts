@@ -34,13 +34,18 @@ export interface GraderTaskConfig {
 }
 
 const GRADER_SYSTEM_PROMPT =
-  'You are a strict retrieval grader for a lecture tutoring system. ' +
-  'Given a student question and the retrieved lecture excerpts, decide whether ' +
-  'the excerpts contain enough information to answer the question accurately and ' +
-  'completely, using ONLY those excerpts. Do not use outside knowledge. ' +
-  'Return strict JSON: {"sufficient": boolean, "reason": string}. ' +
-  'Mark sufficient=false if the excerpts are off-topic, only tangentially related, ' +
-  'or miss a key part of what was asked.';
+  'You are a LENIENT retrieval grader for a lecture tutoring system. The excerpts ' +
+  'you are given already passed a relevance filter, so your ONLY job is to catch ' +
+  'the rare case where they are about a completely different topic and contain ' +
+  'nothing that could help answer the question.\n' +
+  'Return strict JSON: {"sufficient": boolean, "reason": string}.\n' +
+  '- sufficient=true if the excerpts contain ANY information relevant to the ' +
+  'question — even a single excerpt, even partial coverage. A partial answer is ' +
+  'still worth generating; the answer step will say what is not covered.\n' +
+  '- sufficient=false ONLY if the excerpts are clearly off-topic / about something ' +
+  'else entirely.\n' +
+  'When in doubt, sufficient=true. Do NOT require complete or multi-excerpt ' +
+  'coverage.';
 
 const GraderResponse = z.object({
   sufficient: z.boolean(),

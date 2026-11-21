@@ -113,7 +113,12 @@ export function buildProductionDeps(ctx: ProductionDepsContext): GraphDeps {
       return reorderForContext(selected);
     },
 
-    gradeDocuments: (question, documents) => gradeRelevance(question, documents, env.LLM.RELEVANCE_GRADER),
+    // Grader kill switch: when disabled, every retrieval is treated as
+    // RELEVANT (generation proceeds; the generator still refuses truly
+    // uncovered context) — no grader LLM call.
+    gradeDocuments: env.GRADER_ENABLED
+      ? (question, documents) => gradeRelevance(question, documents, env.LLM.RELEVANCE_GRADER)
+      : async () => 'RELEVANT' as const,
 
     generate: (args) =>
       generateAnswer(

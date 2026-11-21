@@ -594,9 +594,11 @@ export const askLectureAgent = async (
         await saveChatEntry({ studentId, lectureId, question, answer, sourceChunkIds: sources.map(c => c.id), sessionId, traceId: trace.traceId });
         await touchSession(studentId, sessionId, question);
       }, () => ({ sourceChunkCount: sources.length }));
-      logger.info(`[CHAT] ✅ Agentic-graph answer saved for session #${sessionId}`);
+      logger.info(`[CHAT] ✅ Agentic-graph answer saved for session #${sessionId} (status=${graphResult.responseStatus})`);
       finishTrace('SUCCESS', {
-        responseStatus: 'ANSWERED',
+        // The graph reports its own terminal status, so a refusal/clarification
+        // is never recorded as ANSWERED.
+        responseStatus: graphResult.responseStatus,
         memoryResult: 'NOT_ATTEMPTED',
         ...(isContentCaptureEnabled() ? { [ATTR.OUTPUT_VALUE]: truncateContent(answer, 2000).value } : {}),
       });

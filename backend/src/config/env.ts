@@ -170,6 +170,12 @@ export const env = {
   // runs, where a clarifying question would otherwise count as a wrong answer.
   CLARIFICATION_ENABLED: optional('CLARIFICATION_ENABLED', 'true') === 'true',
 
+  // Agentic graph: whether the CRAG Relevance Grader runs. When false, the
+  // grader always returns RELEVANT, so generation proceeds on the retrieved
+  // chunks (the generator still refuses truly-uncovered context). Useful to
+  // A/B the grader's value on a corpus whose retrieval is already strong.
+  GRADER_ENABLED: optional('GRADER_ENABLED', 'true') === 'true',
+
   // Production only: also write logs/error.log and logs/combined.log (10 MB
   // size rotation, 5 files). Off by default — production logs go to the
   // console as JSON. See utils/logger.ts.
