@@ -1,9 +1,16 @@
 /**
  * Agentic vs Legacy RAG evaluation — the HONEST comparison.
  *
- *   npm run eval:agentic-vs-legacy            # all approved golden cases
- *   npm run eval:agentic-vs-legacy -- 10      # smoke run: first 10 cases
+ *   npm run eval:agentic-vs-legacy            # all approved golden cases, both modes
+ *   npm run eval:agentic-vs-legacy -- 10      # cap to first 10 cases
  *   RAG_TEST_EMAIL=you@school.edu npm run eval:agentic-vs-legacy
+ *
+ * Cheaper targeted runs (env-var filters, combine freely):
+ *   EVAL_LECTURES=9,7 npm run eval:agentic-vs-legacy    # only these lecture_ids
+ *   EVAL_MODES=agentic npm run eval:agentic-vs-legacy   # only one mode (half the runs)
+ *   EVAL_CASES=L9-V22-ab12cd34,... npm run eval:agentic-vs-legacy  # only these case keys
+ *   # e.g. re-check just the lectures that regressed, agentic only:
+ *   EVAL_LECTURES=9,7 EVAL_MODES=agentic npm run eval:agentic-vs-legacy
  *
  * Why this exists: eval:rag and capture:rag BYPASS chat.service (they call
  * search/rerank/answer directly), so AGENTIC_GRAPH_ENABLED has no effect on
@@ -239,23 +246,46 @@ function summarize(cases: GoldenCase[], runs: Map<string, RunResult>, mode: Mode
     answerableN: ans.length, oosN: oos.length, retrievalDenom: ansWithExpected.length };
 }
 
+const parseList = (v: string | undefined): string[] =>
+  (v ?? '').split(',').map(s => s.trim()).filter(Boolean);
+
 async function main() {
   const email = process.env.RAG_TEST_EMAIL ?? 'ragtest@local.test';
   const limit = Number(process.argv[2] ?? 0);
   const outputPath = path.resolve(process.argv[3] ?? DEFAULT_OUTPUT);
 
+  // ── Optional filters (env vars) — run a cheaper subset instead of all 90x2 ──
+  //   EVAL_LECTURES=9,7   only these lecture_ids
+  //   EVAL_CASES=key1,key2   only these golden case keys
+  //   EVAL_MODES=agentic   run only this mode (default: legacy,agentic)
+  //   <first arg N>        cap to the first N (after the above filters)
+  const lectureFilter = new Set(parseList(process.env.EVAL_LECTURES).map(Number));
+  const caseFilter = new Set(parseList(process.env.EVAL_CASES));
+  const modesRaw = parseList(process.env.EVAL_MODES).map(s => s.toLowerCase());
+  const modes: Mode[] = (modesRaw.length ? modesRaw : ['legacy', 'agentic'])
+    .filter((m): m is Mode => m === 'legacy' || m === 'agentic');
+  if (modes.length === 0) throw new Error('EVAL_MODES must be legacy and/or agentic.');
+
   const all = await loadApprovedGoldenCases();
   if (all.length === 0) throw new Error('No APPROVED golden cases pinned to active versions were found.');
-  const cases = limit > 0 ? all.slice(0, limit) : all;
+
+  let filtered = all;
+  if (lectureFilter.size) filtered = filtered.filter(c => lectureFilter.has(c.lectureId));
+  if (caseFilter.size) filtered = filtered.filter(c => caseFilter.has(c.caseKey));
+  const cases = limit > 0 ? filtered.slice(0, limit) : filtered;
+  if (cases.length === 0) throw new Error('No cases matched the filters (EVAL_LECTURES / EVAL_CASES / limit).');
+
   const studentId = await resolveStudentId(email);
 
   const answerable = cases.filter(c => c.answerable).length;
-  console.log(`Loaded ${all.length} approved golden cases (${answerable} answerable / ${cases.length - answerable} out-of-scope).`);
-  if (limit > 0) console.log(`Smoke run: first ${cases.length} case(s).`);
-  console.log(`Running ${cases.length} cases x2 modes = ${cases.length * 2} pipeline runs + judge calls. Memory disabled; temp sessions deleted.\n`);
+  console.log(`Loaded ${all.length} approved cases; selected ${cases.length} (${answerable} answerable / ${cases.length - answerable} out-of-scope).`);
+  if (lectureFilter.size) console.log(`  lecture filter: ${[...lectureFilter].join(', ')}`);
+  if (caseFilter.size) console.log(`  case filter: ${caseFilter.size} key(s)`);
+  if (limit > 0) console.log(`  limit: first ${cases.length}`);
+  console.log(`  modes: ${modes.join(', ')}`);
+  console.log(`Total ${cases.length * modes.length} pipeline runs + judge calls. Memory disabled; temp sessions deleted.\n`);
 
   const runs = new Map<string, RunResult>();
-  const modes: Mode[] = ['legacy', 'agentic'];
   let i = 0;
   for (const c of cases) {
     for (const mode of modes) {
@@ -270,29 +300,30 @@ async function main() {
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     fs.writeFileSync(outputPath, JSON.stringify({
       createdAt: new Date().toISOString(),
-      email, caseCount: cases.length,
+      email, caseCount: cases.length, modes,
       runs: Array.from(runs.entries()).map(([k, v]) => ({ key: k, ...v })),
     }, null, 2), { mode: 0o600 });
   }
 
-  const legacy = summarize(cases, runs, 'legacy');
-  const agentic = summarize(cases, runs, 'agentic');
-
-  const row = (label: string, l: string, a: string) => `${label.padEnd(26)} ${l.padStart(10)}   ${a.padStart(10)}`;
-  console.log(`\n${'='.repeat(52)}`);
-  console.log(`RESULTS  (${cases.length} cases: ${legacy.answerableN} answerable, ${legacy.oosN} out-of-scope)`);
-  console.log('='.repeat(52));
-  console.log(row('metric', 'LEGACY', 'AGENTIC'));
-  console.log('-'.repeat(52));
-  console.log(row(`retrieval hit (n=${legacy.retrievalDenom})`, pct(legacy.retrievalHit), pct(agentic.retrievalHit)));
-  console.log(row('answer correct', pct(legacy.correct), pct(agentic.correct)));
-  console.log(row('answer grounded', pct(legacy.grounded), pct(agentic.grounded)));
-  console.log(row('false refusal (answerable)', pct(legacy.falseRefusal), pct(agentic.falseRefusal)));
-  console.log(row('OOS refusal (correct)', pct(legacy.oosRefusal), pct(agentic.oosRefusal)));
-  console.log(row('mean latency', `${legacy.meanLatency}ms`, `${agentic.meanLatency}ms`));
-  console.log(row('p50 latency', `${legacy.p50}ms`, `${agentic.p50}ms`));
-  console.log(row('errors', String(legacy.errors), String(agentic.errors)));
-  console.log('='.repeat(52));
+  // ── Results table: one column per mode that ran ─────────────────────────
+  const summaries = modes.map(m => summarize(cases, runs, m));
+  const width = 28 + modes.length * 12;
+  const col = (s: string) => s.padStart(12);
+  const line = (label: string, vals: string[]) => [label.padEnd(28), ...vals.map(col)].join('');
+  console.log(`\n${'='.repeat(width)}`);
+  console.log(`RESULTS  (${cases.length} cases: ${summaries[0].answerableN} answerable, ${summaries[0].oosN} out-of-scope)`);
+  console.log('='.repeat(width));
+  console.log(line('metric', modes.map(m => m.toUpperCase())));
+  console.log('-'.repeat(width));
+  console.log(line(`retrieval hit (n=${summaries[0].retrievalDenom})`, summaries.map(s => pct(s.retrievalHit))));
+  console.log(line('answer correct', summaries.map(s => pct(s.correct))));
+  console.log(line('answer grounded', summaries.map(s => pct(s.grounded))));
+  console.log(line('false refusal (answerable)', summaries.map(s => pct(s.falseRefusal))));
+  console.log(line('OOS refusal (correct)', summaries.map(s => pct(s.oosRefusal))));
+  console.log(line('mean latency', summaries.map(s => `${s.meanLatency}ms`)));
+  console.log(line('p50 latency', summaries.map(s => `${s.p50}ms`)));
+  console.log(line('errors', summaries.map(s => String(s.errors))));
+  console.log('='.repeat(width));
   console.log(`\nFull per-case results: ${outputPath}`);
 }
 
