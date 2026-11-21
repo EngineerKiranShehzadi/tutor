@@ -23,8 +23,11 @@ import { verifyAnswerGroundedness } from '../guardrails/output/answer-groundedne
 import { reviseAnswer } from '../guardrails/output/answer-revision.service';
 import { gradeRelevance } from './agents/relevance-grader.service';
 import { judgeUsefulness } from './agents/answer-usefulness.service';
+import { assessClarity } from './agents/clarity-assessor.service';
+import { generateHyde } from './agents/hyde.service';
+import { expandMultiQuery } from './agents/multi-query.service';
 import type { GraphDeps } from './deps';
-import type { LectureAgentProfile } from '../../types';
+import type { LectureAgentProfile, QnaChunk } from '../../types';
 
 export interface ProductionDepsContext {
   // Resolved by the orchestrator before the graph runs (never loaded inside
@@ -51,13 +54,37 @@ export function buildProductionDeps(ctx: ProductionDepsContext): GraphDeps {
     greet: (question, lectureTitle, history) =>
       generateGreetingResponse(question, lectureTitle, history),
 
+    assessClarity: (question, history) => assessClarity(question, history, judgeCfg),
+
     transformQuery: async (question, history) =>
       (await resolveRetrievalQuery(question, history)).query,
 
-    retrieve: async (query, lectureId) => {
-      const embedding = await generateEmbedding(query, true);
-      const candidates = await searchChunksHybrid(embedding, query, lectureId, topK, ctx.datasetVersionId);
-      const reranked = await rerankChunks(query, candidates, topN);
+    expandQuery: async (query) => {
+      // Always retrieve for the literal query; add a HyDE hypothetical and a
+      // few paraphrases to widen recall. Each sub-agent fails open (returns
+      // nothing) so expansion can only help, never break retrieval.
+      const variants = [query];
+      const [hyde, paraphrases] = await Promise.all([
+        generateHyde(query, judgeCfg),
+        expandMultiQuery(query, judgeCfg),
+      ]);
+      if (hyde) variants.push(hyde);
+      variants.push(...paraphrases);
+      return variants;
+    },
+
+    retrieve: async (queries, lectureId) => {
+      // Embed + hybrid-search each variant, fuse candidates by chunk id, then
+      // rerank the fused set against the PRIMARY query (the contextualized
+      // one, always queries[0]) and reorder for context.
+      const primary = queries[0];
+      const byId = new Map<number, QnaChunk>();
+      for (const q of queries) {
+        const embedding = await generateEmbedding(q, true);
+        const candidates = await searchChunksHybrid(embedding, q, lectureId, topK, ctx.datasetVersionId);
+        for (const c of candidates) if (!byId.has(c.id)) byId.set(c.id, c);
+      }
+      const reranked = await rerankChunks(primary, Array.from(byId.values()), topN);
       // NOTE: dedupeAndSelect sits between rerank and reorder in the legacy
       // path; add it here once you confirm its DedupeResult shape in your env.
       return reorderForContext(reranked);

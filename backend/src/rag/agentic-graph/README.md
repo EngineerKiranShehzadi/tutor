@@ -16,7 +16,8 @@ the system genuinely agentic, while reusing every existing service.
 
 ```
 START → router ─(GREETING)→ greet → END
-               └(else)────→ transform → retrieve → grader
+               └(else)────→ clarifier ─(ambiguous)→ clarify → END   (ask the student)
+                                       └(clear)────→ transform → expand → retrieve → grader
 grader ─(RELEVANT)──────────────→ generate
        ─(INSUFFICIENT, tries<cap)→ transform        (retrieve/rewrite loop)
        ─(INSUFFICIENT, exhausted)→ insufficient → END   (honest no-answer)
@@ -25,6 +26,12 @@ verify ─(grounded & useful)─────→ finalize → END
        ─(fail, revises<cap)─────→ revise → verify   (revise loop)
        ─(fail, exhausted)───────→ finalize → END    (best-effort draft)
 ```
+
+- **clarifier** (Clarification agent): if the question is too ambiguous to
+  retrieve for, return one clarifying question instead of guessing.
+- **expand** (HyDE + Multi-query): turn the query into several retrieval texts
+  (the query, a hypothetical answer, paraphrases); `retrieve` embeds each and
+  fuses the candidates by chunk id before reranking.
 
 Both loops are bounded by `GraphConfig` (`maxRetrieveAttempts`,
 `maxReviseAttempts`) so a non-converging question can never run forever — the
@@ -40,6 +47,9 @@ property the FYP evaluation depends on.
 | `graph.ts` | no | Assembles the StateGraph + conditional edges |
 | `agents/relevance-grader.service.ts` | yes | **NEW** CRAG grader (fail-open) |
 | `agents/answer-usefulness.service.ts` | yes | **NEW** Self-RAG usefulness (fail-open) |
+| `agents/clarity-assessor.service.ts` | yes | **NEW** Clarification (Phase 2, fail-open) |
+| `agents/hyde.service.ts` | yes | **NEW** HyDE hypothetical passage (Phase 2) |
+| `agents/multi-query.service.ts` | yes | **NEW** Multi-query paraphrases (Phase 2) |
 | `production-deps.ts` | yes | Binds real services into `GraphDeps` (per request) |
 | `entry.ts` | yes | `askLectureAgentViaGraph` — the orchestrator's delegation target |
 
@@ -52,10 +62,12 @@ control-flow tests are fully runnable offline.
 npm run test:agentic-graph
 ```
 
-8 scenarios / 32 assertions, all with mocked deps: greeting short-circuit,
+10 scenarios / 41 assertions, all with mocked deps: greeting short-circuit,
 happy path, the CRAG retrieve loop, retrieve-exhaustion fallback, the revise
-loop, revise-exhaustion best-effort, empty-document handling, and a
-reproducibility check (identical trace across two runs). No network or DB.
+loop, revise-exhaustion best-effort, empty-document handling, a reproducibility
+check (identical trace across two runs), clarification (ambiguous question asks
+instead of retrieving), and HyDE/multi-query expansion (variants fused at the
+retriever). No network or DB.
 
 Live quality (does the grader actually grade well on real lectures?) is **not**
 covered here by design — wire the real deps and evaluate against the golden

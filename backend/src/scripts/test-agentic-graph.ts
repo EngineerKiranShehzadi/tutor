@@ -41,7 +41,9 @@ function eq<T>(name: string, actual: T, expected: T): void {
 interface MockCalls {
   classifyRoute: number;
   greet: number;
+  assessClarity: number;
   transformQuery: number;
+  expandQuery: number;
   retrieve: number;
   gradeDocuments: number;
   generate: number;
@@ -54,8 +56,8 @@ type Overrides = Partial<GraphDeps>;
 
 function makeMockDeps(overrides: Overrides = {}): { deps: GraphDeps; calls: MockCalls } {
   const calls: MockCalls = {
-    classifyRoute: 0, greet: 0, transformQuery: 0, retrieve: 0,
-    gradeDocuments: 0, generate: 0, verifyGrounded: 0, verifyUseful: 0, revise: 0,
+    classifyRoute: 0, greet: 0, assessClarity: 0, transformQuery: 0, expandQuery: 0,
+    retrieve: 0, gradeDocuments: 0, generate: 0, verifyGrounded: 0, verifyUseful: 0, revise: 0,
   };
 
   // A couple of throwaway "chunks" — shape doesn't matter to the graph logic.
@@ -64,7 +66,9 @@ function makeMockDeps(overrides: Overrides = {}): { deps: GraphDeps; calls: Mock
   const base: GraphDeps = {
     classifyRoute: async () => { calls.classifyRoute++; return 'FACT_QUESTION'; },
     greet: async () => { calls.greet++; return 'Hello! Ask me about this lecture.'; },
+    assessClarity: async () => { calls.assessClarity++; return { clear: true, clarification: '' }; },
     transformQuery: async (q) => { calls.transformQuery++; return q; },
+    expandQuery: async (q) => { calls.expandQuery++; return [q]; },
     retrieve: async () => { calls.retrieve++; return sampleChunks; },
     gradeDocuments: async () => { calls.gradeDocuments++; return 'RELEVANT'; },
     generate: async () => { calls.generate++; return 'DRAFT_V1'; },
@@ -195,6 +199,37 @@ async function run(): Promise<void> {
     const b = await runAgenticGraph(g2, INPUT);
     eq('same answer', a.answer, b.answer);
     eq('same trace', JSON.stringify(a.trace), JSON.stringify(b.trace));
+  }
+
+  // ── Scenario 9: Clarification — ambiguous question asks, no retrieval ────
+  console.log('\n[9] Clarification: ambiguous question -> asks, skips retrieval');
+  {
+    const { deps, calls } = makeMockDeps({
+      assessClarity: async () => ({ clear: false, clarification: 'Which prompting technique do you mean?' }),
+    });
+    const g = buildAgenticGraph({ deps });
+    const s = await runAgenticGraph(g, { ...INPUT, question: 'explain that one' });
+    eq('answer is the clarifying question', s.answer, 'Which prompting technique do you mean?');
+    eq('clarity assessed once', calls.assessClarity, 1);
+    eq('transform never called', calls.transformQuery, 0);
+    eq('retrieve never called', calls.retrieve, 0);
+    eq('generate never called', calls.generate, 0);
+  }
+
+  // ── Scenario 10: HyDE + multi-query expansion fans out retrieval ────────
+  console.log('\n[10] Expansion: 3 variants reach the retriever, fused once');
+  {
+    let seenVariants = 0;
+    const { deps, calls } = makeMockDeps({
+      expandQuery: async (q: string) => [q, 'hyde hypothetical passage', 'paraphrase one'],
+      retrieve: async (queries: string[]) => { seenVariants = queries.length; return [{ id: 1 }] as never; },
+    });
+    const g = buildAgenticGraph({ deps });
+    const s = await runAgenticGraph(g, INPUT);
+    eq('expand called once', calls.expandQuery, 1);
+    eq('retriever received 3 variants', seenVariants, 3);
+    eq('retrieved once (fused)', calls.retrieve, 1);
+    eq('answer produced', s.answer, 'DRAFT_V1');
   }
 
   // ── summary ─────────────────────────────────────────────────────────────

@@ -11,7 +11,10 @@ import type { GraphConfig, GraphDeps } from './deps';
 export interface AgenticNodes {
   router: (s: AgenticStateType) => Promise<NodeUpdate>;
   greet: (s: AgenticStateType) => Promise<NodeUpdate>;
+  clarifier: (s: AgenticStateType) => Promise<NodeUpdate>;
+  clarify: (s: AgenticStateType) => Promise<NodeUpdate>;
   transform: (s: AgenticStateType) => Promise<NodeUpdate>;
+  expand: (s: AgenticStateType) => Promise<NodeUpdate>;
   retrieve: (s: AgenticStateType) => Promise<NodeUpdate>;
   grade: (s: AgenticStateType) => Promise<NodeUpdate>;
   generate: (s: AgenticStateType) => Promise<NodeUpdate>;
@@ -35,7 +38,25 @@ export function makeNodes(deps: GraphDeps, config: GraphConfig): AgenticNodes {
       return { answer, trace: ['greet: returned greeting (no retrieval)'] };
     },
 
-    // ── 2. Query transform ────────────────────────────────────────────────
+    // ── 1b. Clarity assessor (Clarification agent) ────────────────────────
+    async clarifier(s) {
+      const { clear, clarification } = await deps.assessClarity(s.question, s.history);
+      return {
+        clear,
+        clarification,
+        trace: [`clarifier: clear=${clear}`],
+      };
+    },
+
+    // ── Clarification branch: ask the student instead of guessing ─────────
+    async clarify(s) {
+      return {
+        answer: s.clarification,
+        trace: ['clarify: returned clarifying question (no retrieval)'],
+      };
+    },
+
+    // ── 2. Query transform (contextualize follow-ups) ─────────────────────
     async transform(s) {
       const retrievalQuery = await deps.transformQuery(
         s.question,
@@ -49,16 +70,30 @@ export function makeNodes(deps: GraphDeps, config: GraphConfig): AgenticNodes {
       };
     },
 
-    // ── 3. Retrieve (embed + vector + rerank + dedupe + reorder) ──────────
+    // ── 2b. Expand (HyDE + Multi-query) ───────────────────────────────────
+    async expand(s) {
+      const baseQuery = s.retrievalQuery || s.question;
+      const variants = await deps.expandQuery(baseQuery, s.history, s.retrieveAttempts);
+      // Safety net: never let expansion drop the base query.
+      const retrievalVariants = variants.length > 0 ? variants : [baseQuery];
+      return {
+        retrievalVariants,
+        trace: [`expand: ${retrievalVariants.length} retrieval variant(s)`],
+      };
+    },
+
+    // ── 3. Retrieve (embed each variant + fuse + rerank + reorder) ────────
     async retrieve(s) {
-      const query = s.retrievalQuery || s.question;
-      const documents = await deps.retrieve(query, s.lectureId);
+      const variants = s.retrievalVariants.length > 0
+        ? s.retrievalVariants
+        : [s.retrievalQuery || s.question];
+      const documents = await deps.retrieve(variants, s.lectureId);
       return {
         documents,
         // Count THIS pass. The grade edge reads the incremented value to
         // decide whether another retrieve→rewrite loop is still allowed.
         retrieveAttempts: s.retrieveAttempts + 1,
-        trace: [`retrieve: query="${query}" -> ${documents.length} chunks (pass ${s.retrieveAttempts + 1})`],
+        trace: [`retrieve: ${variants.length} variant(s) -> ${documents.length} chunks (pass ${s.retrieveAttempts + 1})`],
       };
     },
 

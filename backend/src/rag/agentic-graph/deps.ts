@@ -44,6 +44,15 @@ export interface GraphDeps {
   // Greeting branch — no retrieval (wraps greeting-response.service).
   greet: (question: string, lectureTitle: string, history: ConversationTurn[]) => Promise<string>;
 
+  // 1b. Clarity assessor (Phase 2, Clarification agent). Decides whether the
+  //     question is specific enough to retrieve for. When not clear, it also
+  //     returns the single clarifying question to put back to the student
+  //     (no retrieval happens). Should FAIL-OPEN to clear=true on any error.
+  assessClarity: (
+    question: string,
+    history: ConversationTurn[],
+  ) => Promise<{ clear: boolean; clarification: string }>;
+
   // 2. Query transform — contextualize / rewrite for retrieval. `attempt` is
   //    the current retrieve attempt (0 on the first pass), so a binding may
   //    widen the query on later loops (wraps query-rewriter.service).
@@ -53,9 +62,21 @@ export interface GraphDeps {
     attempt: number,
   ) => Promise<string>;
 
-  // 3. Retrieve — embed + vector search + rerank + dedupe + reorder, returning
-  //    the final ordered context chunks (wraps vector-search + rerank).
-  retrieve: (query: string, lectureId: number) => Promise<QnaChunk[]>;
+  // 2b. Query expansion (Phase 2, HyDE + Multi-query). Given the
+  //     contextualized query, returns the set of texts to embed and fuse:
+  //     the query itself, a HyDE hypothetical answer, and/or paraphrases.
+  //     `attempt` lets later loops widen the set. Must always include at
+  //     least the incoming query.
+  expandQuery: (
+    query: string,
+    history: ConversationTurn[],
+    attempt: number,
+  ) => Promise<string[]>;
+
+  // 3. Retrieve — for EACH variant: embed + vector search; then rerank the
+  //    fused candidate set, dedupe and reorder, returning the final ordered
+  //    context chunks (wraps embedding + vector-search + rerank).
+  retrieve: (queries: string[], lectureId: number) => Promise<QnaChunk[]>;
 
   // 4. Relevance grader (CRAG) — are these chunks enough to answer? This node
   //    is NEW; it is the decision that drives the retrieve→rewrite→retrieve

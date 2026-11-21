@@ -44,8 +44,13 @@ function afterVerify(config: GraphConfig) {
 }
 
 // Edge decision after the router.
-function afterRouter(s: AgenticStateType): 'greet' | 'transform' {
-  return s.route === 'GREETING' ? 'greet' : 'transform';
+function afterRouter(s: AgenticStateType): 'greet' | 'clarifier' {
+  return s.route === 'GREETING' ? 'greet' : 'clarifier';
+}
+
+// Edge decision after the clarity assessor.
+function afterClarity(s: AgenticStateType): 'transform' | 'clarify' {
+  return s.clear ? 'transform' : 'clarify';
 }
 
 export function buildAgenticGraph(opts: BuildOptions) {
@@ -55,7 +60,10 @@ export function buildAgenticGraph(opts: BuildOptions) {
   const graph = new StateGraph(AgenticState)
     .addNode('router', n.router)
     .addNode('greet', n.greet)
+    .addNode('clarifier', n.clarifier)
+    .addNode('clarify', n.clarify)
     .addNode('transform', n.transform)
+    .addNode('expand', n.expand)
     .addNode('retrieve', n.retrieve)
     .addNode('grader', n.grade)
     .addNode('generate', n.generate)
@@ -67,11 +75,18 @@ export function buildAgenticGraph(opts: BuildOptions) {
     .addEdge(START, 'router')
     .addConditionalEdges('router', afterRouter, {
       greet: 'greet',
-      transform: 'transform',
+      clarifier: 'clarifier',
     })
     .addEdge('greet', END)
 
-    .addEdge('transform', 'retrieve')
+    .addConditionalEdges('clarifier', afterClarity, {
+      transform: 'transform',
+      clarify: 'clarify',
+    })
+    .addEdge('clarify', END)
+
+    .addEdge('transform', 'expand')
+    .addEdge('expand', 'retrieve')
     .addEdge('retrieve', 'grader')
     .addConditionalEdges('grader', afterGrade(config), {
       generate: 'generate',

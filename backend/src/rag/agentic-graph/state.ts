@@ -36,7 +36,16 @@ export const AgenticState = Annotation.Root({
 
   // ── Working fields (written by nodes) ──────────────────────────────────
   route: Annotation<LectureQueryRoute | ''>({ reducer: replace, default: () => '' }),
+  // Clarity gate (Phase 2, Clarification agent). `clear` defaults true so the
+  // graph only diverts to a clarifying question when the assessor actively
+  // judges the question too ambiguous to retrieve for.
+  clear: Annotation<boolean>({ reducer: replace, default: () => true }),
+  clarification: Annotation<string>({ reducer: replace, default: () => '' }),
   retrievalQuery: Annotation<string>({ reducer: replace, default: () => '' }),
+  // The retrieval texts to embed + fuse (Phase 2, HyDE + Multi-query). Always
+  // includes the contextualized query; HyDE adds a hypothetical answer and
+  // multi-query adds paraphrases. One element in the simplest case.
+  retrievalVariants: Annotation<string[]>({ reducer: replace, default: () => [] }),
   documents: Annotation<QnaChunk[]>({ reducer: replace, default: () => [] }),
   grade: Annotation<RetrievalGrade>({ reducer: replace, default: () => '' }),
   draft: Annotation<string>({ reducer: replace, default: () => '' }),
