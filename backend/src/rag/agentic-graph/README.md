@@ -98,6 +98,16 @@ branch.
     (pass a stream handler through `production-deps.generate` to restore it).
   - Optionally add `dedupeAndSelect` between rerank and reorder in
     `production-deps.retrieve` (left out pending its `DedupeResult` shape).
+
+### Clarification tuning
+The clarity assessor only asks when a message has a **dangling reference** it
+can't resolve ("explain that", "the other one") — it deliberately does NOT ask
+whether a question relates to the lecture (relevance is retrieval's job, so an
+off-topic but specific question like "tell me about X" goes straight to the
+honest "not found"). Turn it off entirely with `CLARIFICATION_ENABLED=false`
+(default `true`). **Set `CLARIFICATION_ENABLED=false` for `npm run eval:rag`** —
+in a single-shot eval a clarifying question would otherwise count as a wrong
+answer.
 - Each agent has its own `env.LLM.*` task config — `RELEVANCE_GRADER`,
   `ANSWER_USEFULNESS`, `CLARITY_ASSESSOR`, `HYDE`, `MULTI_QUERY` — all defaulting
   to `DEFAULT_LLM_PROVIDER/MODEL` at `TEMPERATURE=0`. Override per agent via the

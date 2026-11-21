@@ -51,7 +51,11 @@ export function buildProductionDeps(ctx: ProductionDepsContext): GraphDeps {
     greet: (question, lectureTitle, history) =>
       generateGreetingResponse(question, lectureTitle, history),
 
-    assessClarity: (question, history) => assessClarity(question, history, env.LLM.CLARITY_ASSESSOR),
+    // Kill switch: when clarification is disabled, skip the LLM call entirely
+    // and always treat the question as clear (straight to retrieval).
+    assessClarity: env.CLARIFICATION_ENABLED
+      ? (question, history) => assessClarity(question, history, env.LLM.CLARITY_ASSESSOR)
+      : async () => ({ clear: true, clarification: '' }),
 
     transformQuery: async (question, history) =>
       (await resolveRetrievalQuery(question, history)).query,

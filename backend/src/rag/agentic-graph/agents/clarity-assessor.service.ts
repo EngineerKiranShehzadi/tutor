@@ -30,14 +30,24 @@ export interface ClarityResult {
 }
 
 const CLARITY_SYSTEM_PROMPT =
-  'You decide whether a student question to a lecture tutor is specific enough to ' +
-  'answer from the lecture, or too vague/ambiguous to retrieve for. Consider the ' +
-  'recent conversation for context. Return strict JSON: ' +
-  '{"clear": boolean, "clarification": string}. If clear=true, clarification MUST ' +
-  'be an empty string. If clear=false, clarification MUST be ONE short, friendly ' +
-  'question that would let you retrieve the right material. Prefer clear=true; only ' +
-  'ask when genuinely necessary (e.g. "explain that" with no referent, or a term ' +
-  'that could mean several different things in this lecture).';
+  'You gate ONE thing: can this student message be turned into a search query on ' +
+  'its own? Mark clear=false ONLY when the message points to something unspecified ' +
+  'that the recent conversation does NOT resolve — a dangling reference such as ' +
+  '"explain that", "tell me more", "what about the second one", "and the other?". ' +
+  'In every other case mark clear=true.\n\n' +
+  'CRITICAL RULES:\n' +
+  '- Do NOT judge whether the question relates to the lecture. Relevance is decided ' +
+  'later by retrieval, never here. A specific, self-contained question (it names a ' +
+  'concrete topic, person, term, or task) is ALWAYS clear=true, EVEN IF the topic ' +
+  'seems unrelated to the lecture — let retrieval return "not found" for those.\n' +
+  '- NEVER ask whether the student means something "covered in the lecture". That is ' +
+  'not a real ambiguity.\n' +
+  '- If you (the tutor) already asked a clarifying question earlier and the student ' +
+  'has now named any concrete topic, it is clear=true — do not ask again.\n' +
+  '- When in doubt, clear=true.\n\n' +
+  'Return strict JSON: {"clear": boolean, "clarification": string}. If clear=true, ' +
+  'clarification MUST be an empty string. If clear=false, clarification MUST be ONE ' +
+  'short question that resolves the dangling reference.';
 
 const ClarityResponse = z.object({
   clear: z.boolean(),
