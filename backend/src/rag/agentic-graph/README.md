@@ -96,8 +96,10 @@ branch.
     `retrievalQuery`/`questionEmbedding` the memory writer needs);
   - **output PII guard and token streaming** are not applied in graph mode
     (pass a stream handler through `production-deps.generate` to restore it).
-  - Optionally add `dedupeAndSelect` between rerank and reorder in
-    `production-deps.retrieve` (left out pending its `DedupeResult` shape).
+  - `production-deps.retrieve` embeds + searches the query variants in parallel
+    (`Promise.allSettled`, skipping a failed variant) and applies the same
+    `dedupeAndSelect` relevance floor as the legacy path, so the two modes are
+    compared on equal footing.
 
 ### Clarification tuning
 The clarity assessor only asks when a message has a **dangling reference** it

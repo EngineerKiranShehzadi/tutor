@@ -12,11 +12,12 @@
 // generate/retrieve close over that request's context. This is how the
 // lecture persona and dataset-version pinning stay intact under the rewrite.
 import { env } from '../../config/env';
+import { logger } from '../../utils/logger';
 import { classifyRoute } from '../../services/query-router.service';
 import { resolveRetrievalQuery } from '../../services/query-rewriter.service';
 import { generateEmbedding } from '../../services/embedding.service';
 import { searchChunksHybrid } from '../../services/vector-search.service';
-import { rerankChunks, reorderForContext } from '../../services/rerank.service';
+import { rerankChunks, reorderForContext, dedupeAndSelect } from '../../services/rerank.service';
 import { generateAnswer } from '../../services/answer-generation.service';
 import { generateGreetingResponse } from '../../services/greeting-response.service';
 import { verifyAnswerGroundedness } from '../guardrails/output/answer-groundedness-verifier.service';
@@ -75,20 +76,35 @@ export function buildProductionDeps(ctx: ProductionDepsContext): GraphDeps {
     },
 
     retrieve: async (queries, lectureId) => {
-      // Embed + hybrid-search each variant, fuse candidates by chunk id, then
-      // rerank the fused set against the PRIMARY query (the contextualized
-      // one, always queries[0]) and reorder for context.
       const primary = queries[0];
+      // Embed + hybrid-search every variant IN PARALLEL. A variant whose
+      // embedding or search hangs/fails is skipped (Promise.allSettled) rather
+      // than failing the whole request — retrieval proceeds as long as at
+      // least one variant returns. This removes both the sequential-embedding
+      // latency and the single-variant-timeout cascade.
+      const settled = await Promise.allSettled(
+        queries.map(async (q) => {
+          const embedding = await generateEmbedding(q, true);
+          return searchChunksHybrid(embedding, q, lectureId, topK, ctx.datasetVersionId);
+        }),
+      );
       const byId = new Map<number, QnaChunk>();
-      for (const q of queries) {
-        const embedding = await generateEmbedding(q, true);
-        const candidates = await searchChunksHybrid(embedding, q, lectureId, topK, ctx.datasetVersionId);
-        for (const c of candidates) if (!byId.has(c.id)) byId.set(c.id, c);
+      for (const s of settled) {
+        if (s.status === 'fulfilled') {
+          for (const c of s.value) if (!byId.has(c.id)) byId.set(c.id, c);
+        } else {
+          logger.warn(`[AGENTIC-RETRIEVE] a query variant failed, skipping it: ${String(s.reason)}`);
+        }
       }
+      if (byId.size === 0) return [];
+      // Rerank the fused candidate set against the primary query, then apply
+      // the SAME dedupe + reranker relevance floor the legacy path uses
+      // (dedupeAndSelect, default DEFAULT_MIN_RERANK_SCORE) so the two modes
+      // are compared on equal footing — agentic doesn't get a richer or
+      // lower-quality context than legacy for the same lecture.
       const reranked = await rerankChunks(primary, Array.from(byId.values()), topN);
-      // NOTE: dedupeAndSelect sits between rerank and reorder in the legacy
-      // path; add it here once you confirm its DedupeResult shape in your env.
-      return reorderForContext(reranked);
+      const { selected } = dedupeAndSelect(reranked, topN);
+      return reorderForContext(selected);
     },
 
     gradeDocuments: (question, documents) => gradeRelevance(question, documents, env.LLM.RELEVANCE_GRADER),
