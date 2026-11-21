@@ -163,6 +163,13 @@ export const env = {
   // (output guardrail, answer-memory, streaming).
   AGENTIC_GRAPH_ENABLED: optional('AGENTIC_GRAPH_ENABLED', 'false') === 'true',
 
+  // Agentic graph: whether the Clarification agent may ask the student a
+  // clarifying question. When false, the graph always proceeds straight to
+  // retrieval (an off-topic or vague question gets the honest "not found"
+  // instead of a clarifying question). Set false for single-shot evaluation
+  // runs, where a clarifying question would otherwise count as a wrong answer.
+  CLARIFICATION_ENABLED: optional('CLARIFICATION_ENABLED', 'true') === 'true',
+
   // Production only: also write logs/error.log and logs/combined.log (10 MB
   // size rotation, 5 files). Off by default — production logs go to the
   // console as JSON. See utils/logger.ts.

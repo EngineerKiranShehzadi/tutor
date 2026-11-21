@@ -232,6 +232,26 @@ async function run(): Promise<void> {
     eq('answer produced', s.answer, 'DRAFT_V1');
   }
 
+  // ── Scenario 11: off-topic self-contained question skips clarification ──
+  // Regression guard for the "Babar Azam" over-triggering bug: a specific but
+  // off-topic question must go straight to retrieval and get the honest
+  // not-found, NOT a clarification loop.
+  console.log('\n[11] Off-topic specific question -> not-found, no clarification loop');
+  {
+    const { deps, calls } = makeMockDeps({
+      // Conservative assessor: a self-contained question is clear even if
+      // off-topic.
+      assessClarity: async () => ({ clear: true, clarification: '' }),
+      // Off-topic => retrieval finds nothing.
+      retrieve: async () => [],
+    });
+    const g = buildAgenticGraph({ deps, config: { maxRetrieveAttempts: 2 } });
+    const s = await runAgenticGraph(g, { ...INPUT, question: 'tell me about Babar Azam' });
+    eq('clarity assessed once', calls.assessClarity, 1);
+    check('fell back to honest no-answer', s.answer.startsWith("I couldn't find enough"), s.answer);
+    eq('generate never called', calls.generate, 0);
+  }
+
   // ── summary ─────────────────────────────────────────────────────────────
   console.log(`\n${'='.repeat(52)}`);
   console.log(`RESULT: ${passed} passed, ${failed} failed`);
