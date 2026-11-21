@@ -12,6 +12,7 @@
 //  - Temperature 0 for reproducibility.
 import { z } from 'zod';
 import { resolveLlmProvider } from '../../../llm/llm-provider.resolver';
+import { withLlmDiagnostic, extractLlmUsage } from '../../../llm/llm-observability.service';
 import { logger } from '../../../utils/logger';
 
 export interface UsefulnessTaskConfig {
@@ -43,13 +44,23 @@ export async function judgeUsefulness(
 
   try {
     const provider = resolveLlmProvider(cfg.PROVIDER);
-    const result = await provider.generate({
-      model: cfg.MODEL,
-      systemPrompt: USEFULNESS_SYSTEM_PROMPT,
-      userPrompt: `Student question:\n${question}\n\nTutor answer:\n${draft}`,
-      temperature: cfg.TEMPERATURE,
-      timeoutMs: cfg.TIMEOUT_MS,
-    } as Parameters<typeof provider.generate>[0]);
+    const result = await withLlmDiagnostic(
+      {
+        spanName: 'answer_usefulness_call',
+        operationType: 'ANSWER_USEFULNESS',
+        provider: provider.name,
+        model: cfg.MODEL,
+        invocationParams: { temperature: cfg.TEMPERATURE, timeoutMs: cfg.TIMEOUT_MS },
+      },
+      () => provider.generate({
+        model: cfg.MODEL,
+        systemPrompt: USEFULNESS_SYSTEM_PROMPT,
+        userPrompt: `Student question:\n${question}\n\nTutor answer:\n${draft}`,
+        temperature: cfg.TEMPERATURE,
+        timeoutMs: cfg.TIMEOUT_MS,
+      } as Parameters<typeof provider.generate>[0]),
+      extractLlmUsage,
+    );
 
     const parsed = UsefulnessResponse.safeParse(JSON.parse((result as { raw: string }).raw));
     if (!parsed.success) {

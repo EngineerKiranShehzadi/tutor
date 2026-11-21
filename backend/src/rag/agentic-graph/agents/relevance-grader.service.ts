@@ -16,6 +16,7 @@
 //    so the same question+context yields the same verdict — reproducibility.
 import { z } from 'zod';
 import { resolveLlmProvider } from '../../../llm/llm-provider.resolver';
+import { withLlmDiagnostic, extractLlmUsage } from '../../../llm/llm-observability.service';
 import { logger } from '../../../utils/logger';
 import type { QnaChunk } from '../../../types';
 
@@ -64,13 +65,23 @@ export async function gradeRelevance(
 
   try {
     const provider = resolveLlmProvider(cfg.PROVIDER);
-    const result = await provider.generate({
-      model: cfg.MODEL,
-      systemPrompt: GRADER_SYSTEM_PROMPT,
-      userPrompt: buildUserPrompt(question, documents),
-      temperature: cfg.TEMPERATURE,
-      timeoutMs: cfg.TIMEOUT_MS,
-    } as Parameters<typeof provider.generate>[0]);
+    const result = await withLlmDiagnostic(
+      {
+        spanName: 'relevance_grader_call',
+        operationType: 'RELEVANCE_GRADING',
+        provider: provider.name,
+        model: cfg.MODEL,
+        invocationParams: { temperature: cfg.TEMPERATURE, timeoutMs: cfg.TIMEOUT_MS },
+      },
+      () => provider.generate({
+        model: cfg.MODEL,
+        systemPrompt: GRADER_SYSTEM_PROMPT,
+        userPrompt: buildUserPrompt(question, documents),
+        temperature: cfg.TEMPERATURE,
+        timeoutMs: cfg.TIMEOUT_MS,
+      } as Parameters<typeof provider.generate>[0]),
+      extractLlmUsage,
+    );
 
     const parsed = GraderResponse.safeParse(JSON.parse((result as { raw: string }).raw));
     if (!parsed.success) {

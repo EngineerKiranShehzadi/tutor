@@ -11,6 +11,7 @@
 //    falls back to the literal query. Never throws.
 //  - Temperature 0 for reproducibility.
 import { resolveLlmProvider } from '../../../llm/llm-provider.resolver';
+import { withLlmDiagnostic, extractLlmUsage } from '../../../llm/llm-observability.service';
 import { logger } from '../../../utils/logger';
 
 export interface HydeTaskConfig {
@@ -30,13 +31,23 @@ const HYDE_SYSTEM_PROMPT =
 export async function generateHyde(question: string, cfg: HydeTaskConfig): Promise<string> {
   try {
     const provider = resolveLlmProvider(cfg.PROVIDER);
-    const result = await provider.generate({
-      model: cfg.MODEL,
-      systemPrompt: HYDE_SYSTEM_PROMPT,
-      userPrompt: `Question:\n${question}`,
-      temperature: cfg.TEMPERATURE,
-      timeoutMs: cfg.TIMEOUT_MS,
-    } as Parameters<typeof provider.generate>[0]);
+    const result = await withLlmDiagnostic(
+      {
+        spanName: 'hyde_call',
+        operationType: 'HYDE_GENERATION',
+        provider: provider.name,
+        model: cfg.MODEL,
+        invocationParams: { temperature: cfg.TEMPERATURE, timeoutMs: cfg.TIMEOUT_MS },
+      },
+      () => provider.generate({
+        model: cfg.MODEL,
+        systemPrompt: HYDE_SYSTEM_PROMPT,
+        userPrompt: `Question:\n${question}`,
+        temperature: cfg.TEMPERATURE,
+        timeoutMs: cfg.TIMEOUT_MS,
+      } as Parameters<typeof provider.generate>[0]),
+      extractLlmUsage,
+    );
 
     return ((result as { raw: string }).raw || '').trim();
   } catch (err) {

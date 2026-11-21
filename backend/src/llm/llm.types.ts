@@ -80,4 +80,10 @@ export type LlmOperationType =
   | 'ANSWER_REVISION'
   | 'FORMAT_REPAIR'
   | 'FORMAT_REPAIR_CHECK'
-  | 'GREETING_RESPONSE';
+  | 'GREETING_RESPONSE'
+  // Agentic RAG graph agents (rag/agentic-graph)
+  | 'RELEVANCE_GRADING'
+  | 'ANSWER_USEFULNESS'
+  | 'CLARITY_ASSESSMENT'
+  | 'HYDE_GENERATION'
+  | 'MULTI_QUERY_EXPANSION';

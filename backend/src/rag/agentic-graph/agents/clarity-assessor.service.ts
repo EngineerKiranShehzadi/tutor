@@ -13,6 +13,7 @@
 //    student's reply arrives as a fresh invocation), so there is no loop.
 import { z } from 'zod';
 import { resolveLlmProvider } from '../../../llm/llm-provider.resolver';
+import { withLlmDiagnostic, extractLlmUsage } from '../../../llm/llm-observability.service';
 import { logger } from '../../../utils/logger';
 import type { ConversationTurn } from '../../../services/answer-generation.service';
 
@@ -58,13 +59,23 @@ export async function assessClarity(
 ): Promise<ClarityResult> {
   try {
     const provider = resolveLlmProvider(cfg.PROVIDER);
-    const result = await provider.generate({
-      model: cfg.MODEL,
-      systemPrompt: CLARITY_SYSTEM_PROMPT,
-      userPrompt: buildUserPrompt(question, history),
-      temperature: cfg.TEMPERATURE,
-      timeoutMs: cfg.TIMEOUT_MS,
-    } as Parameters<typeof provider.generate>[0]);
+    const result = await withLlmDiagnostic(
+      {
+        spanName: 'clarity_assessor_call',
+        operationType: 'CLARITY_ASSESSMENT',
+        provider: provider.name,
+        model: cfg.MODEL,
+        invocationParams: { temperature: cfg.TEMPERATURE, timeoutMs: cfg.TIMEOUT_MS },
+      },
+      () => provider.generate({
+        model: cfg.MODEL,
+        systemPrompt: CLARITY_SYSTEM_PROMPT,
+        userPrompt: buildUserPrompt(question, history),
+        temperature: cfg.TEMPERATURE,
+        timeoutMs: cfg.TIMEOUT_MS,
+      } as Parameters<typeof provider.generate>[0]),
+      extractLlmUsage,
+    );
 
     const parsed = ClarityResponse.safeParse(JSON.parse((result as { raw: string }).raw));
     if (!parsed.success) {
