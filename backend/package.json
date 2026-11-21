@@ -73,7 +73,8 @@
     "test:gemini-quiz": "ts-node --transpile-only src/scripts/test-gemini-quiz.ts",
     "test:practice-grading": "ts-node --transpile-only src/scripts/test-practice-grading.ts",
     "db:practice": "ts-node --transpile-only src/scripts/setup-practice-quizzes.ts",
-    "test:document-vision": "ts-node --transpile-only src/scripts/test-document-vision.ts"
+    "test:document-vision": "ts-node --transpile-only src/scripts/test-document-vision.ts",
+    "test:agentic-graph": "ts-node --transpile-only src/scripts/test-agentic-graph.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.35.0",
@@ -82,6 +83,7 @@
     "@arizeai/phoenix-client": "^7.1.1",
     "@aws-sdk/client-s3": "^3.637.0",
     "@langchain/core": "^0.3.0",
+    "@langchain/langgraph": "^0.2.74",
     "@langchain/textsplitters": "^0.1.0",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/exporter-trace-otlp-proto": "^0.220.0",
@@ -106,7 +108,8 @@
     "pg": "^8.11.5",
     "uuid": "^9.0.1",
     "winston": "^3.13.0",
-    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
