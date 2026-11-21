@@ -75,7 +75,8 @@
     "test:practice-grading": "ts-node --transpile-only src/scripts/test-practice-grading.ts",
     "db:practice": "ts-node --transpile-only src/scripts/setup-practice-quizzes.ts",
     "test:document-vision": "ts-node --transpile-only src/scripts/test-document-vision.ts",
-    "test:agentic-graph": "ts-node --transpile-only src/scripts/test-agentic-graph.ts"
+    "test:agentic-graph": "ts-node --transpile-only src/scripts/test-agentic-graph.ts",
+    "eval:agentic-vs-legacy": "ts-node --transpile-only src/scripts/eval-agentic-vs-legacy.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.35.0",
