@@ -115,6 +115,13 @@ export const STAGE_SPAN_KIND: Record<string, OpenInferenceSpanKind> = {
   answer_groundedness_verifier_call: OpenInferenceSpanKind.LLM,
   answer_revision_call: OpenInferenceSpanKind.LLM,
   response_format_repair_call: OpenInferenceSpanKind.LLM,
+
+  // Agentic RAG graph agents (rag/agentic-graph)
+  relevance_grader_call: OpenInferenceSpanKind.LLM,
+  answer_usefulness_call: OpenInferenceSpanKind.LLM,
+  clarity_assessor_call: OpenInferenceSpanKind.LLM,
+  hyde_call: OpenInferenceSpanKind.LLM,
+  multi_query_call: OpenInferenceSpanKind.LLM,
 };
 
 export function spanKindFor(name: string): OpenInferenceSpanKind {

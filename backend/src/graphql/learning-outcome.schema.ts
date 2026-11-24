@@ -13,6 +13,8 @@ export const learningOutcomeTypeDefs = `#graphql
     lectureId: Int!
     lectureTitle: String!
     question: String!
+    category: String!
+    evidenceQuote: String
     outcomeId: Int
   }
   type StudentOutcomeProgress {

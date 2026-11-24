@@ -16,7 +16,8 @@ on:
       - 'frontend/src/lib/student-*.ts'
       - 'frontend/src/lib/practice-retake.ts'
       - 'frontend/src/graphql/practice.queries.ts'
-      - 'frontend/tests/student-navigation.test.cjs'
+      - 'frontend/tests/student-prefetch.test.cjs'
+      - 'frontend/tests/practice-retake.test.cjs'
       - '.github/workflows/quiz-performance.yml'
 
 permissions:
@@ -53,9 +54,9 @@ jobs:
       - name: Install backend dependencies
         working-directory: backend
         run: npm ci --ignore-scripts
-      - name: Test quiz orchestration, retakes and real SQL isolation
+      - name: Test quiz novelty gate and cancellation-aware waits (offline)
         working-directory: backend
-        run: node --test tests/quiz-performance.test.cjs tests/quiz-retake.test.cjs
+        run: node --test tests/quiz-novelty.test.cjs tests/abortable.test.cjs
       - name: Existing quiz validation tests
         working-directory: backend
         run: npm run test:practice-quiz
@@ -77,9 +78,9 @@ jobs:
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci --ignore-scripts
-      - name: Student cache, retake wiring and visible-content checks
+      - name: Student prefetch gate, nav allowlist and retake id hardening
         working-directory: frontend
-        run: node --test tests/student-navigation.test.cjs
+        run: node --test tests/student-prefetch.test.cjs tests/practice-retake.test.cjs
       - name: Full frontend typecheck
         working-directory: frontend
         run: npm run typecheck

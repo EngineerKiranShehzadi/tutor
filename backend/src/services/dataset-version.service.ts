@@ -668,6 +668,24 @@ export const validateVersion = async (versionId: number, db: VersionReader = { q
   return problems;
 };
 
+type DraftGoldenFn = (lectureId: number, versionId: number) =>
+  Promise<{ created: number; skipped: number; candidateChunks: number }>;
+
+// Golden benchmark drafts follow publication the same way the summary warm-up
+// does: started only after COMMIT, idempotent (existing cases — approved ones
+// included — are never rewritten) and unable to fail or delay activation; any
+// error is logged, never thrown. Drafts still need a human review decision
+// before they export as benchmark truth (Admin → Golden Cases).
+export async function autoDraftGoldenCases(lectureId: number, versionId: number, draft?: DraftGoldenFn): Promise<void> {
+  try {
+    const run = draft ?? (await import('./golden-case.service')).generateDraftCases;
+    const r = await run(lectureId, versionId);
+    logger.info(`[GOLDEN] Lecture #${lectureId} version #${versionId}: auto-drafted ${r.created} case(s), ${r.skipped} already existed (of ${r.candidateChunks} Q&A)`);
+  } catch (err) {
+    logger.warn(`[GOLDEN] Auto-draft skipped for lecture #${lectureId} version #${versionId}: ${(err as Error)?.message ?? String(err)}`);
+  }
+}
+
 // Switches the lecture to this version. Returns false (and changes nothing)
 // when the version is no longer READY_TO_ACTIVATE — e.g. another process got
 // there first — so the caller does not treat it as a failure.
@@ -741,6 +759,7 @@ const activateVersion = async (versionId: number): Promise<{ activated: boolean;
     void import('./lecture-summary.service')
       .then(m => m.warmLectureSummary(v[0].lecture_id, versionId))
       .catch(err => logger.warn(`[LECTURE-SUMMARY] Could not start warm-up for lecture #${v[0].lecture_id} version #${versionId}: ${(err as Error).message}`));
+    void autoDraftGoldenCases(v[0].lecture_id, versionId);
 
     return { activated: true, status: 'ACTIVE' };
   } catch (err) {
@@ -1226,6 +1245,9 @@ export async function rollbackDataset(lectureId: number): Promise<{ activeVersio
     await client.query(`UPDATE lectures SET active_version_id = $1, status = 'READY', updated_at = NOW() WHERE id = $2`, [target, lectureId]);
     await client.query('COMMIT');
     logger.info(`[DATASET] ⏪ Lecture #${lectureId}: rolled back from version id=${current} to id=${target}`);
+    // The restored version is live again; make sure it has drafts too (no-op
+    // for cases that already exist).
+    void autoDraftGoldenCases(lectureId, target);
     return { activeVersionId: target, previousVersionId: current };
   } catch (err) {
     await client.query('ROLLBACK').catch(() => undefined);

@@ -135,6 +135,27 @@ def slide_visual_indexes(data, extension):
     return targets
 
 
+def identify_docx_pages(doc):
+    # A Word document's text and tables are already extracted natively by
+    # python-docx, so sending a text/table-only page to the vision model only
+    # produces a redundant description that duplicates content already captured.
+    # Send a rendered page to vision only when it carries a real embedded raster
+    # image (a photo, chart or diagram saved as a picture) or has no selectable
+    # text at all (a blank or scanned page). Table grid-lines are vector art, not
+    # raster images, so native tables are correctly skipped. Every skipped page
+    # is reported so the caller can surface it for optional manual review.
+    selected, skipped = [], []
+    for idx in range(len(doc)):
+        page = doc[idx]
+        has_image = bool(page.get_images(full=True))
+        has_text = bool(page.get_text("text").strip())
+        if has_image or not has_text:
+            selected.append(idx)
+        else:
+            skipped.append(idx)
+    return selected, skipped
+
+
 def identify_pdf_pages(doc):
     selected = []
     for idx in range(len(doc)):
@@ -165,9 +186,10 @@ def visual_pages(data, extension, limit, canonical_pdf_path=None):
         pdf = office_to_pdf(data, extension, canonical_pdf_path)
         name = "Page"
     else:
-        return []
+        return {"pages": [], "skipped": []}
     if not pdf:
-        return []
+        return {"pages": [], "skipped": []}
+    skipped_idx = []
     # Import PyMuPDF by its current package name. The legacy `fitz` shim can
     # print a deprecation warning before the JSON payload, breaking the Node
     # caller which expects stdout to contain only JSON.
@@ -183,14 +205,18 @@ def visual_pages(data, extension, limit, canonical_pdf_path=None):
     if extension == ".pdf":
         targets = identify_pdf_pages(doc)
     elif extension == ".docx":
-        # Run the vision relevance check on every page to avoid missing
-        # drawings, charts, or visuals that PDF object heuristics overlook.
-        targets = list(range(len(doc)))
+        # A Word page whose content is native text/tables is already captured by
+        # python-docx; only genuine embedded images (or blank/scanned pages) need
+        # vision. Skipped pages are reported so the caller can flag them.
+        targets, skipped_idx = identify_docx_pages(doc)
     if len(targets) > limit:
         raise ValueError(f"Document has {len(targets)} visually significant pages; limit is {limit}. Split it into smaller documents instead of silently skipping diagrams.")
     if any(i >= len(doc) for i in targets):
         raise ValueError("Rendered presentation page count does not match slide count")
-    return [{"locator": f"{name} {i + 1}", "image": to_jpeg(doc[i])} for i in targets]
+    return {
+        "pages": [{"locator": f"{name} {i + 1}", "image": to_jpeg(doc[i])} for i in targets],
+        "skipped": [f"{name} {i + 1}" for i in skipped_idx],
+    }
 
 
 def main():
@@ -217,7 +243,7 @@ def main():
         data = sys.stdin.buffer.read(args.max_bytes + 1)
         if len(data) > args.max_bytes or not data:
             raise ValueError("File exceeds the configured upload limit")
-        print(json.dumps({"pages": visual_pages(data, args.extension, args.max_visual_pages, args.canonical_pdf)}))
+        print(json.dumps(visual_pages(data, args.extension, args.max_visual_pages, args.canonical_pdf)))
     except Exception as exc:
         print(json.dumps({"error": str(exc)[:250]}))
         sys.exit(2)

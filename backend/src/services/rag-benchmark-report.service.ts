@@ -6,9 +6,13 @@ import {AppError} from '../middleware/errorHandler';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const evaluate: (gold:unknown,predictions:unknown)=>Record<string,any> =
  require('../../evaluation/golden-evaluator.cjs').evaluate;
+// A pretty-printed capture of ~300 cases with --answer is ~0.9M characters, so
+// the old 400k cap rejected real captures. Two fields at this cap, JSON-escaped
+// inside the GraphQL body, stay under the 5mb express.json limit (app.ts).
+const MAX_JSON_CHARS=1_500_000;
 function parse(raw:string,name:string):any {
- if(typeof raw!=='string'||raw.length===0||raw.length>400000)
-  throw new AppError(name+' must contain 1–400000 characters of JSON',400);
+ if(typeof raw!=='string'||raw.length===0||raw.length>MAX_JSON_CHARS)
+  throw new AppError(name+' must contain 1–'+MAX_JSON_CHARS.toLocaleString('en-US')+' characters of JSON',400);
  try{return JSON.parse(raw);}catch{throw new AppError(name+' is not valid JSON',400);}
 }
 function digest(value:unknown):string {
@@ -40,7 +44,7 @@ export async function importRagBenchmark(adminId:string,label:string,goldJson:st
  catch(e){throw new AppError('Benchmark rejected: '+(e as Error).message,400);}
  // A benchmark needs enough coverage to be educationally interpretable.
  // Smaller experiments remain possible offline but never appear as an official dashboard run.
- if(result.caseCount<10||result.caseCount>2000)throw new AppError('Dashboard requires 10–2000 faculty-reviewed cases',400);
+ if(result.caseCount<10||result.caseCount>2000)throw new AppError('Dashboard requires 10–2000 reviewed cases',400);
  if(result.answerable===0||result.unsupported===0)
   throw new AppError('Benchmark must include answerable and unsupported examples',400);
  if(result.lectureVersions.some((v:unknown)=>typeof v!=='string'))

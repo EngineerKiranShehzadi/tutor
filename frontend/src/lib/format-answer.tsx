@@ -11,14 +11,17 @@ import { Fragment, type ReactNode } from 'react';
  * Recognised, and nothing else:
  *   **bold**            -> <strong>
  *   `code`              -> <code>
+ *   [title](YouTube URL)-> <a> for canonical HTTPS YouTube video links only
  *   "- x" / "* x"       -> <ul><li>
  *   "1. x" / "1) x"     -> <ol><li>
  *   blank line          -> paragraph break
  * Anything unrecognised is printed exactly as written.
  */
 
-// Split on bold and code spans while keeping the delimiters (capturing group).
-const INLINE_TOKEN = /(\*\*[^*\n]+\*\*|`[^`\n]+`)/g;
+// Code and bold spans stay literal inside their delimiters. Video links are
+// limited to the canonical URL emitted by the YouTube search service.
+const INLINE_TOKEN = /(\*\*[^*\n]+\*\*|`[^`\n]+`|\[[^\[\]\n]+\]\(https:\/\/www\.youtube\.com\/watch\?v=[A-Za-z0-9_-]{11}\))/g;
+const YOUTUBE_LINK = /^\[([^\[\]\n]+)\]\((https:\/\/www\.youtube\.com\/watch\?v=[A-Za-z0-9_-]{11})\)$/;
 
 // A bullet needs whitespace after the marker, so "**bold**" at the start of a
 // line is not mistaken for a bullet.
@@ -39,6 +42,20 @@ function inline(text: string, keyPrefix: string): ReactNode[] {
           <code key={key} className="px-1 py-0.5 rounded bg-black/5 font-mono text-[0.9em]">
             {part.slice(1, -1)}
           </code>
+        );
+      }
+      const video = YOUTUBE_LINK.exec(part);
+      if (video) {
+        return (
+          <a
+            key={key}
+            href={video[2]}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[var(--accent)] underline underline-offset-2 hover:text-[var(--accent-deep)]"
+          >
+            {video[1]}
+          </a>
         );
       }
       return <Fragment key={key}>{part}</Fragment>;

@@ -27,14 +27,26 @@ function evaluate(goldDoc,predDoc){
   const c=gmap.get(p.id);
   check(p.lectureId===c.lectureId&&p.datasetVersionId===c.datasetVersionId,p.id+': lecture/version mismatch');
   for(const key of ['vectorIds','hybridIds','rerankedIds','finalContextIds','citationChunkIds'])ids(p[key],p.id+'.'+key);
+  // Optional post-dedup selection stage (the reranked pool after answer-dedup
+  // + relevance floor, before the context budget). Absent in older predictions;
+  // validated only when present so pre-existing JSON still scores unchanged.
+  if('dedupSelectionIds' in p)ids(p.dedupSelectionIds,p.id+'.dedupSelectionIds');
   check(typeof p.refused==='boolean'&&Number.isFinite(p.latencyMs)&&p.latencyMs>=0,p.id+': invalid response');
   check(p.human&&['answerCorrect','grounded','citationValid'].every(k=>judgments.has(p.human[k])),p.id+': invalid human verdict');
+  // Optional LLM-judge verdicts — an aid, validated only when present and kept
+  // entirely separate from the human verdicts above.
+  if('judge' in p)check(p.judge&&typeof p.judge==='object'&&['answerCorrect','grounded'].every(k=>['PASS','FAIL','UNKNOWN'].includes(p.judge[k])),p.id+': invalid judge verdict');
   pmap.set(p.id,p);
  }
  check(pmap.size===gold.length,'Missing golden-case predictions');
  const eligible=gold.filter(c=>c.answerable),unsupported=gold.filter(c=>!c.answerable);
  const retrieval={};
- for(const [key,name] of [['vectorIds','vector'],['hybridIds','hybrid'],['rerankedIds','reranked'],['finalContextIds','finalContext']]){
+ // dedupSelection is an OPTIONAL stage between hybrid and reranked. It is scored
+ // only when EVERY prediction carries dedupSelectionIds, so reports from older
+ // prediction sets (and their byte-for-byte scores) are unchanged.
+ const stageDefs=[['vectorIds','vector'],['hybridIds','hybrid'],['dedupSelectionIds','dedupSelection'],['rerankedIds','reranked'],['finalContextIds','finalContext']];
+ const stages=stageDefs.filter(([key])=>key!=='dedupSelectionIds'||gold.every(c=>Array.isArray(pmap.get(c.id).dedupSelectionIds)));
+ for(const [key,name] of stages){
   const scores=eligible.map(c=>{
    const ranked=pmap.get(c.id)[key],expect=new Set(c.expectedChunkIds);
    const hits=k=>ranked.slice(0,k).filter(x=>expect.has(x)).length/expect.size;
@@ -50,11 +62,16 @@ function evaluate(goldDoc,predDoc){
   a.correct+=p.filter(id=>e.has(id)).length;a.predicted+=p.length;a.expected+=e.size;return a;
  },{correct:0,predicted:0,expected:0});
  const verdict=field=>{const rated=gold.map(c=>pmap.get(c.id).human[field]).filter(v=>v!=='UNREVIEWED');return{reviewed:rated.length,unreviewed:gold.length-rated.length,passRate:fraction(rated.filter(x=>x==='PASS').length,rated.length)};};
+ // LLM-judge aggregation: computed only over cases that carry a judge verdict,
+ // excluding UNKNOWN. It is an AID, never a gold label and never gates release.
+ const judgedCases=gold.filter(c=>pmap.get(c.id).judge);
+ const judgeVerdict=field=>{const rated=judgedCases.map(c=>pmap.get(c.id).judge[field]).filter(v=>v!=='UNKNOWN');return{judged:rated.length,unknown:judgedCases.length-rated.length,passRate:fraction(rated.filter(x=>x==='PASS').length,rated.length)};};
  const byCategory=Object.fromEntries([...categories].filter(cat=>gold.some(c=>c.category===cat)).map(cat=>[cat,{cases:gold.filter(c=>c.category===cat).length}]));
  return {schemaVersion:1,caseCount:gold.length,answerable:eligible.length,unsupported:unsupported.length,lectureVersions:[...new Set(gold.map(c=>c.lectureId+':'+c.datasetVersionId))],
  retrieval,citations:{...citations,precision:fraction(citations.correct,citations.predicted),recall:fraction(citations.correct,citations.expected)},
  refusal:{unsupportedCorrectRate:fraction(unsupported.filter(c=>pmap.get(c.id).refused).length,unsupported.length),falseRefusalRate:fraction(eligible.filter(c=>pmap.get(c.id).refused).length,eligible.length)},
  human:{answerCorrect:verdict('answerCorrect'),grounded:verdict('grounded'),citationValid:verdict('citationValid')},
+ ...(judgedCases.length?{judge:{cases:judgedCases.length,answerCorrect:judgeVerdict('answerCorrect'),grounded:judgeVerdict('grounded'),note:'LLM-as-judge aid — not human-verified, never a gold label or release gate.'}}:{}),
  latency:{p50Ms:pct(gold.map(c=>pmap.get(c.id).latencyMs),.5),p95Ms:pct(gold.map(c=>pmap.get(c.id).latencyMs),.95)},byCategory,
  warnings:['Metrics are conditional on faculty-reviewed expected chunk IDs, not corpus-wide ground truth.','Human verdicts are not automatically scored and UNREVIEWED records are excluded.','Only compare runs for the same golden IDs and pinned lecture-version pairs.']};
 }

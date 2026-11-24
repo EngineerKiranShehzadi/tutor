@@ -156,6 +156,26 @@ export const env = {
   // not done by then, the process exits with code 1. See server.ts.
   SHUTDOWN_TIMEOUT_MS: positiveInt('SHUTDOWN_TIMEOUT_MS', 10000),
 
+  // Experimental: route askLectureAgent through the agentic RAG graph
+  // (rag/agentic-graph) instead of the legacy straight-line pipeline. Off by
+  // default — when off, behaviour is exactly as before. See the graph's
+  // README for what the graph mode currently does and does not re-apply
+  // (output guardrail, answer-memory, streaming).
+  AGENTIC_GRAPH_ENABLED: optional('AGENTIC_GRAPH_ENABLED', 'false') === 'true',
+
+  // Agentic graph: whether the Clarification agent may ask the student a
+  // clarifying question. When false, the graph always proceeds straight to
+  // retrieval (an off-topic or vague question gets the honest "not found"
+  // instead of a clarifying question). Set false for single-shot evaluation
+  // runs, where a clarifying question would otherwise count as a wrong answer.
+  CLARIFICATION_ENABLED: optional('CLARIFICATION_ENABLED', 'true') === 'true',
+
+  // Agentic graph: whether the CRAG Relevance Grader runs. When false, the
+  // grader always returns RELEVANT, so generation proceeds on the retrieved
+  // chunks (the generator still refuses truly-uncovered context). Useful to
+  // A/B the grader's value on a corpus whose retrieval is already strong.
+  GRADER_ENABLED: optional('GRADER_ENABLED', 'true') === 'true',
+
   // Production only: also write logs/error.log and logs/combined.log (10 MB
   // size rotation, 5 files). Off by default — production logs go to the
   // console as JSON. See utils/logger.ts.
@@ -226,6 +246,12 @@ export const env = {
     CLIENT_ID:     optional('GOOGLE_CLIENT_ID', ''),
     CLIENT_SECRET: optional('GOOGLE_CLIENT_SECRET', ''),
     CALLBACK_URL:  optional('GOOGLE_CALLBACK_URL', 'http://localhost:5000/api/v1/auth/google/callback'),
+  },
+
+  // Optional, server-only credentials for explicit student video requests.
+  // Ordinary lecture chat does not require or use this key.
+  YOUTUBE: {
+    API_KEY: optional('YOUTUBE_API_KEY', '').trim(),
   },
 
   // Raw dataset archival only — see services/s3-storage.service.ts. Not
@@ -450,6 +476,41 @@ export const env = {
       THINKING: thinking('OUTPUT_FORMAT_REPAIR_THINKING', 'minimal'),
       TIMEOUT_MS:  positiveInt('OUTPUT_FORMAT_REPAIR_LLM_TIMEOUT_MS', 4000),
       TEMPERATURE: finiteFloat('OUTPUT_FORMAT_REPAIR_LLM_TEMPERATURE', 0),
+    },
+    // ── Agentic RAG graph agents (rag/agentic-graph) ──────────────────
+    // Each has its own task config so provider/model can be tuned per agent.
+    // TEMPERATURE defaults to 0 for every one of them: these are judgment /
+    // expansion steps whose output must be stable run-to-run, which is what
+    // keeps the graph reproducible for evaluation.
+    RELEVANCE_GRADER: {
+      PROVIDER:    optional('RELEVANCE_GRADER_LLM_PROVIDER', DEFAULT_LLM_PROVIDER),
+      MODEL:       optional('RELEVANCE_GRADER_LLM_MODEL', DEFAULT_LLM_MODEL),
+      TIMEOUT_MS:  positiveInt('RELEVANCE_GRADER_LLM_TIMEOUT_MS', 6000),
+      TEMPERATURE: finiteFloat('RELEVANCE_GRADER_LLM_TEMPERATURE', 0),
+    },
+    ANSWER_USEFULNESS: {
+      PROVIDER:    optional('ANSWER_USEFULNESS_LLM_PROVIDER', DEFAULT_LLM_PROVIDER),
+      MODEL:       optional('ANSWER_USEFULNESS_LLM_MODEL', DEFAULT_LLM_MODEL),
+      TIMEOUT_MS:  positiveInt('ANSWER_USEFULNESS_LLM_TIMEOUT_MS', 6000),
+      TEMPERATURE: finiteFloat('ANSWER_USEFULNESS_LLM_TEMPERATURE', 0),
+    },
+    CLARITY_ASSESSOR: {
+      PROVIDER:    optional('CLARITY_ASSESSOR_LLM_PROVIDER', DEFAULT_LLM_PROVIDER),
+      MODEL:       optional('CLARITY_ASSESSOR_LLM_MODEL', DEFAULT_LLM_MODEL),
+      TIMEOUT_MS:  positiveInt('CLARITY_ASSESSOR_LLM_TIMEOUT_MS', 5000),
+      TEMPERATURE: finiteFloat('CLARITY_ASSESSOR_LLM_TEMPERATURE', 0),
+    },
+    HYDE: {
+      PROVIDER:    optional('HYDE_LLM_PROVIDER', DEFAULT_LLM_PROVIDER),
+      MODEL:       optional('HYDE_LLM_MODEL', DEFAULT_LLM_MODEL),
+      TIMEOUT_MS:  positiveInt('HYDE_LLM_TIMEOUT_MS', 6000),
+      TEMPERATURE: finiteFloat('HYDE_LLM_TEMPERATURE', 0),
+    },
+    MULTI_QUERY: {
+      PROVIDER:    optional('MULTI_QUERY_LLM_PROVIDER', DEFAULT_LLM_PROVIDER),
+      MODEL:       optional('MULTI_QUERY_LLM_MODEL', DEFAULT_LLM_MODEL),
+      TIMEOUT_MS:  positiveInt('MULTI_QUERY_LLM_TIMEOUT_MS', 6000),
+      TEMPERATURE: finiteFloat('MULTI_QUERY_LLM_TEMPERATURE', 0),
     },
   },
 

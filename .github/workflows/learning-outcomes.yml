@@ -102,6 +102,10 @@ jobs:
         run: npx ts-node --transpile-only src/scripts/test-learning-effectiveness.ts
       - name: Approved CLO question alignment policy
         working-directory: backend
+        env:
+          DB_PASSWORD: offline-test
+          JWT_SECRET: offline-test-access-secret-at-least-32-bytes
+          JWT_REFRESH_SECRET: offline-test-refresh-secret-at-least-32-bytes
         run: npx ts-node --transpile-only src/scripts/test-clo-alignment.ts
       - name: Parent-child context family guards
         working-directory: backend
@@ -127,7 +131,7 @@ jobs:
       - name: Python structured Word/PDF/PPT parsing regression
         working-directory: backend
         run: |
-          python3 -m pip install --break-system-packages --quiet python-docx python-pptx pypdf beautifulsoup4
+          python3 -m pip install --break-system-packages --quiet python-docx python-pptx pypdf pymupdf beautifulsoup4
           python3 scripts/test_extract_document.py
       - name: Backend TypeScript
         working-directory: backend
@@ -166,6 +170,7 @@ jobs:
         run: |
           psql -v ON_ERROR_STOP=1 -f backend/src/db/schema.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrate.sql
+          psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/006_dataset_versions.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/022_courses.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/023_practice_quizzes.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/db/migrations/033_learning_outcomes.sql

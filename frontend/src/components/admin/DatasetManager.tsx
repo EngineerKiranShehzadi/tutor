@@ -476,7 +476,7 @@ export function DatasetManager({ lectureId, lectureStatus, onChanged }: Props) {
                           </label>
                           <label className="mt-2 flex items-start gap-2">
                             <input type="checkbox" checked={decision.reviewed}
-                              onChange={e => setVisualReviewDecisions(all => ({ ...all, [page.locator]: { ...decision, reviewed: e.target.checked } }))} />
+                              onChange={e => { setVisualReviewDecisions(all => ({ ...all, [page.locator]: { ...decision, reviewed: e.target.checked } })); setVisualSelectionDirty(true); }} />
                             <span>I checked this page image and selected the right choice</span>
                           </label>
                         </article>

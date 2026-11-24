@@ -36,6 +36,7 @@ import type { RouteClassification } from './query-router.service';
 import type { SummarizeDeps, LectureSummaryResult } from './lecture-summary.service';
 import type { MemoryLookupResult, WriteMemoryParams, LookupParams as MemoryLookupParams } from './rag-answer-memory.service';
 import type { AgentProfileLookup } from './lecture-agent-profile.service';
+import { isVideoSearchCandidate, type VideoRecommendationReply } from './video-recommendation.service';
 
 // Exact-match fallback used by both "not found" paths below (zero vector
 // candidates, and candidates that all fail the reranker relevance floor) so
@@ -66,6 +67,7 @@ export function selectHistoryTurns(
 }
 
 export interface AskLectureAgentDeps {
+  recommendVideos?:       (question: string, history: ConversationTurn[]) => Promise<VideoRecommendationReply | null>;
   runInputGuardrails?:     (question: string) => Promise<InputGuardrailResult>;
   generateEmbedding?:      (text: string, isQuery?: boolean) => Promise<number[]>;
   searchChunks?:           (embedding: number[], lectureId: number, limit: number, datasetVersionId?: number) => Promise<QnaChunk[]>;
@@ -514,6 +516,38 @@ export const askLectureAgent = async (
       [studentId, lectureId, question]
     );
 
+    // Explicit requests for external learning videos are handled only after
+    // lecture/session ownership and the existing input guardrails. They never
+    // enter lecture retrieval, grounded-answer verification, answer memory or
+    // Socratic progression. Both GraphQL and SSE use this same entry point.
+    if (isVideoSearchCandidate(question)) {
+      currentStage = 'load-video-request-history';
+      const videoHistory = await trace.span('load-video-request-history', () =>
+        getRecentSessionHistoryForPrompt(studentId, sessionId, env.CHAT.HISTORY_TURNS));
+      currentStage = 'recommend-youtube-videos';
+      const recommendVideos = deps.recommendVideos
+        ?? (await import('./video-recommendation.service')).getVideoRecommendations;
+      const recommendation = await trace.span('recommend-youtube-videos', () => recommendVideos(question, videoHistory),
+        result => ({ videoCount: result?.videoCount ?? 0, videoSearchStatus: result?.status ?? 'NOT_REQUESTED' }));
+      if (recommendation) {
+        const { answer } = recommendation;
+        trace.setAttributes({ route: 'VIDEO_REQUEST', routeSelectionMethod: 'DETERMINISTIC_RULE', routeFallbackUsed: false });
+        currentStage = 'save-chat-entry';
+        await trace.span('save-chat-entry', async () => {
+          await saveChatEntry({ studentId, lectureId, question, answer, sourceChunkIds: [], sessionId, traceId: trace.traceId });
+          await touchSession(studentId, sessionId, question);
+        }, () => ({ sourceChunkCount: 0 }));
+        finishTrace('SUCCESS', {
+          responseStatus: recommendation.status === 'OK' ? 'VIDEO_LINKS_RETURNED' : 'VIDEO_LINKS_UNAVAILABLE',
+          videoSearchStatus: recommendation.status,
+          videoCount: recommendation.videoCount,
+          memoryResult: 'NOT_ATTEMPTED',
+          ...(isContentCaptureEnabled() ? { [ATTR.OUTPUT_VALUE]: truncateContent(answer, 2000).value } : {}),
+        });
+        return { answer, sources: [] };
+      }
+    }
+
     // 3. Lazy imports — skipped for any dependency the caller already
     // injected (tests only; production always falls through to these).
     currentStage = 'resolve-dataset-version';
@@ -553,6 +587,56 @@ export const askLectureAgent = async (
 
     if (historyTurns.length > 0) {
       logger.info(`[CHAT] 📚 Passing ${historyTurns.length} prior turn(s) as context`);
+    }
+
+    // ── Agentic RAG graph (experimental, flag-gated) ──────────────────────
+    // When AGENTIC_GRAPH_ENABLED, the LangGraph orchestrator (rag/agentic-
+    // graph) owns routing AND the retrieve→grade→generate→verify reasoning
+    // loop, including its own groundedness + usefulness verification. The
+    // legacy straight-line path below runs unchanged when the flag is off.
+    //
+    // This branch keeps the cross-cutting concerns the orchestrator owns that
+    // the graph does not: it persists via saveChatEntry + touchSession and
+    // closes the trace exactly like every other terminal branch. KNOWN gaps
+    // vs the legacy path (tracked for follow-up, see agentic-graph/README):
+    //   - the legacy output-guardrail is NOT re-run (the graph self-verifies);
+    //   - answer-memory is NOT written (the graph does not surface the
+    //     retrievalQuery/questionEmbedding the memory writer needs);
+    //   - output PII guard and token streaming are not applied in graph mode.
+    if (env.AGENTIC_GRAPH_ENABLED) {
+      currentStage = 'agentic-graph';
+      const { askLectureAgentViaGraph } = await import('../rag/agentic-graph/entry');
+      const graphResult = await trace.span(
+        'agentic-graph',
+        () => askLectureAgentViaGraph({
+          question,
+          lectureId,
+          lectureTitle: lecture.title,
+          history: historyTurns,
+          context: { agentProfile, datasetVersionId: pinnedVersionId ?? undefined },
+        }),
+        r => ({
+          answerLength: r.answer.length,
+          agenticGraphTrace: r.trace.join(' | '),
+          ...(isContentCaptureEnabled() ? { [ATTR.OUTPUT_VALUE]: truncateContent(r.answer, 2000).value } : {}),
+        })
+      );
+      const answer = graphResult.answer;
+      const sources = graphResult.state.documents ?? [];
+      currentStage = 'save-chat-entry';
+      await trace.span('save-chat-entry', async () => {
+        await saveChatEntry({ studentId, lectureId, question, answer, sourceChunkIds: sources.map(c => c.id), sessionId, traceId: trace.traceId });
+        await touchSession(studentId, sessionId, question);
+      }, () => ({ sourceChunkCount: sources.length }));
+      logger.info(`[CHAT] ✅ Agentic-graph answer saved for session #${sessionId} (status=${graphResult.responseStatus})`);
+      finishTrace('SUCCESS', {
+        // The graph reports its own terminal status, so a refusal/clarification
+        // is never recorded as ANSWERED.
+        responseStatus: graphResult.responseStatus,
+        memoryResult: 'NOT_ATTEMPTED',
+        ...(isContentCaptureEnabled() ? { [ATTR.OUTPUT_VALUE]: truncateContent(answer, 2000).value } : {}),
+      });
+      return { answer, sources };
     }
 
     // 4b. Route the message before doing any retrieval work — different

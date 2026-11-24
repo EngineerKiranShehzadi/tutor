@@ -3,22 +3,7 @@ import { AppError } from '../middleware/errorHandler';
 import { logger } from '../utils/logger';
 import { sendAdminInviteEmail, sendAdminRoleGrantedEmail } from './email.service';
 
-/**
- * Inviting someone to administer the course.
- *
- * Two cases, and the difference is only whether the person already has an
- * account:
- *
- *   They do    → their role is changed now and they are told, by email and in
- *                the bell. Nothing is left pending, because there is nothing
- *                to wait for.
- *   They do not → the address is recorded and emailed. The role is applied the
- *                moment they finish signing up, by `claimAdminInvite`.
- *
- * An invitation is never a way around signing up: the person still registers
- * and verifies their email themselves. It only decides what they are when
- * they arrive.
- */
+
 
 export const INVITE_VALID_DAYS = 14;
 

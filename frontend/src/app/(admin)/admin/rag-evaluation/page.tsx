@@ -21,7 +21,7 @@ export default function RagEvaluationPage(){
   }catch(e){setError(e instanceof Error?e.message:'Benchmark import failed.');}
  }
  return <div className="max-w-[1180px]">
-  <AdminPageHero title="RAG Evaluation" subtitle="Faculty-reviewed golden labels, measured retrieval evidence and reproducible historical results."/>
+  <AdminPageHero title="RAG Evaluation" subtitle="Reviewed golden labels, measured retrieval evidence and reproducible historical results."/>
   <section className="rounded-card bg-[var(--card)] border border-[var(--border)] p-5 mb-5">
    <h2 className="text-h3 font-semibold text-[var(--text)]">Import a measured benchmark</h2>
    <p className="text-caption text-[var(--muted)] mt-2 mb-4">Provide paired JSON from a real evaluation run using the Golden RAG evaluation contract. Reports are recalculated on the server. Do not upload student names, personal data or private conversations.</p>
@@ -31,7 +31,7 @@ export default function RagEvaluationPage(){
     <label className="block text-label font-semibold text-[var(--text)]">Benchmark label
      <input className="mt-1 w-full rounded-control border border-[var(--border)] bg-[var(--card)] px-3 py-2.5 text-label text-[var(--text)]" required minLength={3} maxLength={100} value={label} onChange={e=>setLabel(e.target.value)} placeholder="English Lecture 1 · November baseline"/>
     </label>
-    <label className="block text-label font-semibold text-[var(--text)]">Faculty-reviewed gold.json
+    <label className="block text-label font-semibold text-[var(--text)]">Reviewed gold.json
      <textarea className="mt-1 w-full rounded-control border border-[var(--border)] bg-[var(--card)] px-3 py-2.5 text-label text-[var(--text)] font-mono" rows={3} required value={gold} onChange={e=>setGold(e.target.value)} placeholder='{"schemaVersion":1,"cases":[...]}'/>
     </label>
     <label className="block text-label font-semibold text-[var(--text)]">Recorded predictions.json
@@ -55,6 +55,7 @@ export default function RagEvaluationPage(){
      </div>
      <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3">
       {[{name:'Hybrid Recall@5',value:pct(m.retrieval?.hybrid?.recallAt5)},
+        {name:'Dedup Recall@5',value:pct(m.retrieval?.dedupSelection?.recallAt5)},
         {name:'Rerank nDCG@5',value:pct(m.retrieval?.reranked?.ndcgAt5)},
         {name:'Citation precision',value:pct(m.citations?.precision)},
         {name:'Answer correctness',value:pct(m.human?.answerCorrect?.passRate)},
@@ -72,6 +73,6 @@ export default function RagEvaluationPage(){
     </article>;
    })}
   </section>
-  <p className="mt-6 text-caption text-[var(--muted)]">Evaluation results depend on faculty-reviewed reference chunks and recorded model outputs. No score represents independent learning improvement or an official university grade.</p>
+  <p className="mt-6 text-caption text-[var(--muted)]">Evaluation results depend on reviewed reference chunks and recorded model outputs. No score represents independent learning improvement or an official university grade.</p>
  </div>;
 }
