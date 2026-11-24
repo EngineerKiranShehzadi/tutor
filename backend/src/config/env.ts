@@ -248,6 +248,12 @@ export const env = {
     CALLBACK_URL:  optional('GOOGLE_CALLBACK_URL', 'http://localhost:5000/api/v1/auth/google/callback'),
   },
 
+  // Optional, server-only credentials for explicit student video requests.
+  // Ordinary lecture chat does not require or use this key.
+  YOUTUBE: {
+    API_KEY: optional('YOUTUBE_API_KEY', '').trim(),
+  },
+
   // Raw dataset archival only — see services/s3-storage.service.ts. Not
   // read anywhere else in the app. Left unset by default (not `required()`)
   // so the app still boots without AWS configured; the upload endpoint fails

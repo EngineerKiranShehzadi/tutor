@@ -36,6 +36,7 @@ import type { RouteClassification } from './query-router.service';
 import type { SummarizeDeps, LectureSummaryResult } from './lecture-summary.service';
 import type { MemoryLookupResult, WriteMemoryParams, LookupParams as MemoryLookupParams } from './rag-answer-memory.service';
 import type { AgentProfileLookup } from './lecture-agent-profile.service';
+import { isVideoSearchCandidate, type VideoRecommendationReply } from './video-recommendation.service';
 
 // Exact-match fallback used by both "not found" paths below (zero vector
 // candidates, and candidates that all fail the reranker relevance floor) so
@@ -66,6 +67,7 @@ export function selectHistoryTurns(
 }
 
 export interface AskLectureAgentDeps {
+  recommendVideos?:       (question: string, history: ConversationTurn[]) => Promise<VideoRecommendationReply | null>;
   runInputGuardrails?:     (question: string) => Promise<InputGuardrailResult>;
   generateEmbedding?:      (text: string, isQuery?: boolean) => Promise<number[]>;
   searchChunks?:           (embedding: number[], lectureId: number, limit: number, datasetVersionId?: number) => Promise<QnaChunk[]>;
@@ -513,6 +515,38 @@ export const askLectureAgent = async (
       'INSERT INTO student_questions (student_id, lecture_id, question) VALUES ($1, $2, $3)',
       [studentId, lectureId, question]
     );
+
+    // Explicit requests for external learning videos are handled only after
+    // lecture/session ownership and the existing input guardrails. They never
+    // enter lecture retrieval, grounded-answer verification, answer memory or
+    // Socratic progression. Both GraphQL and SSE use this same entry point.
+    if (isVideoSearchCandidate(question)) {
+      currentStage = 'load-video-request-history';
+      const videoHistory = await trace.span('load-video-request-history', () =>
+        getRecentSessionHistoryForPrompt(studentId, sessionId, env.CHAT.HISTORY_TURNS));
+      currentStage = 'recommend-youtube-videos';
+      const recommendVideos = deps.recommendVideos
+        ?? (await import('./video-recommendation.service')).getVideoRecommendations;
+      const recommendation = await trace.span('recommend-youtube-videos', () => recommendVideos(question, videoHistory),
+        result => ({ videoCount: result?.videoCount ?? 0, videoSearchStatus: result?.status ?? 'NOT_REQUESTED' }));
+      if (recommendation) {
+        const { answer } = recommendation;
+        trace.setAttributes({ route: 'VIDEO_REQUEST', routeSelectionMethod: 'DETERMINISTIC_RULE', routeFallbackUsed: false });
+        currentStage = 'save-chat-entry';
+        await trace.span('save-chat-entry', async () => {
+          await saveChatEntry({ studentId, lectureId, question, answer, sourceChunkIds: [], sessionId, traceId: trace.traceId });
+          await touchSession(studentId, sessionId, question);
+        }, () => ({ sourceChunkCount: 0 }));
+        finishTrace('SUCCESS', {
+          responseStatus: recommendation.status === 'OK' ? 'VIDEO_LINKS_RETURNED' : 'VIDEO_LINKS_UNAVAILABLE',
+          videoSearchStatus: recommendation.status,
+          videoCount: recommendation.videoCount,
+          memoryResult: 'NOT_ATTEMPTED',
+          ...(isContentCaptureEnabled() ? { [ATTR.OUTPUT_VALUE]: truncateContent(answer, 2000).value } : {}),
+        });
+        return { answer, sources: [] };
+      }
+    }
 
     // 3. Lazy imports — skipped for any dependency the caller already
     // injected (tests only; production always falls through to these).
